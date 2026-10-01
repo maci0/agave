@@ -213,8 +213,11 @@ const decorateCodeBlock = (block: Element): void => {
   /* The key reports its result by swapping its text, so it is a live region:
      A screen reader that is not reading the page still has to hear that the
      clipboard write landed (SC 4.1.3), and the name has to stop saying
-     "Copy" once it did. */
+     "Copy" once it did. `aria-live`, not `role="status"`, because a role on
+     this node would take the `aria-label` below as an accessible name, and
+     live roles do not take one; the visible text is the name. */
   copy.setAttribute('aria-live', 'polite');
+  copy.setAttribute('aria-atomic', 'true');
   const what = lang === '' ? 'code' : `${lang} code`;
   copy.setAttribute('aria-label', `Copy ${what}`);
   copy.addEventListener('click', () => {

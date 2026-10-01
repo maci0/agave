@@ -76,7 +76,14 @@ const ShellMessage = ({ message }: { message: Message }) => (
 );
 
 /** The file drop zone. A label wraps the file input, so the same control takes a
- *  click and a drop, and the highlight follows the drag. */
+ *  click and a drop, and the highlight follows the drag.
+ *
+ *  The input is the label's target and carries its text as its name, and it is
+ *  moved off the visual layout with a clip rather than `display: none`: a
+ *  display-hidden input is not focusable, so the one keyboard route to the
+ *  drop zone (tab to it, press Enter) disappeared, and a clipped one still
+ *  takes focus and opens the picker. The label draws the focus ring from
+ *  `:focus-within`, which the clip preserves. */
 const ModelDropZone = ({ loader }: { loader: ModelLoader }) => (
   <>
     <label
@@ -85,7 +92,7 @@ const ModelDropZone = ({ loader }: { loader: ModelLoader }) => (
       onDragLeave={loader.onDragLeave}
       onDrop={loader.onDrop}
       className={cn(
-        'inline-flex min-h-11 cursor-pointer items-center rounded-lg border-2 border-dashed px-4 py-2 font-mono text-sm transition-colors hover:border-primary hover:text-primary aria-disabled:pointer-events-none aria-disabled:opacity-50',
+        'inline-flex min-h-11 cursor-pointer items-center rounded-lg border-2 border-dashed px-4 py-2 font-mono text-sm transition-colors hover:border-primary hover:text-primary focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-primary aria-disabled:pointer-events-none aria-disabled:opacity-50',
         loader.dragOver ? 'border-primary text-primary' : 'border-border text-faint',
       )}
     >
@@ -95,7 +102,10 @@ const ModelDropZone = ({ loader }: { loader: ModelLoader }) => (
       id="file-input"
       type="file"
       accept=".gguf"
-      className="sr-only"
+      /* The visually-hidden pattern, not Tailwind's `sr-only`: that utility is
+         a fixed 1px box rather than a clip, so the control stayed in the tab
+         order with no visible indication of where focus was. */
+      className="absolute size-px overflow-hidden border-0 p-0 opacity-0"
       disabled={loader.busy}
       onChange={function (event) {
         const file = event.target.files?.[0];
@@ -106,6 +116,21 @@ const ModelDropZone = ({ loader }: { loader: ModelLoader }) => (
       }}
     />
   </>
+);
+
+/** A failed model load, announced where it lands rather than only where the
+ *  field is.
+ *
+ *  The region is mounted with the page and holds the live semantics, because a
+ *  `role="alert"` element that appears already holding its text is the case
+ *  assistive tech stays silent about — and a failed load leaves focus on the
+ *  Load key, not in the field, so `aria-describedby` on the field alone would
+ *  never be read. The empty state carries no text, so the region announces
+ *  nothing until it has something to say. */
+const UrlError = ({ message }: { message: string | null }) => (
+  <div id="url-error" role="alert" aria-live="assertive" className="empty:hidden w-full text-sm text-destructive-foreground">
+    {message ?? ''}
+  </div>
 );
 
 /** The model bar. A loaded model needs only its name here: the URL field, the
@@ -164,9 +189,7 @@ const ModelBar = ({ loader }: { loader: ModelLoader }) => {
     {loader.ready ? (
       <Button type="button" size="lg" onClick={function () { setEditing(false); }}>Done</Button>
     ) : null}
-    {loader.urlError === null ? null : (
-      <div id="url-error" role="alert" className="w-full text-sm text-destructive-foreground">{loader.urlError}</div>
-    )}
+    <UrlError message={loader.urlError} />
   </div>
   );
 };
@@ -217,12 +240,9 @@ const ChatLog = ({ messages, sending, ready }: { messages: Array<Message>; sendi
       {messages.map((message) => <ShellMessage key={message.id} message={message} />)}
       {sending ? (
         <div className="mx-auto flex w-full agave-measure flex-col items-start">
-          <div
-            role="status"
-            aria-label="Tokenizing the prompt"
-            className="w-full animate-pulse-soft px-1 py-3 text-base text-faint"
-          >
-            …
+          <div className="w-full animate-pulse-soft px-1 py-3 text-base text-faint">
+            <span className="sr-only">Tokenizing the prompt</span>
+            <span aria-hidden="true">…</span>
           </div>
         </div>
       ) : null}
@@ -380,10 +400,14 @@ const Shell = () => {
       <ShellHeader ready={loader.ready} busy={busy} onClear={function () { chat.clearChat(loader.focusPrompt); }} />
       <ModelBar loader={loader} />
       <main aria-label="Chat" className="flex min-h-0 flex-1 flex-col">
+        {/* A live region rather than `role="status"`: this element is mounted
+            with the page and its first text ("Load a GGUF model to begin")
+            lands in the same commit, which is exactly the case a live region
+            introduced together with its content is not announced for. */}
         <p
           id="status"
-          role="status"
           aria-live="polite"
+          aria-atomic="true"
           className="bg-background px-8 py-2 font-mono text-sm text-faint max-drawer:px-4"
         >
           {loader.status}

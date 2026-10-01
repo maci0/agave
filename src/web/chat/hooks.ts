@@ -224,12 +224,17 @@ export const useBubbleLog = (): LogApi => {
   return { bubbles, allocate, addTurn, append, replaceAll, patch, clear, dropLastAssistant, schedulePaint, flushNow, lastAssistantId };
 };
 
+/** How a turn ended. `error` is the message already written into the failed
+ *  bubble, so the announcement can say what went wrong instead of reporting a
+ *  turn that failed as one that completed. */
+type TurnOutcome = { stopped: boolean; error: string | null };
+
 /** Consume one `stream=1` response into a bubble. */
 const runStream = async (
   log: LogApi,
   id: number,
   request: { body: string; url: string | undefined; signal: AbortSignal; errorLabel: string },
-  onFinish: (stopped: boolean) => void,
+  onFinish: (outcome: TurnOutcome) => void,
   onToken: (elapsedSeconds: number) => void,
 ): Promise<void> => {
   let content = '';
@@ -254,14 +259,15 @@ const runStream = async (
       onStats (stats: StreamStats) { log.patch(id, { stats }); },
     });
     log.flushNow(id, content || 'No response.', { phase: 'done' });
-    onFinish(false);
+    onFinish({ stopped: false, error: null });
   } catch (error) { // oxlint-disable-line @rikalabs/no-silent-catch-fallback -- rendered as an alert in the log
     const stopped = error instanceof Error && error.name === 'AbortError';
-    log.flushNow(id, stopped ? (content || 'Stopped.') : `${request.errorLabel}: ${userFacingError(error)}`, {
+    const failure = `${request.errorLabel}: ${userFacingError(error)}`;
+    log.flushNow(id, stopped ? (content || 'Stopped.') : failure, {
       phase: stopped ? 'done' : 'error',
-      error: `${request.errorLabel}: ${userFacingError(error)}`,
+      error: failure,
     });
-    onFinish(stopped);
+    onFinish({ stopped, error: stopped ? null : failure });
   }
 };
 
@@ -311,13 +317,19 @@ export const useChatTurn = ({ log, announce, onTurnEnd }: { log: LogApi; announc
     setTps(0);
     announce('Generating response…');
     void runStream(log, turnId, { body, url, signal: controller.signal, errorLabel },
-      (wasStopped) => {
+      ({ stopped: wasStopped, error: failure }) => {
         stopped.current = wasStopped;
         abortRef.current = null;
         inFlight.current = false;
         setStreaming(false);
         setTps(null);
         onTurnEnd();
+        /* A failed turn announced "Response complete." while the bubble beside
+           it read the failure: the one sentence a screen-reader user is
+           guaranteed to hear contradicted what the log says. The failure text
+           is announced instead, and only the message the bubble carries, so the
+           region does not read a second copy of a paragraph nobody asked for. */
+        if (failure !== null) { announce(failure); return; }
         announce(wasStopped ? 'Generation stopped.' : 'Response complete.');
       },
       setTps);

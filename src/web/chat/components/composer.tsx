@@ -119,10 +119,18 @@ const SendControl = ({ streaming, canSend, onStop }: { streaming: boolean; canSe
   )
 );
 
-/** The generation-speed readout, empty until a turn reports one. */
+/** The generation-speed readout, empty until a turn reports one.
+ *
+ *  Plain text, no live region. The number refreshes about once a second for
+ *  the length of a turn, so a live region on it talks over the response
+ *  announcement in `sr-announce` for as long as the turn runs. It also carried
+ *  `role="status"` with an `aria-label`, which a live role cannot take as an
+ *  accessible name, so the "Generation speed" label reached nobody. The rate
+ *  is in the turn's own stats line (`/stats`) and in the response's stats
+ *  block; the readout is the glanceable one, and the tooltip names it. */
 const SpeedReadout = ({ tps }: { tps: number | null }) => (
   tps === null ? null : (
-    <span role="status" aria-label="Generation speed" className="flex items-center px-1 font-mono text-xs whitespace-nowrap text-primary">
+    <span title="Generation speed" className="flex items-center px-1 font-mono text-xs whitespace-nowrap text-primary">
       {`${fmtNum(tps, 1)} tok/s`}
     </span>
   )
@@ -141,8 +149,15 @@ const InputRow = (props: ComposerProps & {
       ref={props.fileInput}
       type="file"
       accept="image/jpeg,image/png,image/gif,image/webp"
-      className="hidden"
-      aria-label="Attach image"
+      /* Clipped rather than `display: none`. The attach key opens the picker
+         through a ref, so the input was never reachable by keyboard, and a
+         display-hidden input is not focusable at all, which is why there is no
+         second tab stop. A clipped one keeps the programmatic path, exposes the
+         control to assistive tech with its name, and is still not a stray stop
+         in the tab order, because the attach key is the way in. */
+      className="absolute size-px overflow-hidden border-0 p-0 opacity-0"
+      tabIndex={-1}
+      aria-hidden="true"
       onChange={function (event) {
         const file = event.target.files?.[0];
         /* Clear the field so picking the same image again is still a change

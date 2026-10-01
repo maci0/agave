@@ -212,3 +212,45 @@ test('a loaded model survives the re-render a prompt triggers', async () => {
   /* One download for the one load: a rebuilt engine would fetch the model again. */
   expect(engines[0]?.downloads).toBe(1);
 }, 30_000);
+
+test('the file picker is reachable by keyboard and carries a name', async () => {
+  /* The drop zone hid its input with `display: none`, which is not focusable
+     at all: the label took clicks and drops, and a keyboard user had no route
+     to the one control that opens the model picker. Clipping keeps the focus
+     stop, and the label's `:focus-within` ring shows where it went. */
+  engines.length = 0;
+  await mountShell();
+
+  const file = present(document.querySelector<HTMLInputElement>('#file-input'), 'file input');
+  expect(file.type).toBe('file');
+  expect(file.tabIndex).toBe(0);
+  expect(file.tabIndex >= 0).toBe(true);
+  /* Not `sr-only`: that utility is a 1px box rather than a clip, so the control
+     stayed in the tab order with nothing on screen to say where focus was. */
+  expect(file.className).toContain('overflow-hidden');
+  expect(file.className).not.toContain('sr-only');
+
+  /* A label that owns the input is the accessible name, so the control is not
+     announced as an unlabelled file input. */
+  const label = present(document.querySelector<HTMLLabelElement>('label[for="file-input"]'), 'file label');
+  expect(label.textContent).toContain('GGUF');
+});
+
+test('a failed model load is announced from a region that was already there', async () => {
+  /* A `role="alert"` element that appears already holding its text is the case
+     assistive tech stays silent about, and a failed load leaves focus on the
+     Load key rather than in the field, so `aria-describedby` alone would never
+     be read either. */
+  engines.length = 0;
+  await mountShell();
+
+  const region = present(document.querySelector('#url-error'), 'url error region');
+  expect(region.getAttribute('role')).toBe('alert');
+  expect(region.getAttribute('aria-live')).toBe('assertive');
+  /* Mounted and empty before anything has failed, so it is a live region the
+     screen reader is already listening to. */
+  expect(region.textContent).toBe('');
+
+  const input = present(document.querySelector<HTMLInputElement>('#model-url'), 'model url field');
+  expect(input.getAttribute('aria-describedby')).toBeNull();
+});

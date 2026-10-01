@@ -456,3 +456,72 @@ test('the tok/s readout rounds like the rest of the stats', () => {
   expect(fmtNum(1234.56, 1, 'en-US')).toBe('1,234.6');
   expect(fmtNum(12.34, 2, 'de-DE')).toBe('12,34');
 });
+
+/** The props a `MessageList` renders the toasts with, for the live-region test. */
+const TOAST_PROPS = {
+  bubbles: [],
+  showStats: false,
+  vision: false,
+  streaming: false,
+  loading: false,
+  lastAssistantId: null,
+  onRegenerate: VOID,
+  onRendered: VOID,
+  onRunCommand: VOID,
+  onDismissToast: VOID,
+};
+
+test('a toast reaches a screen reader through a region that was already on the page', async () => {
+  /* A live region added to the DOM together with the text it carries is the
+     one case assistive tech reliably does not announce, so every toast and
+     error notice reached a screen reader as silence. The overlay holding the
+     toasts stays mounted and holds the live semantics itself; each toast is an
+     addition to it. */
+  const { createRoot } = await import('react-dom/client');
+  const { MessageList } = await import('./chat/components/message-list');
+  const host = mountHost();
+  const root = createRoot(host);
+  root.render(<MessageList {...TOAST_PROPS} toasts={[]} />);
+  await tick(2);
+  const region = present(host.querySelector('[role="status"]'), 'toast live region');
+  expect(region.getAttribute('aria-live')).toBe('polite');
+  expect(region.textContent).toBe('');
+
+  root.render(<MessageList {...TOAST_PROPS} toasts={[{ id: 1, text: 'Could not clear on the server.', level: 'error' }]} />);
+  expect(await waitFor(() => region.textContent.includes('Could not clear'))).toBe(true);
+  /* One region, and not a second live role per toast. */
+  expect(host.querySelectorAll('[role="status"]')).toHaveLength(1);
+  expect(host.querySelectorAll('[role="alert"]')).toHaveLength(0);
+  root.unmount();
+  host.remove();
+});
+
+test('the copy key names the outcome it just reported', async () => {
+  /* The visible label swapped to "Copied" or "Failed" while the accessible
+     name stayed "Copy response", so a screen-reader user pressing the key
+     heard no result at all (SC 4.1.3). */
+  const { createRoot } = await import('react-dom/client');
+  const { Message } = await import('./chat/components/message');
+  const host = mountHost();
+  const root = createRoot(host);
+  root.render(
+    <Message
+      bubble={{ id: 1, role: 'assistant', text: 'An answer', phase: 'done' }}
+      showStats={false}
+      canRegenerate={false}
+      onRegenerate={VOID}
+      onRendered={VOID}
+    />,
+  );
+  await tick(2);
+  const copy = present(host.querySelector<HTMLButtonElement>('button[aria-label]'), 'copy key');
+  expect(copy.getAttribute('aria-label')).toBe('Copy response');
+
+  /* The stub stands in for the clipboard write the key awaits; the assertion
+     is about the accessible name the key takes from the result. */
+  Object.defineProperty(navigator, 'clipboard', { value: { writeText: () => Promise.resolve() }, configurable: true });
+  copy.click();
+  expect(await waitFor(() => copy.getAttribute('aria-label') === 'Copy response: Copied')).toBe(true);
+  root.unmount();
+  host.remove();
+});

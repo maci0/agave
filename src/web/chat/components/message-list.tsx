@@ -22,9 +22,13 @@ const ToastItem = ({ toast, onDismiss }: { toast: Toast; onDismiss: (id: number)
     return function () { clearTimeout(timer); };
   }, [paused, toast.id, toast.level, onDismiss]);
 
+  /* No live-region role of its own: the region it is rendered into (see
+     LogOverlay) is mounted with the page and holds the live semantics, so the
+     toast is announced as an addition to a region that was already there. A
+     role on this node announced the same text a second time, and when it
+     arrived with the toast it announced nothing at all. */
   return (
     <div
-      role={toast.level === 'error' ? 'alert' : 'status'}
       onMouseEnter={function () { setPaused(true); }}
       onMouseLeave={function () { setPaused(false); }}
       onFocus={function () { setPaused(true); }}
@@ -95,7 +99,11 @@ const Transcript = (props: Pick<MessageListProps, 'bubbles' | 'loading' | 'visio
      conversation could not tell the click from a no-op and read the old answer
      as the newly-selected one. */
   if (props.loading) {
-    return <div role="status" className="m-auto font-mono text-xs text-faint">Loading conversation…</div>;
+    /* No role of its own: the log this renders into is the live region, and a
+       `role="status"` node inserted here with its text already in it is the
+       case screen readers stay silent about. The swap is announced through the
+       log; the visible line stays plain text. */
+    return <div className="m-auto font-mono text-xs text-faint">Loading conversation…</div>;
   }
   return (
     <>
@@ -137,25 +145,34 @@ const JumpToLatest = ({ onClick }: { onClick: () => void }) => (
 
 /** Toasts and the jump key ride above the transcript instead of inside it: a
  *  reader who has scrolled up would otherwise never see a failure, and the log
- *  used to yank them back to the bottom to make one visible. */
+ *  used to yank them back to the bottom to make one visible.
+ *
+ *  The toast region stays in the tree, empty, when there is nothing to say. A
+ *  live region that is added to the page together with the text it carries is
+ *  the one case assistive tech reliably stays silent about: every toast, error
+ *  and "nothing to export" notice was reaching a screen reader as silence
+ *  (WCAG 4.1.3). The region is polite for all of them: a failed turn is also
+ *  announced through `announce()` with the failure text, so the region only
+ *  has to add the message the reader can dismiss, not interrupt whatever they
+ *  are on. */
 const LogOverlay = ({ toasts, showJump, onJump, onDismiss }: {
   toasts: Array<Toast>;
   showJump: boolean;
   onJump: () => void;
   onDismiss: (id: number) => void;
-}) => {
-  if (toasts.length === 0 && !showJump) { return null; }
-  return (
-    <div className="pointer-events-none absolute inset-x-0 bottom-0 z-20 flex flex-col items-center gap-2 p-4">
-      {showJump ? <div className="pointer-events-auto"><JumpToLatest onClick={onJump} /></div> : null}
-      {toasts.length === 0 ? null : (
-        <div className="pointer-events-auto flex w-full flex-col">
-          <ToastList toasts={toasts} onDismiss={onDismiss} />
-        </div>
-      )}
+}) => (
+  <div className="pointer-events-none absolute inset-x-0 bottom-0 z-20 flex flex-col items-center gap-2 p-4">
+    {showJump ? <div className="pointer-events-auto"><JumpToLatest onClick={onJump} /></div> : null}
+    <div
+      className="pointer-events-auto flex w-full flex-col empty:hidden"
+      role="status"
+      aria-live="polite"
+      aria-atomic="false"
+    >
+      <ToastList toasts={toasts} onDismiss={onDismiss} />
     </div>
-  );
-};
+  </div>
+);
 
 /** Pixels from the bottom that still count as "following the stream". */
 const STICK_SLACK_PX = 80;

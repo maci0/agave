@@ -92,7 +92,12 @@ const MaxTokensField = ({ sampling, onChange }: { sampling: Sampling; onChange: 
       {`${MAX_TOKENS_MIN}–${MAX_TOKENS_MAX}`}
     </span>
     {valid ? null : (
-      <span id={`${fieldId}-error`} role="alert" className="mt-1 block font-mono text-2xs text-destructive-foreground">
+      /* No `role="alert"`. The field names it through `aria-describedby`, which
+         reads it on the next focus, and the node is inserted already holding its
+         text, so a role here announced nothing when it appeared — while a live
+         region that did fire re-read the whole sentence on every keystroke that
+         left the field invalid, talking over the value being typed. */
+      <span id={`${fieldId}-error`} className="mt-1 block font-mono text-2xs text-destructive-foreground">
         {`Max tokens must be a whole number from ${MAX_TOKENS_MIN} to ${MAX_TOKENS_MAX}.`}
       </span>
     )}

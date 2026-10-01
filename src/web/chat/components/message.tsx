@@ -129,7 +129,13 @@ const ACTION =
   'agave-reveal inline-flex min-h-11 items-center gap-1.5 rounded-md px-2.5 py-1 font-mono text-2xs text-faint ' +
   'transition-colors hover:bg-muted hover:text-primary';
 
-/** Copy a finished response. */
+/** Copy a finished response.
+ *
+ *  The name reports the result. The key kept a fixed `aria-label="Copy
+ *  response"` while the visible text swapped to "Copied" or "Failed", so a
+ *  screen-reader user pressing it heard nothing about whether the write
+ *  landed — the state lived only in the pixels (WCAG 4.1.3). The name carries
+ *  the outcome and reverts with the text. */
 const CopyResponse = ({ text }: { text: string }) => {
   const [label, setLabel] = useState('Copy');
   const copy = useCallback(() => {
@@ -139,7 +145,7 @@ const CopyResponse = ({ text }: { text: string }) => {
     });
   }, [text]);
   return (
-    <button type="button" onClick={copy} aria-label="Copy response" className={ACTION}>
+    <button type="button" onClick={copy} aria-label={label === 'Copy' ? 'Copy response' : `Copy response: ${label}`} className={ACTION}>
       <CopyIcon className="size-3.5" aria-hidden="true" />
       {label}
     </button>
@@ -183,7 +189,6 @@ const Message = memo(({ bubble, showStats, canRegenerate, onRegenerate, onRender
       </span>
       <div
         dir="auto"
-        role={failed ? 'alert' : undefined}
         className={cn(
           'relative min-w-0 max-w-full rounded-lg text-base',
           failed && 'w-full border border-destructive bg-destructive/10 px-4.5 py-3.5 text-sm text-destructive-foreground',

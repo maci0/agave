@@ -269,3 +269,59 @@ test('a regenerate refused while busy never reaches the wire', async () => {
   expect(seen.urls.filter((url) => url === '/v1/chat/regenerate')).toHaveLength(1);
   turn.unmount();
 });
+/** A server that answers the next POST with a status, so a turn fails the way
+ *  a real one does: `streamChat` throws before it reads a body, which is the
+ *  path the failure announcement is written for. */
+const stubFailingServer = (status: number): Seen => {
+  const seen: Seen = { urls: [], keys: [], release: [] };
+  /* SAFETY: the stub answers only the routes this hook calls, so a request
+     reaching it is one this test placed. */
+  globalThis.fetch = function (input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> {
+    const url = input instanceof Request ? input.url : String(input);
+    if (init.method === 'POST') {
+      seen.urls.push(url);
+      seen.keys.push(new Headers(init.headers ?? {}).get('X-Request-Id'));
+      return Promise.resolve(new Response('busy', { status }));
+    }
+    if (url === '/v1/conversations') { return Promise.resolve(Response.json([])); }
+    return Promise.resolve(new Response('not found', { status: 404 }));
+  } as typeof fetch;
+  return seen;
+};
+
+test('a failed turn announces the failure, not that it completed', async () => {
+  const seen = stubFailingServer(503);
+  const turn = await mountTurn();
+
+  turn.send('message=hello', 'Send failed');
+
+  expect(await waitFor(() => turn.paints.calls.some((call) => call.startsWith('announce:Send failed')))).toBe(true);
+
+  /* "Response complete." on a turn that failed is the one sentence a screen
+     reader is guaranteed to hear, and it contradicted the bubble beside it. The
+     announcement is the message the bubble carries, so the region does not
+     read a second copy of a paragraph nobody asked for either. */
+  const said = turn.paints.calls.filter((call) => call.startsWith('announce:'));
+  expect(said).not.toContain('announce:Response complete.');
+  expect(said).toContain('announce:Send failed: The model is not ready yet. Try again shortly.');
+  expect(seen.urls).toEqual(['/v1/chat']);
+  turn.unmount();
+});
+
+test('a turn that succeeded still announces completion', async () => {
+  const seen = stubServer();
+  const turn = await mountTurn();
+
+  /* The failure announcement replaced the success one, so the passing path
+     needs its own guard: a run that announced nothing on success would leave
+     a screen-reader user waiting on a turn that had already landed. */
+  turn.send('message=hello', 'Send failed');
+  expect(await waitFor(() => seen.release.length === 1)).toBe(true);
+  seen.release[0]();
+
+  expect(await waitFor(() => turn.paints.calls.includes('announce:Response complete.'))).toBe(true);
+  const said = turn.paints.calls.filter((call) => call.startsWith('announce:'));
+  expect(said).toContain('announce:Generating response…');
+  expect(said).not.toContain('announce:Generation stopped.');
+  turn.unmount();
+});

@@ -56,7 +56,7 @@ const ConversationRow = ({ conversation, streaming, onSelect, onDelete }: {
         aria-label={label}
         aria-current={conversation.active === true ? 'true' : undefined}
         disabled={streaming}
-        className="flex min-h-10 min-w-0 flex-1 items-center rounded-sm text-start"
+        className="flex min-h-11 min-w-0 flex-1 items-center rounded-sm text-start"
       >
         <span
           className={cn('flex-1 truncate text-sm', conversation.active === true ? 'text-foreground' : 'text-muted-foreground')}
@@ -70,7 +70,7 @@ const ConversationRow = ({ conversation, streaming, onSelect, onDelete }: {
         onClick={function () { onDelete(conversation.id); }}
         disabled={streaming}
         aria-label={`Delete conversation: ${label}`}
-        className="agave-reveal inline-flex size-9 shrink-0 items-center justify-center rounded-xs text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
+        className="agave-reveal inline-flex size-11 shrink-0 items-center justify-center rounded-xs text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
       >
         <DeleteIcon className="size-4" aria-hidden="true" />
       </button>
