@@ -158,17 +158,21 @@ stores are both present).
 Pruning matches the exact names above, so it never deletes a file this script
 did not create.
 
-Every dated backup that leaves the tier is recorded in
+Every dated backup and every snapshot copy that leaves its tier is recorded in
 `{backup dir}/.conversations-rotated.log` before it is removed: the file name,
-its size, and the envelope version read from it, one line per removal. Rotation
-is the deletion path this system has, and a store deleted from the live path is
-indistinguishable from one the server never had: without the record, the dated
-copies of deleted conversations are rotated away on schedule and the loss
-becomes permanent with nothing left naming what was there. The record carries
-no conversation text, is written outside both tiers, and is never itself
-rotated. `check` reads it, and a tier holding the log with no dated backup in
-it was emptied by something other than this script, which it reports instead of
-calling the tier unprimed.
+its size, and the envelope version read from it, one line per removal, tagged
+`pruned` for the dated tier and `pruned snapshot` for the snapshot tier.
+Rotation is the deletion path this system has, and a store deleted from the
+live path is indistinguishable from one the server never had: without the
+record, the dated copies of deleted conversations are rotated away on schedule
+and the loss becomes permanent with nothing left naming what was there. The
+snapshot tier is recorded for the same reason, and it matters more there: a
+dated copy going is one point in time fewer, while a quarantined, overflow, or
+pre-restore copy going is the last copy of state the live path does not hold.
+The record carries no conversation text, is written outside both tiers, and is
+never itself rotated. `check` reads it, and a tier holding the log with no
+dated backup in it was emptied by something other than this script, which it
+reports instead of calling the tier unprimed.
 
 Destination is `AGAVE_BACKUP_DIR`, default `$HOME/.agave-backups`. **Set it to
 a different filesystem than the cache directory.** A backup on the same disk
@@ -322,6 +326,7 @@ zig build conv-store-backup-test     # backup, verify, reject-truncated,
                                     # load-cap drift guard, reject-oversize,
                                     # restore, pre-restore snapshot,
                                     # retention, retention scope,
+                                    # snapshot rotation record,
                                     # same-filesystem refusal,
                                     # check fresh/missing/stale,
                                     # check rejects a shared filesystem,

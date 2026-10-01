@@ -473,6 +473,19 @@ prune_dated() {
     done
 }
 
+# Rotate a snapshot tier, recording what went before it goes. This tier holds
+# state the live path does not: a quarantined store is the only remaining copy
+# of a file the server could not parse, an overflow store the only copy of the
+# part a capped load dropped, and a pre-restore snapshot the only undo for a
+# restore installed by mistake. prune_dated records for exactly this reason, and
+# a deletion here is strictly worse than one there: a dated copy going is one
+# point in time fewer, while one of these going is the last copy of something,
+# with nothing to say what it held afterwards.
+#
+# The record carries the kind and size, no conversation text, so the log is not
+# another copy of the history to protect. It goes to the same undated log
+# prune_dated writes, which no tier's rotation can reach, so one ordered record
+# of everything this script has removed lives in one place.
 prune_tier() {
     local dir="$1" re="$2" keep="$3"
     # `=()` not just `-a`: under `set -u` an array that was declared but never
@@ -485,10 +498,19 @@ prune_tier() {
         files+=("$line")
     done < <(list_backups "$dir" "$re")
     (( ${#files[@]} <= keep )) && return 0
-    local i
+    local log="$dir/$ROTATION_LOG_NAME" when version i f
+    when="$(stamp)"
     for ((i = keep; i < ${#files[@]}; i++)); do
-        rm -f -- "${files[i]}" || die "prune failed: ${files[i]}"
-        note "pruned old backup ${files[i]}"
+        f="${files[i]}"
+        # A quarantined store the server could not parse is exactly the case
+        # where the envelope version is unreadable, so `unreadable` is a normal
+        # value here rather than the exception it is for a dated backup.
+        version="$(envelope_version "$f" 2>/dev/null || printf 'unreadable')"
+        printf '%s pruned snapshot %s bytes=%s version=%s\n' \
+            "$when" "${f##*/}" "$(file_size "$f")" "$version" >>"$log" ||
+            die "cannot append to the rotation log $log; refusing to prune so the loss is recorded"
+        rm -f -- "$f" || die "prune failed: $f"
+        note "pruned old snapshot $f (recorded in $log)"
     done
 }
 
@@ -773,6 +795,39 @@ do_self_test() {
         status=1
     }
 
+    # The snapshot tier rotates too, and every copy it drops is state the live
+    # path does not hold: a quarantined store is the only remaining copy of a
+    # file the server could not parse, an overflow store the only copy of the
+    # part a capped load dropped, a pre-restore snapshot the only undo for a
+    # restore installed by mistake. Deleting one silently is the worst kind of
+    # rotation this script does, so the record has to cover the tier, not only
+    # the dated backups where it already does. A dated copy going is one point
+    # in time fewer; one of these going is the last of something.
+    mkdir -p "$tmp/snapshot-tier"
+    local snap_n
+    for snap_n in 1 2 3; do
+        printf '{"version":1,"active_id":0,"next_id":%d,"conversations":[]}\n' "$snap_n" \
+            >"$tmp/snapshot-tier/conversations-corrupt-2026010${snap_n}T000000Z.json"
+    done
+    local snapshot_log="$tmp/snapshot-tier/.conversations-rotated.log"
+    if ! prune_tier "$tmp/snapshot-tier" "$SNAPSHOT_RE" 1 >/dev/null; then
+        echo "conv-store-backup: self-test FAILED: prune_tier failed on a tier it should have rotated" >&2
+        status=1
+    fi
+    [[ "$(find "$tmp/snapshot-tier" -name 'conversations-corrupt-*.json' | wc -l)" -eq 1 ]] || {
+        echo "conv-store-backup: self-test FAILED: keep=1 left more than one quarantined copy" >&2
+        status=1
+    }
+    if ! grep -q 'pruned snapshot conversations-corrupt-' "$snapshot_log" 2>/dev/null; then
+        echo "conv-store-backup: self-test FAILED: snapshot-tier rotation deleted the only copy of a quarantined store without recording it" >&2
+        status=1
+    fi
+    # The record has to survive the rotation that wrote it, or it is no record.
+    [[ -f "$snapshot_log" ]] || {
+        echo "conv-store-backup: self-test FAILED: snapshot rotation deleted its own record" >&2
+        status=1
+    }
+
     # Rotation has to leave a record. A store deleted from the live path is
     # indistinguishable from one the server never had, so without it the dated
     # copies of the deleted conversations are rotated away on schedule and the
@@ -940,7 +995,7 @@ do_self_test() {
     fi
 
     if (( status == 0 )); then
-        note "self-test passed: backup, verify, reject-truncated, reject-other-version, reject-version-quoted-in-content, reject-quoted-version, reject-missing-version, format-version-agrees, load-cap-agrees, reject-oversize, braces-in-content, restore, pre-restore snapshot, retention, snapshot-tier-retention, sidecars, retention-scope, reject-same-filesystem, check-fresh, check-missing, check-stale, check-rejects-shared-filesystem, check-without-a-store, reject-bad-retention, store-override, whole-help"
+        note "self-test passed: backup, verify, reject-truncated, reject-other-version, reject-version-quoted-in-content, reject-quoted-version, reject-missing-version, format-version-agrees, load-cap-agrees, reject-oversize, braces-in-content, restore, pre-restore snapshot, retention, snapshot-tier-retention, snapshot-rotation-record, sidecars, retention-scope, reject-same-filesystem, check-fresh, check-missing, check-stale, check-rejects-shared-filesystem, check-without-a-store, reject-bad-retention, store-override, whole-help"
     fi
     return "$status"
 }
