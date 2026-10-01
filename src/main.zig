@@ -3203,19 +3203,17 @@ fn initAndRun(
 
     // TriAttention: load calibration data when --kv-eviction tri
     if (cli.kv_eviction == .tri) {
-        // cal_buf must outlive the blk: block because cal_path borrows into it.
+        // cal_buf must outlive the block below because cal_path borrows into it.
         var cal_buf: [1024]u8 = undefined;
-        const cal_path = blk: {
-            // Auto-detect .cal file next to model: model.gguf → model.cal
-            if (std.mem.endsWith(u8, cli.model_path, ".gguf")) {
-                const stem = cli.model_path[0 .. cli.model_path.len - 5];
-                const cal = std.fmt.bufPrint(&cal_buf, "{s}.cal", .{stem}) catch break :blk @as(?[]const u8, null);
-                break :blk cal;
-            }
-            break :blk @as(?[]const u8, null);
-        };
+        const calibrate = @import("calibrate.zig");
+        // Auto-detect the .cal file calibrate writes next to the model:
+        // model.gguf -> model.cal, and a SafeTensors directory model-dir/ ->
+        // model-dir.cal (trailing slash trimmed). calPathForModel keeps both
+        // sides on one rule; deriving it here for GGUF files only left a
+        // directory model's calibration unreadable, so tri eviction scored
+        // against no statistics.
+        const cal_path = calibrate.calPathForModel(&cal_buf, cli.model_path);
         if (cal_path) |cp| {
-            const calibrate = @import("calibrate.zig");
             if (calibrate.readCalFile(allocator, g_io, cp)) |cals| {
                 mdl.setTriCalibration(cals);
                 if (!g_quiet) eprint("tri-attention: loaded {d} calibrations from {s}\n", .{ cals.len, cp });

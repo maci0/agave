@@ -529,6 +529,20 @@ fn writeCalFile(result: *const CalibrationResult, path: []const u8) !void {
     durable.syncParent(path);
 }
 
+/// Default `.cal` path for a model path: `model.gguf` -> `model.cal`, and a
+/// SafeTensors directory `model-dir/` -> `model-dir.cal`. `buf` receives the
+/// path; the result borrows from it, so it must outlive the returned slice.
+/// Returns null when `buf` is too small to hold the name.
+///
+/// `agave --kv-eviction tri` auto-detects the same name, so both sides derive
+/// it here instead of repeating the stem rules.
+pub fn calPathForModel(buf: []u8, model_path: []const u8) ?[]const u8 {
+    const path = std.mem.trimEnd(u8, model_path, "/");
+    if (path.len == 0) return null;
+    const stem = if (std.mem.endsWith(u8, path, ".gguf")) path[0 .. path.len - 5] else path;
+    return std.fmt.bufPrint(buf, "{s}.cal", .{stem}) catch null;
+}
+
 /// Read calibration data from a .cal file and return TriCalibration structs
 /// for each query head. The caller owns all returned memory.
 ///
@@ -627,12 +641,7 @@ pub fn run(allocator: Allocator, process_args: std.process.Args, io: Io) u8 {
     // model.gguf → model.cal, model-dir/ → model-dir.cal
     var auto_output_buf: [1024]u8 = undefined;
     if (args.output.len == 0) {
-        const path = std.mem.trimEnd(u8, args.model_path, "/");
-        const stem = if (std.mem.endsWith(u8, path, ".gguf"))
-            path[0 .. path.len - 5]
-        else
-            path;
-        args.output = std.fmt.bufPrint(&auto_output_buf, "{s}.cal", .{stem}) catch fallback_output_filename;
+        args.output = calPathForModel(&auto_output_buf, args.model_path) orelse fallback_output_filename;
     }
 
     // Detect format: directory -> SafeTensors, else -> GGUF
@@ -970,6 +979,20 @@ test "fuzz: all calibrate functions" {
             }
         }
     }.f, .{});
+}
+
+test "calPathForModel names match what calibrate writes and what tri loads" {
+    var buf: [64]u8 = undefined;
+    try std.testing.expectEqualStrings("model.cal", calPathForModel(&buf, "model.gguf").?);
+    try std.testing.expectEqualStrings("models/model.cal", calPathForModel(&buf, "models/model.gguf").?);
+    // SafeTensors directory: trailing slash trimmed, no .gguf stem to strip.
+    try std.testing.expectEqualStrings("model-dir.cal", calPathForModel(&buf, "model-dir/").?);
+    try std.testing.expectEqualStrings("model-dir.cal", calPathForModel(&buf, "model-dir").?);
+    try std.testing.expect(calPathForModel(&buf, "/") == null);
+    try std.testing.expect(calPathForModel(&buf, "") == null);
+    // Buffer too small: no truncated path that could read the wrong file.
+    var tiny: [4]u8 = undefined;
+    try std.testing.expect(calPathForModel(&tiny, "model.gguf") == null);
 }
 
 test "readCalFile rejects header with overflow-inducing dimensions" {
