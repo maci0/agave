@@ -137,6 +137,33 @@ const parseFrame = (payload: string): StreamFrame | null => {
   }
 };
 
+/** Run every `data:` line in `buffer` through `onFrame` in arrival order,
+ *  returning the trailing partial line for the next chunk. `onFrame` returning
+ *  false ends the stream.
+ *
+ *  With `final` set, a last line that never got its newline is run as well: a
+ *  body can end without one while still holding a complete frame, and dropping
+ *  it loses the text it carries. It is handled after the complete lines so
+ *  that trailing text is appended last, not interleaved before them. Exported
+ *  so frame splitting can be exercised without a socket. */
+export const drainSseBuffer = (
+  buffer: string,
+  onFrame: (payload: string) => boolean,
+  final = false,
+): string => {
+  const lines = buffer.split('\n');
+  let rest = lines.pop() ?? '';
+  for (const line of lines) {
+    if (!line.startsWith('data: ')) {continue;}
+    if (!onFrame(line.slice(6))) {return '';}
+  }
+  if (final && rest.startsWith('data: ')) {
+    if (!onFrame(rest.slice(6))) {return '';}
+    rest = '';
+  }
+  return rest;
+};
+
 /** Consume a `stream=1` response, calling back per token and once with the
  *  final statistics. Throws on a non-2xx response, an empty body, a decode
  *  failure, or the abort signal; the caller turns that into UI state. */
@@ -151,35 +178,44 @@ export const streamChat = async (request: StreamRequest, callbacks: StreamCallba
   const stream = response.body;
   if (!stream) {throw new Error('empty response body');}
   const reader = stream.getReader();
+  // Holds the lead bytes of a character the next chunk completes, so a 4-byte
+  // emoji split across two reads never reaches a frame as a fragment.
   const decoder = new TextDecoder();
   let buffer = '';
   let content = '';
+  /* Returns false once the stream is over: `[DONE]` ends it. The final stats
+     frame only records, so a route that keeps sending after it is unaffected. */
+  const onFrame = (payload: string): boolean => {
+    if (payload === '[DONE]') {return false;}
+    const frame = parseFrame(payload);
+    if (frame === null) { return true; }
+    if (frame.t !== undefined && frame.t !== '') {
+      content += frame.t;
+      callbacks.onText(content);
+    }
+    if (frame.done === true) {
+      callbacks.onStats({
+        tokens: String(frame.n),
+        tps: (frame.tps ?? 0).toFixed(2),
+        time: String(frame.ms),
+        pfTok: String(frame.pn),
+        pfMs: String(frame.pms),
+        pfTps: (frame.ptps ?? 0).toFixed(1),
+      });
+    }
+    return true;
+  };
   for (;;) {
     const { done, value } = await reader.read();
-    if (done) {return;}
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split('\n');
-    buffer = lines.pop() ?? '';
-    for (const line of lines) {
-      if (!line.startsWith('data: ')) {continue;}
-      const payload = line.slice(6);
-      if (payload === '[DONE]') {return;}
-      const frame = parseFrame(payload);
-      if (frame === null) { continue; }
-      if (frame.t !== undefined && frame.t !== '') {
-        content += frame.t;
-        callbacks.onText(content);
-      }
-      if (frame.done === true) {
-        callbacks.onStats({
-          tokens: String(frame.n),
-          tps: (frame.tps ?? 0).toFixed(2),
-          time: String(frame.ms),
-          pfTok: String(frame.pn),
-          pfMs: String(frame.pms),
-          pfTps: (frame.ptps ?? 0).toFixed(1),
-        });
-      }
+    if (done) {
+      /* Flush the decoder, then run whatever the last read left. Without the
+         flush a body that ends mid-character drops those bytes, and without
+         the final drain a frame with no trailing newline is never parsed. */
+      buffer += decoder.decode();
+      drainSseBuffer(buffer, onFrame, true);
+      return;
     }
+    buffer += decoder.decode(value, { stream: true });
+    buffer = drainSseBuffer(buffer, onFrame);
   }
 };

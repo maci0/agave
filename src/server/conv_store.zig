@@ -35,6 +35,9 @@ const max_store_bytes: usize = 64 * 1024 * 1024;
 /// cannot admit more than the next save would keep.
 pub const max_conversations: usize = 100;
 pub const max_messages_per_conv: usize = 1000;
+/// Cap on one conversation title, in UTF-8 bytes. Clipping is on a character
+/// boundary (`term.utf8BytePrefix`), so a multi-byte title yields fewer visible
+/// characters than this bound.
 pub const max_title_len: usize = 48;
 
 /// One conversation as loaded from disk. Contents are owned by `Snapshot`.

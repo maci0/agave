@@ -10,6 +10,10 @@ export type Locales = string | Array<string> | undefined;
 export const fmtNum = (amount: number, digits: number, locales?: Locales): string =>
   amount.toLocaleString(locales, { minimumFractionDigits: digits, maximumFractionDigits: digits });
 
+/** Cluster rule set shared by every truncation here. Built once: the rules
+ *  depend only on the resolved locale, not on the text being cut. */
+const graphemeSegmenter = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
+
 /** Locale-aware integer for token counts and millisecond totals. */
 export const fmtInt = (amount: number | string, locales?: Locales): string =>
   Number(amount).toLocaleString(locales, { maximumFractionDigits: 0 });
@@ -41,12 +45,19 @@ export const fmtMegabytes = (bytes: number, locales?: Locales): string =>
     maximumFractionDigits: 1,
   });
 
-/** Truncate by Unicode code points so surrogate pairs (emoji, some CJK) are not split. */
+/** Truncate on grapheme cluster boundaries, so what is announced is whole
+ *  characters rather than a code-point prefix that can end mid-cluster.
+ *
+ *  Code points are not enough: a ZWJ sequence (👨‍👩‍👧), a regional-indicator
+ *  pair (🇺🇸), a skin-tone modifier (👋🏽) or a base plus combining marks is one
+ *  user-perceived character spread over several code points. Cutting between
+ *  them leaves a lone ZWJ or half a flag, which a screen reader announces as
+ *  noise. `Intl.Segmenter` is the platform's own cluster rule set, so this
+ *  agrees with how the browser lays the same text out. */
 export const truncateAnnounce = (text: string, maxChars: number): string => {
-  // oxlint-disable-next-line typescript-eslint/no-misused-spread -- code-point iteration, not character spread
-  const chars = [...text];
-  if (chars.length <= maxChars) {return text;}
-  return `${chars.slice(0, maxChars).join('')}...`;
+  const clusters = Array.from(graphemeSegmenter.segment(text), (part) => part.segment);
+  if (clusters.length <= maxChars) {return text;}
+  return `${clusters.slice(0, maxChars).join('')}...`;
 };
 
 /** Local calendar date as YYYY-MM-DD. `toISOString().slice(0, 10)` is UTC, so a

@@ -28,6 +28,7 @@ const metrics_mod = @import("metrics.zig");
 const Metrics = metrics_mod.Metrics;
 const json = @import("json.zig");
 const http = @import("http.zig");
+const term = @import("../term.zig");
 const conv_store = @import("conv_store.zig");
 const Idempotency = @import("idempotency.zig");
 const tools_mod = @import("tools.zig");
@@ -116,6 +117,9 @@ const kv_export_dim_headroom: usize = 2;
 /// conversation admitted here must survive the next `conv_store` save.
 const max_conversations = conv_store.max_conversations;
 const max_messages_per_conv = conv_store.max_messages_per_conv;
+/// Cap on one user message, in UTF-8 bytes. Not characters: a CJK or emoji
+/// message reaches the cap at a fraction of its character count, which is the
+/// intent, since the cap bounds tokenizer work and memory, both byte-proportional.
 const max_message_len: usize = 100_000;
 const max_concurrent_connections: u32 = 64;
 /// Retry-After seconds advertised on 503 when at connection capacity or spawn fails.
@@ -482,30 +486,15 @@ const Conversation = struct {
         return self.title_buf[0..self.title_len];
     }
 
+    /// Clip `text` to `conv_title_max_len` bytes on a character boundary and
+    /// copy it into `title_buf`. `term.utf8BytePrefix` is the one place that
+    /// walks back to a UTF-8 sequence boundary; the store load path uses the
+    /// same helper, so a title clipped here and one clipped on load agree.
     fn setTitle(self: *Conversation, text: []const u8) void {
         @memset(&self.title_buf, 0);
-        var len: usize = @min(text.len, conv_title_max_len);
-        // Walk backwards to avoid truncating in the middle of a multi-byte UTF-8 sequence.
-        while (len > 0) {
-            const byte = text[len - 1];
-            if (byte & 0x80 == 0) break; // ASCII, clean boundary
-            if (byte & 0xC0 == 0xC0) {
-                // Start byte of a multi-byte sequence, check if the full sequence fits.
-                const seq_len = std.unicode.utf8ByteSequenceLength(byte) catch 1;
-                if (len - 1 + seq_len > @min(text.len, conv_title_max_len)) {
-                    // Sequence would be incomplete; drop it.
-                    len -= 1;
-                } else {
-                    len = len - 1 + seq_len; // Full sequence fits, extend to include it.
-                    break;
-                }
-                break;
-            }
-            // Continuation byte (10xxxxxx), keep walking back.
-            len -= 1;
-        }
-        const safe_len: u8 = @intCast(len);
-        @memcpy(self.title_buf[0..safe_len], text[0..safe_len]);
+        const prefix = term.utf8BytePrefix(text, conv_title_max_len);
+        const safe_len: u8 = @intCast(prefix.len);
+        @memcpy(self.title_buf[0..safe_len], prefix);
         self.title_len = safe_len;
     }
 
@@ -3665,8 +3654,10 @@ fn handleRequest(stream: http.TcpStream, req: http.HttpRequest) void {
             return;
         }
 
-        // Log message receipt without content (avoid leaking prompts in shared deployments)
-        std.log.info("req={d} user message ({d} chars)", .{ log_request_id, decoded.len });
+        // Log message receipt without content (avoid leaking prompts in shared deployments).
+        // Bytes, not characters: `max_message_len` is a byte cap, and decoding
+        // to count characters here would cost a second pass over every message.
+        std.log.info("req={d} user message ({d} bytes)", .{ log_request_id, decoded.len });
 
         // Check for attached image data (base64-encoded data URI from web UI)
         // If a vision encoder is available, decode and encode the image into
