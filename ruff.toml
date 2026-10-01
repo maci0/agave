@@ -53,6 +53,44 @@ select = [
     "G",    # flake8-logging-format
     "PLE",  # pylint errors
     "PLW",  # pylint warnings: unchecked subprocess exit, loop-var reuse, globals
+    # flake8-pyi, whole group. Typing correctness is the only type checking
+    # this auxiliary tree has, so a wrong annotation is the one defect no
+    # other rule catches: PYI034 (`__enter__` returning the class rather than
+    # `Self`) and the rest are signature bugs, not style. Proven clean with
+    # `ruff check --select PYI .`; the single hit it had (`__enter__` on a
+    # test double in tools/quality-testing) is fixed.
+    "PYI",
+    # flake8-executable, minus EXE001. The tree runs its Python through
+    # `python3 script.py` and nothing through `./script.py`, so EXE001 would
+    # fire 133 times on a file mode this repo never relies on. EXE002-005 are
+    # the encoding and exec-bit bugs that a shebang gets wrong, and all four
+    # are clean.
+    "EXE002", # shebang is not the first line, or names an absent interpreter
+    "EXE003", # shebang decode error
+    "EXE004", # missing or misplaced shebang for an executable file
+    "EXE005", # shebang with a BOM or CRLF, which the kernel will not honour
+    # flake8-perf, minus the rules that are style rather than defect. PERF401
+    # (manual list comprehension, 112 hits, mostly `for` bodies that log or
+    # count as they append) is left off; PERF203 (a try/except inside a loop,
+    # a per-item control-flow cost that compounds) and PERF402 (a list built
+    # only to be indexed) are real defects and both are clean.
+    "PERF203", # try-except-in-loop: control flow per iteration instead of once
+    "PERF402", # manual list-copy the compiler could do
+    # tryceratops, by rule. TRY003 (raise with a bare message) and TRY300
+    # (a `return` that belongs in an `else`) are about how a raise reads, and
+    # the tree has 31 of them in the reference and tool scripts; the other two
+    # are control flow where a wrong write is a wrong answer rather than an
+    # awkward sentence.
+    "TRY002", # raise a bare Exception: the one class that carries no contract
+    "TRY004", # isinstance against a non-exception class, which never matches
+    "TRY301", # raise inside try: the handler catches the error it just raised
+    # flake8-boolean-trap, FBT003 only. FBT001/FBT002 (a bool as a positional
+    # argument or with a False default) fire 45 times on the argparse-driven
+    # entry points, where a keyword flag is the de-facto signature and the
+    # rule cannot see the call site. FBT003 (an unannotated bool *positional*
+    # parameter) is the one that hides a `True`/`False` at a call site, and it
+    # is clean.
+    "FBT003", # unannotated positional bool parameter
     # flake8-bandit, code by code. S603 (subprocess) and S607 (partial
     # executable path) are left off: every call in this tree runs a
     # repo-local binary or a test harness under a developer's control, so

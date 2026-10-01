@@ -10,6 +10,7 @@ import unittest
 import urllib.error
 from io import BytesIO
 from pathlib import Path
+from typing import Self
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -24,7 +25,7 @@ class _FakeResponse:
     def read(self) -> bytes:
         return self._body
 
-    def __enter__(self) -> _FakeResponse:
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(self, *args: object) -> None:
