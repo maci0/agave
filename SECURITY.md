@@ -4,7 +4,7 @@ Claims in this file are checked against source by the threat-model pass. If one
 disagrees with the code, the code wins; see the docs-vs-code check at the end of
 [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md#4-mitigations-map).
 
-- **Last reviewed:** 2026-10-03
+- **Last reviewed:** 2026-10-07
 
 ## Supported versions
 
@@ -76,8 +76,8 @@ writes over the binary:
   no compute quota. See T5.
 - **`POST /v1/kv_cache` writes model state.** Any API-key holder can post a
   right-sized f32 blob and have it installed as the live KV cache
-  (`src/server/server.zig:3005`; per-layer length bounds in
-  `src/models/gemma4.zig:1655`). Lengths are checked, provenance is not, so
+  (`src/server/server.zig:3047`; per-layer length bounds in
+  `src/models/gemma4.zig:1654`). Lengths are checked, provenance is not, so
   injected hidden state is indistinguishable from a legitimate warm-start
   blob and every later answer on that slot is computed over it. Give
   import-only callers a separate key, or leave the route off on a
@@ -94,7 +94,7 @@ writes over the binary:
   `/agave_1to0` (`src/parallel/transport.zig:333-334`) are mode 0600, so any
   other process running as the same uid can read or inject tensors. See T6.
 - **`agave update` overwrites the installed binary.** It is the only code
-  path that writes a file the user then executes (`src/update.zig:193,336`).
+  path that writes a file the user then executes (`src/update.zig:193,364`).
   The download must be HTTPS on a GitHub host (`trustedGithubUrl`
   `src/update.zig:127`) and must match a `.sha256` sidecar
   (`checksumMatches` `src/update.zig:159`), but the sidecar is fetched from
