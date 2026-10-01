@@ -55,6 +55,19 @@ must still appear under **Changed** or **Breaking** below. See
   the hint reads "Forward pass pending a Zig wasm32 fix".
 
 ### Fixed
+- CI could silently stop requiring a job. The `ci-pass` gate reads its results
+  from the `needs:` list it is itself given, so deleting a job from that list
+  left the job running while the gate went green, and the check the repo
+  documents as blocking stopped blocking. `scripts/check-ci-pass.sh` now also
+  compares the payload against the jobs `.github/workflows/ci.yml` defines and
+  fails on any that is missing. Separately, a new `-Denable-*` model or backend
+  flag that reached `build.zig` without reaching the `Dockerfile`'s `ARG`s
+  compiled into the image anyway (the build.zig default is on), so a
+  "minimal build" could ship a model nothing asked for; `zig build check-pins`
+  now fails on that gap. The two inline `run:` blocks in `golden_tests.yml`
+  moved to `scripts/check-golden-models.sh` and `scripts/run-golden-tests.sh`,
+  so the blocking `lint-shell` job analyses them and a golden backend run is
+  reproducible locally with `bash scripts/run-golden-tests.sh <backend>`.
 - The browser WASM shell (`web/`, `zig build wasm`) rebuilt its `AgaveEngine`
   on every render, so each state change threw away the instantiated module and
   the loaded model. Typing a prompt after loading a GGUF reported "Load a GGUF

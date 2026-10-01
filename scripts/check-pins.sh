@@ -244,6 +244,48 @@ backend_mismatch "docker-compose.yml" "$compose_backends"
 backend_mismatch "check-reproducible.sh" "$repro_backends"
 echo "Image build flags OK: $(printf '%s\n' "$ci_build_flags" | wc -l | tr -d ' ') -Denable-* flag(s) agree (docker-compose.yml, ci.yml, check-reproducible.sh)"
 
+# Comparing the three build-arg lists to each other only proves they agree; it
+# says nothing about whether they still cover the options the build exposes.
+# build.zig owns that list, and an architecture or backend whose ARG never
+# reaches the Dockerfile keeps the build.zig default (on), so the image compiles
+# in a model or backend nothing asked for and a "minimal build" quietly ships
+# all of them. Compare the Dockerfile's ARGs against build.zig's own
+# `b.option(bool, "enable-...")` spellings, slug to slug. A -Denable-* added to
+# build.zig fails here until the Dockerfile (and the compose/CI arg lists the
+# lines above) carry it.
+dockerfile_slugs="$(
+    sed -n 's/^ARG ENABLE_\([A-Z0-9_]*\)=.*/\1/p' Dockerfile |
+        tr '[:upper:]' '[:lower:]' |
+        LC_ALL=C sort
+)"
+build_slugs="$(
+    sed -n 's/.*b\.option(bool, "enable-\([a-z0-9-]*\)".*/\1/p' build.zig |
+        tr '-' '_' |
+        LC_ALL=C sort
+)"
+if [[ -z "$dockerfile_slugs" || -z "$build_slugs" ]]; then
+    echo "check-pins: could not parse the -Denable-* option list from build.zig or the ARG list from Dockerfile" >&2
+    exit 1
+fi
+flag_gap="$(comm -3 <(printf '%s\n' "$dockerfile_slugs") <(printf '%s\n' "$build_slugs"))"
+if [[ -n "$flag_gap" ]]; then
+    echo "check-pins: -Denable-* coverage gap between build.zig and the Dockerfile ARG list" >&2
+    # Both sides are folded to underscore slugs, so the flag name is rebuilt
+    # from the slug (underscores become the -Denable-<slug> dashes) rather than
+    # pasted after a literal prefix, which would drop a letter off a slug that
+    # happens to start with one.
+    while IFS= read -r slug; do
+        if [[ "$slug" == $'\t'* ]]; then
+            echo "  build.zig only:   -Denable-${slug:1}" | tr '_' '-' >&2
+        else
+            echo "  Dockerfile only:   -Denable-$slug" | tr '_' '-' >&2
+        fi
+    done <<<"$flag_gap"
+    echo "check-pins: add the ARG to the Dockerfile, and the flag to docker-compose.yml, ci.yml and scripts/check-reproducible.sh" >&2
+    exit 1
+fi
+echo "Image build flags cover build.zig: $(printf '%s\n' "$dockerfile_slugs" | wc -l | tr -d ' ') -Denable-* option(s) declared in the Dockerfile"
+
 # The CI image must carry the real product version. LABEL cannot read files, so
 # the Dockerfile falls back to "dev" unless AGAVE_VERSION is passed, and the
 # only thing that passes it is the fmt-check job's output read from

@@ -84,45 +84,14 @@ jobs:
           restore-keys: zig-${{ steps.zig.outputs.version }}-golden-${{ matrix.cache-suffix }}-
 
       - name: Require local GGUF models
-        run: |
-          set -euo pipefail
-          # Hosted runners have no weights; self-hosted / manual runs must provide models/.
-          if ! find models -type f \( -name '*.gguf' -o -name '*.GGUF' \) 2>/dev/null | grep -q .; then
-            echo "::error::Golden tests need at least one .gguf under models/. Re-dispatch with the 'runner' input set to a self-hosted label whose checkout has ./models mounted; GitHub-hosted runners never have weights."
-            exit 1
-          fi
-          echo "Found GGUF models under models/"
+        run: bash scripts/check-golden-models.sh
 
       - name: Build Agave
         run: zig build
 
       - name: Run golden tests (${{ matrix.backend }} backend)
         # Env indirection, not ${{ }} interpolation: the backend name must never
-        # be spliced into the shell body.
+        # be spliced into a shell body.
         env:
           BACKEND: ${{ matrix.backend }}
-        run: |
-          set +e
-          rc=0
-          failed=""
-          shopt -s nullglob
-          test_files=(tests/models/test_*.zig)
-          if [[ ${#test_files[@]} -eq 0 ]]; then
-            echo "::error::No golden test files matched tests/models/test_*.zig"
-            exit 1
-          fi
-          for test_file in "${test_files[@]}"; do
-            echo "::group::$(basename "$test_file")"
-            if zig test "$test_file" --test-filter "$BACKEND"; then
-              echo "PASS: $test_file"
-            else
-              rc=1
-              failed="$failed $(basename "$test_file")"
-              echo "::error::FAIL: $test_file ($BACKEND backend)"
-            fi
-            echo "::endgroup::"
-          done
-          if [ -n "$failed" ]; then
-            echo "::error::Failed golden tests:$failed"
-          fi
-          exit $rc
+        run: bash scripts/run-golden-tests.sh "$BACKEND"
