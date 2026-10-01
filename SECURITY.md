@@ -43,9 +43,9 @@ them must rely on network-level isolation. See T1 in
 
 Peer discovery has **no port of its own**: it reuses the parallel group's
 TCP data-port base. `discoverPeer` takes that same base from
-`src/main.zig` (`src/parallel/peer_discovery.zig:62`), and rank 0 binds
+`src/main.zig` (`src/parallel/peer_discovery.zig:65`), and rank 0 binds
 UDP `port` while broadcasting the beacon to UDP `port + 1`, where workers
-bind (`src/parallel/peer_discovery.zig:102,111`). For tensor parallelism
+bind (`src/parallel/peer_discovery.zig:104,127`). For tensor parallelism
 that is UDP 49454/49455; for pipeline parallelism, UDP 49455/49456. A
 firewall rule that allows 49454-49456 for TCP but denies UDP leaves
 discovery closed; a rule written against any other port number, including
@@ -70,13 +70,13 @@ writes over the binary:
 
 - **Rate limiting is off unless asked for.** `--rate-limit-rpm` and
   `--rate-limit-tpm` both default to `0` (`src/main.zig:681,683`), which
-  substitutes the effectively unlimited values `src/server/server.zig:129-130`.
-  One global bucket, not per client (`src/server/rate_limiter.zig:57-58`). A
+  substitutes the effectively unlimited values `src/server/server.zig:133-134`.
+  One global bucket, not per client (`src/server/rate_limiter.zig:58-61`). A
   server bound to a non-loopback address with a key and no rate-limit flags has
   no compute quota. See T5.
 - **`POST /v1/kv_cache` writes model state.** Any API-key holder can post a
   right-sized f32 blob and have it installed as the live KV cache
-  (`src/server/server.zig:2996`; per-layer length bounds in
+  (`src/server/server.zig:3005`; per-layer length bounds in
   `src/models/gemma4.zig:1655`). Lengths are checked, provenance is not, so
   injected hidden state is indistinguishable from a legitimate warm-start
   blob and every later answer on that slot is computed over it. Give
