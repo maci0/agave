@@ -1,3 +1,12 @@
+/** The committed stylesheet, read as text by a test that asserts on a rule the
+ *  server serves. A Bun text import (`with { type: 'text' }`) resolves at
+ *  runtime; tsc needs the module shape declared. `src/web/style.css` is the
+ *  artifact scripts/build-web.sh writes, not a source stylesheet. */
+declare module '*.css' {
+  const stylesheet: string;
+  export default stylesheet;
+}
+
 /** CDN globals. marked and DOMPurify are fetched on the first rendered response
  * (`loadMarkdown`), highlight.js on the first fenced code block. */
 

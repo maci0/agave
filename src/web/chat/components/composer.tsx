@@ -8,7 +8,9 @@ import type { Sampling } from '../types';
 
 const COMPOSER_MAX_HEIGHT_PX = 200;
 
-type ComposerProps = {
+/** Exported so the smoke test can mount the real composer with one prop set
+ *  rather than restating it and drifting from the component. */
+export type ComposerProps = {
   sampling: Sampling;
   onSamplingChange: (next: Sampling) => void;
   onSubmit: (text: string, image: string | null) => void;
@@ -111,7 +113,7 @@ const SendControl = ({ streaming, canSend, onStop }: { streaming: boolean; canSe
       Stop
     </Button>
   ) : (
-    <Button type="submit" variant="primaryOutline" size="lg" disabled={!canSend} title="Send message (Enter)" aria-label="Send message">
+    <Button type="submit" variant="solid" size="lg" disabled={!canSend} title="Send message (Enter)" aria-label="Send message">
       Send
     </Button>
   )

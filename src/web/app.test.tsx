@@ -17,8 +17,13 @@ import { afterAll, expect, test } from 'bun:test';
 import { GlobalRegistrator } from '@happy-dom/global-registrator';
 
 import { renderMarkdown } from './chat/markdown';
+/* The stylesheet server.zig embeds, read as text. A text import declares no
+   global and pulls in no Node module, which is what src/web's lint scope
+   allows; see scripts/build-web.sh for the committed artifact's provenance. */
+import SERVED_STYLESHEET from './style.css' with { type: 'text' };
 import { fmtMegabytes, fmtNum, fmtPercent } from './chat/format';
 import type { Bubble } from './chat/types';
+import type { ComposerProps } from './chat/components/composer';
 
 GlobalRegistrator.register({ url: 'http://127.0.0.1:49453' });
 
@@ -295,6 +300,120 @@ test('a link that survives the sanitizer loses its script scheme', () => {
   } finally {
     clearCdn();
   }
+});
+
+/** The composer props these tests drive the component with. Every callback is
+ *  a no-op the tests never assert on, so they share one sink rather than
+ *  eight empty bodies the lint rules reject. */
+const VOID = (..._args: ReadonlyArray<unknown>): void => {
+  /* Nothing to record: no test below depends on a callback firing. */
+};
+
+const COMPOSER_PROPS: ComposerProps = {
+  /* The sampling the composer holds until a turn reports otherwise; the tests
+     below assert the key's rendering, not a decode, so these are inert. */
+  // oxlint-disable-next-line @rikalabs/no-hardcoded-secrets -- a decode bound, not a credential
+  sampling: { temperature: 0.7, topP: 0.95, maxTokens: '512', system: '' },
+  onSamplingChange(next) { VOID(next); },
+  onSubmit(text, image) { VOID(text, image); },
+  streaming: false,
+  onStop() { VOID(); },
+  vision: false,
+  pendingImage: null,
+  onImageFile(file, label) { VOID(file, label); },
+  onRemoveImage() { VOID(); },
+  onDropRejected(message) { VOID(message); },
+  onClearSystem() { VOID(); },
+  tps: null,
+  settingsOpen: false,
+  onToggleSettings() { VOID(); },
+  focusToken: 0,
+};
+
+test('the send key wears the solid variant the two surfaces share', async () => {
+  /* The brand guide (docs/brand/README.md) assigns `solid` to the send key.
+     This mounted `primaryOutline` while the WASM shell wore `solid`, so one
+     action looked different on two surfaces the guide holds to one product.
+     The outline variant stays right for other actions, so what is pinned is
+     the send key's own class, not the variant's existence. */
+  const { createRoot } = await import('react-dom/client');
+  const { Composer } = await import('./chat/components/composer');
+  const host = mountHost();
+  const root = createRoot(host);
+  root.render(<Composer {...COMPOSER_PROPS} />);
+  expect(await waitFor(() => host.querySelector('button[aria-label="Send message"]') !== null)).toBe(true);
+
+  const send = present(host.querySelector<HTMLButtonElement>('button[aria-label="Send message"]'), 'send key');
+  expect(send.textContent).toBe('Send');
+  expect(send.className).toContain('bg-primary');
+  expect(send.className).not.toContain('border-primary');
+  /* Still a submit inside the composer form, not a click handler, and disabled
+     on an empty composer, which is the resting state a reader meets. */
+  expect(send.type).toBe('submit');
+  expect(send.form).toBe(present(host.querySelector('form'), 'composer form'));
+  expect(send.disabled).toBe(true);
+  root.unmount();
+  host.remove();
+});
+
+test('a streaming turn swaps the send key for the stop key', async () => {
+  /* The variant change is scoped to the idle key: the control that replaces it
+     is the destructive one, and a composer mid-turn must not offer Send. */
+  const { createRoot } = await import('react-dom/client');
+  const { Composer } = await import('./chat/components/composer');
+  const host = mountHost();
+  const root = createRoot(host);
+  root.render(<Composer {...COMPOSER_PROPS} streaming />);
+  expect(await waitFor(() => host.querySelector('button[aria-label="Stop generation"]') !== null)).toBe(true);
+
+  const stop = present(host.querySelector<HTMLButtonElement>('button[aria-label="Stop generation"]'), 'stop key');
+  expect(stop.textContent).toBe('Stop');
+  expect(stop.className).toContain('bg-destructive');
+  expect(host.querySelector('button[aria-label="Send message"]')).toBeNull();
+  root.unmount();
+  host.remove();
+});
+
+test('the slider takes its radius from the pill token, not the framework default', async () => {
+  /* `rounded-full` is a Tailwind default, not a token on the radius ramp, so
+     editing --radius-pill could not move the track or the thumb. Both are the
+     same 999px today, so this asserts the token's name in the class: that is
+     what makes the slider follow the ramp if the ramp ever changes. */
+  const { createRoot } = await import('react-dom/client');
+  const { Slider } = await import('./ui/slider');
+  const host = mountHost();
+  const root = createRoot(host);
+  root.render(<Slider value={1} onValueChange={VOID} />);
+  expect(await waitFor(() => host.querySelector('input[type="range"]') !== null)).toBe(true);
+
+  const track = present(host.querySelector<HTMLInputElement>('input[type="range"]'), 'slider');
+  const classes = track.className.split(' ');
+  expect(classes).toContain('rounded-pill');
+  expect(classes).not.toContain('rounded-full');
+  /* One arbitrary variant per class, so each thumb pseudo-element carries its
+     own `rounded-pill`; both engines are named or one platform loses the ramp.
+     The pseudo-elements differ (`-webkit-slider-thumb` and `-moz-range-thumb`),
+     so each is looked up by its exact name. */
+  expect(classes).toContain('[&::-webkit-slider-thumb]:rounded-pill');
+  expect(classes).toContain('[&::-moz-range-thumb]:rounded-pill');
+  /* No thumb fell back to the framework default. */
+  expect(classes.filter((name) => name.endsWith('thumb]:rounded-full'))).toHaveLength(0);
+  root.unmount();
+  host.remove();
+});
+
+test('the served stylesheet gives a think block label a fill token, not an edge token', () => {
+  /* The summary row painted its hover background with --color-border, which the
+     brand guide reserves for control edges. As a fill it put --color-faint text
+     at 1.57:1 dark and 1.56:1 light. This reads the stylesheet the server
+     embeds and serves, so the assertion is about the rule a reader meets, not
+     the source line it came from: editing theme.css without rebuilding fails
+     here exactly as `scripts/check-web-artifacts.sh` reports it. */
+  const matches = SERVED_STYLESHEET.match(/think-block summary:hover\{[^}]*\}/gu);
+  /* Exactly one such rule in the served sheet, or a later one silently wins. */
+  expect(matches).toHaveLength(1);
+  expect(present(matches, 'think-block hover rule')[0]).toContain('background:var(--color-muted)');
+  expect(present(matches, 'think-block hover rule')[0]).not.toContain('--color-border');
 });
 
 test("a percentage carries the locale's mark, not a pasted one", () => {

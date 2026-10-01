@@ -20,6 +20,11 @@ type SliderProps = Omit<InputHTMLAttributes<HTMLInputElement>, 'type' | 'value' 
  *
  * `aria-valuetext` is what a screen reader announces, so callers format the
  * value to the precision the setting actually has ("0.0", "1.00").
+ *
+ * The track and thumb take `rounded-pill`, the token on the radius ramp, not
+ * Tailwind's `rounded-full`. The two are the same 999px today, but `--radius-pill`
+ * is the one the brand guide documents, so shrinking or squaring the ramp moves
+ * the slider with it.
  */
 export const Slider = ({ className, value, onValueChange, ...props }: SliderProps) => (
   <input
@@ -27,9 +32,9 @@ export const Slider = ({ className, value, onValueChange, ...props }: SliderProp
     value={value}
     onChange={function (event) { onValueChange(Number(event.target.value)); }}
     className={cn(
-      'h-1.5 w-full cursor-pointer appearance-none rounded-full bg-border accent-primary',
-      '[&::-webkit-slider-thumb]:size-5 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:border-2 [&::-webkit-slider-thumb]:border-primary [&::-webkit-slider-thumb]:bg-background',
-      '[&::-moz-range-thumb]:size-5 [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:border-2 [&::-moz-range-thumb]:border-primary [&::-moz-range-thumb]:bg-background',
+      'h-1.5 w-full cursor-pointer appearance-none rounded-pill bg-border accent-primary',
+      '[&::-webkit-slider-thumb]:size-5 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-pill [&::-webkit-slider-thumb]:border-2 [&::-webkit-slider-thumb]:border-primary [&::-webkit-slider-thumb]:bg-background',
+      '[&::-moz-range-thumb]:size-5 [&::-moz-range-thumb]:rounded-pill [&::-moz-range-thumb]:border-2 [&::-moz-range-thumb]:border-primary [&::-moz-range-thumb]:bg-background',
       className,
     )}
     {...props}

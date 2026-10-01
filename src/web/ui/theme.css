@@ -467,9 +467,13 @@
     user-select: none;
   }
 
+  /* The hover fill is --color-muted, the token every other hover wash uses
+     (Button, sidebar row, composer). It was --color-border, which the brand
+     guide reserves for control edges: as a fill it left --color-faint text at
+     1.57:1 (dark) and 1.56:1 (light). --color-muted measures 4.77:1 and 4.81:1. */
   .agave-prose .think-block summary:hover {
     color: var(--color-muted-foreground);
-    background: var(--color-border);
+    background: var(--color-muted);
   }
 
   .agave-prose .think-block summary::marker {
