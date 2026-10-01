@@ -279,8 +279,7 @@ test "mtp: a header that is not an object is refused, not a trap" {
 test "mtp: a shape element of the wrong type is refused, not a trap" {
     const alloc = std.testing.allocator;
     const header =
-        "{\"mtp.0.attn.wq_a.weight\":{\"dtype\":\"F32\",\"shape\":[\"4\",-1,1.5,null],\"data_offsets\":[0,16]}}"
-    ;
+        "{\"mtp.0.attn.wq_a.weight\":{\"dtype\":\"F32\",\"shape\":[\"4\",-1,1.5,null],\"data_offsets\":[0,16]}}";
     const img = try imageFor(alloc, header, "0123456789abcdef");
     defer alloc.free(img);
     var w = MtpWeights.init(alloc);
@@ -304,7 +303,7 @@ test "mtp: a well-formed header indexes tensors inside the data region" {
     const header = "{\"mtp.0.attn.wq_a.weight\":{\"dtype\":\"F32\",\"shape\":[2,2],\"data_offsets\":[0,16]}," ++
         "\"mtp.2.attn.wq_b.weight\":{\"dtype\":\"BF16\",\"shape\":[4],\"data_offsets\":[16,24]}," ++
         "\"out.0.weight\":{\"dtype\":\"F32\",\"shape\":[1],\"data_offsets\":[24,28]}}";
-    const img = try imageFor(alloc, header, "0123456789abcdefghijklmn");
+    const img = try imageFor(alloc, header, "0123456789abcdefghijklmnopqr");
     defer alloc.free(img);
     var w = MtpWeights.init(alloc);
     defer w.deinit(alloc);
@@ -338,7 +337,7 @@ test "fuzz: mtp safetensors header, no trap and no out-of-image tensor" {
             // offsets a corrupt or hostile download would claim.
             const names = [_][]const u8{
                 "mtp.0.attn.wq_a.weight", "mtp.0.main_proj.scale",
-                "mtp.2.ffn.w1.weight",     "out.0.weight",
+                "mtp.2.ffn.w1.weight",    "out.0.weight",
             };
             const dtypes = [_][]const u8{ "F32", "F16", "BF16", "F8_E4M3", "I8", "MXFP4" };
             const name = names[smith.indexWithHash(names.len, 0)];
@@ -349,9 +348,7 @@ test "fuzz: mtp safetensors header, no trap and no out-of-image tensor" {
             const end = start + smith.indexWithHash(24, 5);
 
             var header_buf: [192]u8 = undefined;
-            const header = std.fmt.bufPrint(&header_buf,
-                "{{\"{s}\":{{\"dtype\":\"{s}\",\"shape\":[{d},{d}],\"data_offsets\":[{d},{d}]}}}}"
-            , .{ name, dtype, d0, d1, start, end }) catch return;
+            const header = std.fmt.bufPrint(&header_buf, "{{\"{s}\":{{\"dtype\":\"{s}\",\"shape\":[{d},{d}],\"data_offsets\":[{d},{d}]}}}}", .{ name, dtype, d0, d1, start, end }) catch return;
             const img = try imageFor(allocator, header, "0123456789abcdef0123456789abcdef");
             defer allocator.free(img);
 
