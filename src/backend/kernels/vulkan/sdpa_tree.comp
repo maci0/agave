@@ -70,8 +70,15 @@ void main() {
         barrier();
         uint num_sg = (tg_sz + gl_SubgroupSize - 1u) / gl_SubgroupSize;
         if (tid < num_sg) block_max = sdata[tid]; else block_max = -3.402823466e+38;
-        if (tid < gl_SubgroupSize) { block_max = subgroupMax(block_max); if (tid == 0u) sdata[0] = block_max; }
-        barrier();
+        // Fold every subgroup partial, not just the first gl_SubgroupSize of
+// them: num_sg is up to 32 on an 8-lane subgroup, so 24 of the 32
+// partial maxima were dropped and the shift used was too small.
+for (uint stride = num_sg / 2; stride > 0u; stride >>= 1u) {
+    if (tid < stride) sdata[tid] = max(sdata[tid], sdata[tid + stride]);
+    barrier();
+}
+if ((num_sg & 1u) != 0u && tid == 0u) sdata[0] = max(sdata[0], sdata[num_sg - 1]);
+barrier();
         float m_new = sdata[0];
         // Every thread has read the reduced value before the scratch is reused
         // (write-after-read hazard).
@@ -92,8 +99,14 @@ void main() {
         if (sg_lane == 0u) sdata[sg_id] = block_sum;
         barrier();
         if (tid < num_sg) block_sum = sdata[tid]; else block_sum = 0.0;
-        if (tid < gl_SubgroupSize) { block_sum = subgroupAdd(block_sum); if (tid == 0u) sdata[0] = block_sum; }
-        barrier();
+        // Same fold as the max pass above: fold all num_sg partials, not just
+// the first gl_SubgroupSize of them.
+for (uint stride = num_sg / 2; stride > 0u; stride >>= 1u) {
+    if (tid < stride) sdata[tid] += sdata[tid + stride];
+    barrier();
+}
+if ((num_sg & 1u) != 0u && tid == 0u) sdata[0] += sdata[num_sg - 1];
+barrier();
         l_i += sdata[0];
         // Every thread has read the reduced value before the scratch is reused
         // (write-after-read hazard).

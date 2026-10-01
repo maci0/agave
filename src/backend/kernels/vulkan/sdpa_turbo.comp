@@ -278,11 +278,15 @@ void main() {
         if (sg_lane == 0u) shared_vals[sg_id] = block_max;
         barrier();
         if (tid < num_sg) block_max = shared_vals[tid]; else block_max = -1.0 / 0.0;
-        if (tid < gl_SubgroupSize) {
-            block_max = subgroupMax(block_max);
-            if (tid == 0u) shared_vals[0] = block_max;
-        }
-        barrier();
+        // Fold every subgroup partial, not just the first gl_SubgroupSize of
+// them: num_sg is up to 32 on an 8-lane subgroup, so 24 of the 32
+// partial maxima were dropped and the shift used was too small.
+for (uint stride = num_sg / 2; stride > 0u; stride >>= 1u) {
+    if (tid < stride) shared_vals[tid] = max(shared_vals[tid], shared_vals[tid + stride]);
+    barrier();
+}
+if ((num_sg & 1u) != 0u && tid == 0u) shared_vals[0] = max(shared_vals[0], shared_vals[num_sg - 1]);
+barrier();
         float m_new = shared_vals[0];
 
         // ── Online softmax: rescale previous sum and accumulator ──
@@ -306,11 +310,14 @@ void main() {
         if (sg_lane == 0u) shared_vals[sg_id] = local_sum;
         barrier();
         if (tid < num_sg) local_sum = shared_vals[tid]; else local_sum = 0.0;
-        if (tid < gl_SubgroupSize) {
-            local_sum = subgroupAdd(local_sum);
-            if (tid == 0u) shared_vals[0] = local_sum;
-        }
-        barrier();
+        // Same fold as the max pass above: fold all num_sg partials, not just
+// the first gl_SubgroupSize of them.
+for (uint stride = num_sg / 2; stride > 0u; stride >>= 1u) {
+    if (tid < stride) shared_vals[tid] += shared_vals[tid + stride];
+    barrier();
+}
+if ((num_sg & 1u) != 0u && tid == 0u) shared_vals[0] += shared_vals[num_sg - 1];
+barrier();
         l_i += shared_vals[0];
 
         // ── Load V block with turbo dequant (reuses kv_block_data) ──

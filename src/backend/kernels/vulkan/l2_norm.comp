@@ -25,11 +25,15 @@ void main() {
     if (sg_lane == 0) shared_sums[sg_id] = ss;
     barrier();
     uint num_sg = (tg_size + gl_SubgroupSize - 1) / gl_SubgroupSize;
-    if (tid < num_sg) ss = shared_sums[tid]; else ss = 0.0;
-    if (tid < gl_SubgroupSize) {
-        ss = subgroupAdd(ss);
-        if (tid == 0) shared_sums[0] = ss;
+    // Fold every subgroup partial, not just the first gl_SubgroupSize of them.
+    // num_sg is 256/gl_SubgroupSize (32 on an 8-lane subgroup), so a single
+    // subgroupAdd summed 8 of the 32 partials and dropped the rest, making
+    // inv_rms too small and every normalized element too large.
+    for (uint stride = num_sg / 2; stride > 0u; stride >>= 1u) {
+        if (tid < stride) shared_sums[tid] += shared_sums[tid + stride];
+        barrier();
     }
+    if ((num_sg & 1u) != 0u && tid == 0) shared_sums[0] += shared_sums[num_sg - 1];
     barrier();
 
     // Normalize in-place

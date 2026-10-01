@@ -24,11 +24,15 @@ void main() {
     if (sg_lane == 0) shared_vals[sg_id] = mx;
     barrier();
     uint num_sg = (tg_size + gl_SubgroupSize - 1) / gl_SubgroupSize;
-    if (tid < num_sg) mx = shared_vals[tid]; else mx = -1.0 / 0.0;
-    if (tid < gl_SubgroupSize) {
-        mx = subgroupMax(mx);
-        if (tid == 0) shared_vals[0] = mx;
+    // Fold every subgroup partial, not just the first gl_SubgroupSize of them
+    // (num_sg is up to 32 on an 8-lane subgroup, so 24 partial maxima were
+    // dropped and the shift used was too small).
+    for (uint stride = num_sg / 2; stride > 0u; stride >>= 1u) {
+        if (tid < stride) shared_vals[tid] = max(shared_vals[tid], shared_vals[tid + stride]);
+        barrier();
     }
+    if ((num_sg & 1u) != 0u && tid == 0)
+        shared_vals[0] = max(shared_vals[0], shared_vals[num_sg - 1]);
     barrier();
     float max_val = shared_vals[0];
     // Every thread has read the reduced value before any subgroup reuses the
@@ -45,11 +49,13 @@ void main() {
     local_sum = subgroupAdd(local_sum);
     if (sg_lane == 0) shared_vals[sg_id] = local_sum;
     barrier();
-    if (tid < num_sg) local_sum = shared_vals[tid]; else local_sum = 0.0;
-    if (tid < gl_SubgroupSize) {
-        local_sum = subgroupAdd(local_sum);
-        if (tid == 0) shared_vals[0] = local_sum;
+    // Fold every subgroup partial, not just the first gl_SubgroupSize of them
+    // (num_sg is up to 32 on an 8-lane subgroup, so 24 sums were dropped).
+    for (uint stride = num_sg / 2; stride > 0u; stride >>= 1u) {
+        if (tid < stride) shared_vals[tid] += shared_vals[tid + stride];
+        barrier();
     }
+    if ((num_sg & 1u) != 0u && tid == 0) shared_vals[0] += shared_vals[num_sg - 1];
     barrier();
     float inv_sum = 1.0 / shared_vals[0];
 

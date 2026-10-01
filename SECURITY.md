@@ -4,7 +4,7 @@ Claims in this file are checked against source by the threat-model pass. If one
 disagrees with the code, the code wins; see the docs-vs-code check at the end of
 [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md#4-mitigations-map).
 
-- **Last reviewed:** 2026-10-02
+- **Last reviewed:** 2026-10-03
 
 ## Supported versions
 
@@ -74,6 +74,22 @@ writes over the binary:
   One global bucket, not per client (`src/server/rate_limiter.zig:57-58`). A
   server bound to a non-loopback address with a key and no rate-limit flags has
   no compute quota. See T5.
+- **`POST /v1/kv_cache` writes model state.** Any API-key holder can post a
+  right-sized f32 blob and have it installed as the live KV cache
+  (`src/server/server.zig:2996`; per-layer length bounds in
+  `src/models/gemma4.zig:1655`). Lengths are checked, provenance is not, so
+  injected hidden state is indistinguishable from a legitimate warm-start
+  blob and every later answer on that slot is computed over it. Give
+  import-only callers a separate key, or leave the route off on a
+  multi-holder deployment. See T10 in
+  [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md#risk-ranked-summary).
+- **`--kv-tiers vram+ram+ssd` writes KV to a world-readable file.** Demoted
+  blocks are written to the `--kv-ssd-path` file, created mode 0644
+  (`src/kvcache/tiered.zig:245,549`), while the conversation store is
+  deliberately owner-only (`src/durable_file.zig:152`). Any local user can
+  read prompt-derived hidden state from that file, and an unclean shutdown
+  leaves it in place (the delete is a teardown step, `src/kvcache/tiered.zig:344`).
+  Point the tier at a private path, or leave it off. See T11.
 - **Same-host multi-rank runs share fixed shm names.** `/agave_0to1` and
   `/agave_1to0` (`src/parallel/transport.zig:333-334`) are mode 0600, so any
   other process running as the same uid can read or inject tensors. See T6.

@@ -84,5 +84,14 @@ void main() {
     barrier();
     uint num_sg = (tg_size + gl_SubgroupSize - 1) / gl_SubgroupSize;
     if (tid < num_sg) sum = shared_sums[tid]; else sum = 0.0;
-    if (tid < gl_SubgroupSize) { sum = subgroupAdd(sum); if (tid == 0) y[row] = sum; }
+// Fold every subgroup partial, not just the first gl_SubgroupSize of
+// them: num_sg is up to 32 on an 8-lane subgroup, so 24 of the 32
+// partial sums were dropped and the result was far too small.
+for (uint stride = num_sg / 2; stride > 0u; stride >>= 1u) {
+    if (tid < stride) shared_sums[tid] += shared_sums[tid + stride];
+    barrier();
+}
+if ((num_sg & 1u) != 0u && tid == 0) shared_sums[0] += shared_sums[num_sg - 1];
+barrier();
+    if (tid == 0) y[row] = shared_sums[0];
 }
