@@ -123,10 +123,61 @@ afterAll(async () => {
 /** The transcript, as one line of text, for a copy assertion. */
 const transcriptText = (): string => present(document.querySelector('#chat'), 'chat log').textContent;
 
+/** A stub whose `init()` stays pending until the test releases it, so the
+ *  model's download can be observed against an unfinished WASM handshake. */
+class GatedEngine extends StubEngine {
+  public releaseInit: () => void = () => {};
+  public initialized = false;
+  public downloadStartedBeforeInit = false;
+
+  public override async init(): Promise<void> {
+    await new Promise<void>((resolve) => { this.releaseInit = resolve; });
+    this.initialized = true;
+    this.ready = true;
+  }
+
+  public override async fetchModel(): Promise<ArrayBuffer> {
+    this.downloadStartedBeforeInit = !this.initialized;
+    return super.fetchModel();
+  }
+}
+
+/** Mount the shell against whatever `globalThis.AgaveEngine` currently is. The
+ *  cache-busting query re-runs the module's top-level `createRoot`, so each
+ *  test owns its own tree instead of sharing the first one. */
+let mountSeq = 0;
+const mountShell = async (): Promise<void> => {
+  mountSeq += 1;
+  document.body.innerHTML = '<div id="root"></div>';
+  await import(`../../web/shell?mount=${String(mountSeq)}`);
+  await settle(30);
+};
+
+test('the model download overlaps the WASM handshake instead of queueing behind it', async () => {
+  engines.length = 0;
+  const engine = new GatedEngine();
+  Object.assign(globalThis, { AgaveEngine: function () { return engine; } });
+  await mountShell();
+
+  typeInto(present(document.querySelector<HTMLInputElement>('#model-url'), 'model url field'), MODEL_URL);
+  await settle();
+  clickButtonLabelled('Load model');
+  await settle();
+
+  /* init() has not settled, yet the fetch is already in flight: a load that
+     awaited init() up front could not have started the download yet. */
+  expect(engine.initialized).toBe(false);
+  expect(engine.downloadStartedBeforeInit).toBe(true);
+
+  engine.releaseInit();
+  expect(await transcriptHolds('Loaded: stub-model')).toBe(true);
+  /* The bytes land only once the module exists: loadModel rejects otherwise. */
+  expect(engine.hasModel).toBe(true);
+}, 30_000);
+
 test('a loaded model survives the re-render a prompt triggers', async () => {
   stubEngineHost();
-  await import('../../web/shell');
-  await settle(30);
+  await mountShell();
 
   /* Docs/brand/README.md ("Honest status") forbids presenting the WASM build
      as a working chat, so the header and the empty state say what this build

@@ -69,7 +69,7 @@ done
 #
 #   app.js     49753   (whole chat UI, Preact + Radix, inlined into the page)
 #   style.css   6737   (Tailwind, inlined into the page)
-#   shell.js   21792   (Preact shell, deferred script next to agave.wasm)
+#   shell.js   22287   (Preact shell, deferred script next to agave.wasm)
 #   style.css   6089   (Tailwind for the shell page)
 #   agave.js    2795   (hand-written SDK, unminified for embedders, so loose)
 declare -a size_breaches=()

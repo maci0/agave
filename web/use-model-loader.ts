@@ -77,14 +77,24 @@ type LoadState = {
 /** The engine handshake and the failure report, shared by both load paths. */
 const useEngineInit = (engine: AgaveEngine, state: LoadState, onReport: Report, focusPrompt: () => void) => {
   const hadModel = useRef(false);
-  return useCallback(async (load: () => Promise<void>, fromUrl: boolean) => {
+  /* `load` receives the in-flight `init()` promise instead of waiting on it up
+     front: fetching and compiling agave.wasm does not need the model bytes, so
+     the (often multi-hundred-MB) model download starts immediately and overlaps
+     the WASM round trip instead of queueing behind it. The caller awaits
+     `engineReady()` right before `loadModel`, which is the first step that
+     actually needs an instantiated module. */
+  return useCallback(async (load: (engineReady: () => Promise<void>) => Promise<void>, fromUrl: boolean) => {
     hadModel.current = engine.hasModel;
     state.setLoading(true);
     state.setReady(false);
     state.setStatus('Initializing engine…');
+    /* Mark the eager `init()` promise handled so a load that throws before it
+       reaches `engineReady` (a dead model URL, say) cannot leave an unhandled
+       rejection behind; the original promise still rejects for the await. */
+    const engineReady = engine.ready ? Promise.resolve() : engine.init();
+    engineReady.catch(() => undefined);
     try {
-      if (!engine.ready) { await engine.init(); }
-      await load();
+      await load(() => engineReady);
       onReport(engine.initMessage || 'Model loaded', 'info');
       state.setStatus(READY_HINT);
       state.setReady(true);
@@ -120,7 +130,7 @@ const useModelSources = (
     if (!target) { failUrl('Enter a model URL first'); return; }
     if (!isHttpUrl(target)) { failUrl('Enter a valid http(s) URL to a GGUF file'); return; }
     state.setUrlError(null);
-    void initAndLoad(async () => {
+    void initAndLoad(async (engineReady: () => Promise<void>) => {
       state.setStatus('Downloading model…');
       const modelBytes = await engine.fetchModel(target, {
         onProgress ({ received, total }) {
@@ -133,6 +143,7 @@ const useModelSources = (
         },
       });
       if (!isGgufBuffer(modelBytes)) { throw new Error('This file is not a valid GGUF model.'); }
+      await engineReady();
       await engine.loadModel(modelBytes);
       setModelName(nameFromUrl(target));
     }, true);
@@ -143,10 +154,11 @@ const useModelSources = (
       onReport('This is not a GGUF model file. Choose a file ending in .gguf.', 'error');
       return;
     }
-    void initAndLoad(async () => {
+    void initAndLoad(async (engineReady: () => Promise<void>) => {
       state.setStatus(`Reading ${file.name} (${fmtMb(file.size)} MB)…`);
       const modelBytes = await file.arrayBuffer();
       if (!isGgufBuffer(modelBytes)) { throw new Error('This file is not a valid GGUF model.'); }
+      await engineReady();
       await engine.loadModel(modelBytes);
       setModelName(file.name);
     }, false);

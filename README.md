@@ -293,7 +293,11 @@ page loads by relative URL.
 Forward-pass generation in WASM is still blocked by a Zig wasm32 codegen bug;
 load and tokenize work. `generate()` therefore resolves with the engine's
 tokenization report, not model output, and the browser shell in `web/` says so
-in its header and empty state rather than presenting itself as a working chat.
+in its header and empty state instead of presenting itself as a working chat.
+The shell loads a model by overlapping two independent fetches: `agave.wasm` and
+the GGUF bytes start together and the module is awaited only after the model
+bytes land, so a multi-hundred-MB download does not queue behind the WASM round
+trip.
 
 ## HTTP Server
 
