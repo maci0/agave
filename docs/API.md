@@ -770,6 +770,16 @@ the same id, `delete` is guarded by an existence check, and `POST /v1/kv_cache`
 re-imports the same prefix over the same state. A retry of those repeats no
 side effect.
 
+One case is deliberately outside the ledger: a `POST /v1/chat` whose decoded
+message starts with `/` is handled as a chat command and returns before the key
+is claimed. `/clear` and `/reset` wipe the KV cache and the conversation's
+messages, so a retry is not deduplicated and the command simply runs again.
+That is safe only because both are naturally idempotent -- clearing an already
+empty conversation leaves the same state. Any command added later that appends,
+pops, or otherwise steps the conversation must be moved behind
+`claimIdempotencyKey` before it ships; a command that mutates without a claim
+silently loses its retry protection.
+
 ---
 
 ## Response Headers

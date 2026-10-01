@@ -3957,6 +3957,15 @@ fn snapshotBeforeDeletion() void {
     conv_store.snapshotBeforeDelete(g_server.allocator, path);
 }
 
+/// Handle a `/`-prefixed chat message. Returns the reply HTML, or null when
+/// `cmd` is not a command and should go to the model as a message.
+///
+/// Deliberately outside the replay ledger: this runs before
+/// `claimIdempotencyKey`, so a retry is not deduplicated. Every command here is
+/// naturally idempotent (a reset of already-reset state), which is what makes
+/// that safe. A command that appends, pops, or otherwise steps the
+/// conversation must move behind `claimIdempotencyKey` first; otherwise it
+/// silently loses its retry protection.
 fn handleChatCommand(cmd: []const u8) ?[]const u8 {
     if (std.mem.eql(u8, cmd, "/clear")) {
         snapshotBeforeDeletion();
@@ -8898,6 +8907,94 @@ test "prefix memo: a vision request publishes nothing for the next text request"
     // A vision request must leave no memo behind, not the placeholder IDs.
     server.publishCachedPromptIds(&prompt, 2);
     try std.testing.expectEqual(@as(usize, 0), server.cached_prompt_ids.len);
+}
+
+test "re-run: a replayed conversation create changes no stored state" {
+    // `POST /v1/conversations action=new` allocates an id and persists another
+    // conversation, so it is the one route a retry used to run twice. The
+    // ledger unit tests cover claim/complete in isolation; this drives the
+    // exact sequence the route performs and asserts the property that matters:
+    // run it twice, and the store holds what one run leaves.
+    var path_buf: [256]u8 = undefined;
+    const store_path = std.fmt.bufPrint(&path_buf, "test_server_rerun_{d}.json", .{std.c.getpid()}) catch unreachable;
+    // `unlink` takes a C string and `bufPrint` does not NUL-terminate.
+    var nul_buf: [257]u8 = undefined;
+    @memcpy(nul_buf[0..store_path.len], store_path);
+    nul_buf[store_path.len] = 0;
+    defer _ = std.c.unlink(@ptrCast(&nul_buf));
+
+    var server = Server{
+        .model = undefined,
+        .tokenizer = undefined,
+        .chat_template = ChatTemplate.chatml,
+        .model_name = "test",
+        .backend_name = "cpu",
+        .allocator = std.testing.allocator,
+        .bos_token_id = 0,
+        .eog_ids = @splat(0),
+        .eog_len = 0,
+        .io = undefined,
+        .conv_store_path = store_path,
+        .idem = Idempotency.Ledger.init(std.testing.allocator),
+    };
+    defer server.idem.deinit();
+    defer {
+        for (server.conversations.items) |*conv| conv.freeMessages(server.allocator);
+        server.conversations.deinit(std.testing.allocator);
+    }
+
+    // One handler thread, one logical operation: the client id the route reads
+    // through `captureClientRequestId`, set the way that function sets it.
+    log_client_rid_len = http.sanitizeClientRequestId("rerun-1", &log_client_rid);
+    defer log_client_rid_len = 0;
+
+    // Owned copy of what the route would put on the wire, so the caller can
+    // compare the replay against it after the stack buffer dies.
+    const run_new = struct {
+        fn f(s: *Server, allocator: Allocator) ![]u8 {
+            const claim = s.claimIdempotencyKey("/v1/conversations");
+            if (claim != .fresh) {
+                defer claim.replay.deinit(s.allocator);
+                return try allocator.dupe(u8, claim.replay.body);
+            }
+            const new_id: u32 = blk: {
+                s.mutex.lockUncancelable(s.io);
+                defer s.mutex.unlock(s.io);
+                break :blk if (s.createConv()) |nc| nc.id else 0;
+            };
+            try std.testing.expect(new_id != 0);
+            s.persistConversations();
+            var nbuf: [clear_response_buf_size]u8 = undefined;
+            const body = std.fmt.bufPrint(&nbuf, "{{\"ok\":true,\"id\":{d}}}", .{new_id}) catch unreachable;
+            s.completeIdempotencyKey("200 OK", "application/json", body);
+            return try allocator.dupe(u8, body);
+        }
+    }.f;
+
+    const first = try run_new(&server, std.testing.allocator);
+    defer std.testing.allocator.free(first);
+    try std.testing.expectEqualStrings("{\"ok\":true,\"id\":1}", first);
+
+    // Read the store back rather than trusting the in-memory list: the property
+    // is about what a restart would see.
+    var after_first = try conv_store.load(std.testing.allocator, store_path);
+    defer after_first.deinit();
+    try std.testing.expectEqual(@as(usize, 1), after_first.conversations.len);
+
+    // The retry carries the same X-Request-Id. The ledger must replay the
+    // recorded body instead of allocating a second conversation.
+    const second = try run_new(&server, std.testing.allocator);
+    defer std.testing.allocator.free(second);
+    try std.testing.expectEqualStrings(first, second);
+
+    var after_second = try conv_store.load(std.testing.allocator, store_path);
+    defer after_second.deinit();
+
+    // One run's state, not two: same active id, same next id, same row count.
+    try std.testing.expectEqual(after_first.active_id, after_second.active_id);
+    try std.testing.expectEqual(after_first.next_id, after_second.next_id);
+    try std.testing.expectEqual(after_first.conversations.len, after_second.conversations.len);
+    try std.testing.expectEqual(@as(u32, 2), after_second.next_id);
 }
 
 test "fuzz: all server functions" {
