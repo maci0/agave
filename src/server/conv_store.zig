@@ -16,6 +16,13 @@
 //! loaded. Both sidecars are the only copy of state the server does not hold,
 //! so a second quarantine or overflow takes the next free `.corrupt.N` /
 //! `.overflow.N` name instead of overwriting the first.
+//!
+//! Deleting a conversation or clearing the active one is the other way state
+//! leaves the live path: the delete persists a store without those messages, so
+//! the live file alone stops being a recovery path for them and only a backup
+//! taken earlier still holds them. Every destructive mutation therefore copies
+//! the store aside first, at `{path}.deleted[.N]` (`snapshotBeforeDelete`),
+//! which the backup tier carries like the other sidecars.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -245,6 +252,54 @@ fn preserveOverflow(path: []const u8, data: []const u8) void {
         return;
     };
     std.log.warn("conversation store: {s} exceeds the load caps; the full store is kept at {s} until the next save rewrites the live path", .{ path, dest });
+}
+
+/// Preserve the live store before a destructive mutation: deleting one
+/// conversation (`POST /v1/conversations` with `action=delete`), or clearing
+/// the active one (`/clear`, `/reset`). The mutation persists a store that no
+/// longer holds those messages, so every in-process copy is wiped by it and the
+/// next scheduled backup is the only thing that still has them. This keeps the
+/// store as it is *now* beside the live path, where `backup` copies it with
+/// the other sidecars and the runbook already knows how to install one:
+/// `restore` takes any file that verifies, not only a dated copy.
+///
+/// Best-effort and never fatal: the deletion happens whether or not the
+/// snapshot could be written. A missing live store has nothing to preserve, and
+/// a failure is reported so an operator knows the recovery window is the
+/// backup tier alone.
+///
+/// Same slot rule as a quarantine or an overflow (`freeSidecarPath`): each
+/// deletion holds different history, so a second one takes `{path}.deleted.1`
+/// instead of overwriting the first, and a full set is reported rather than
+/// dropping one of them.
+pub fn snapshotBeforeDelete(allocator: std.mem.Allocator, path: []const u8) void {
+    const data = readFile(allocator, path) catch |err| switch (err) {
+        // No store yet: there is nothing to preserve.
+        error.FileNotFound => return,
+        // Over the load cap: the server would not read it back anyway, and a
+        // copy the server refuses to load is not a recovery path. The bytes
+        // past the cap are already preserved at `{path}.overflow`.
+        error.StoreTooLarge => {
+            std.log.warn("conversation store: {s} is over the load cap; this deletion is recoverable only from the backup tier", .{path});
+            return;
+        },
+        else => {
+            std.log.err("conversation store: could not read {s} to snapshot before deleting ({}); this deletion is recoverable only from the backup tier", .{ path, err });
+            return;
+        },
+    };
+    defer allocator.free(data);
+
+    var dest_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const dest = freeSidecarPath(&dest_buf, path, ".deleted") orelse {
+        std.log.err("conversation store: no free {s}.deleted[.n] name is left ({d} kept); this deletion is recoverable only from the backup tier", .{ path, max_sidecar_copies });
+        return;
+    };
+    durable.replacePrivate(dest, data) catch |err| {
+        std.log.err("conversation store: failed to preserve {s} ({}); this deletion is recoverable only from the backup tier", .{ dest, err });
+        return;
+    };
+    std.log.warn("conversation store: kept the store as it was before the deletion at {s}; delete it once the deletion is confirmed", .{dest});
 }
 
 /// Narrow a decoded JSON integer to the u32 the store keeps ids in.
@@ -834,6 +889,83 @@ test "sidecar slots are bounded and never overwritten" {
         const name = std.fmt.bufPrint(&name_buf, "{s}.corrupt{s}", .{ path, index }) catch unreachable;
         deleteTestPath(name);
     }
+}
+
+test "snapshotBeforeDelete keeps the store a deletion is about to destroy" {
+    const allocator = std.testing.allocator;
+    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const path = testPath(&path_buf, "deleted.json");
+    var first_buf: [std.fs.max_path_bytes]u8 = undefined;
+    var second_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const first_copy = std.fmt.bufPrint(&first_buf, "{s}.deleted", .{path}) catch unreachable;
+    const second_copy = std.fmt.bufPrint(&second_buf, "{s}.deleted.1", .{path}) catch unreachable;
+    defer deleteTestPath(path);
+    defer deleteTestPath(first_copy);
+    defer deleteTestPath(second_copy);
+
+    const raw = "{\"version\":1,\"active_id\":1,\"next_id\":2,\"conversations\":[{\"id\":1,\"title\":\"doomed\",\"messages\":[{\"role\":\"user\",\"content\":\"keep me\"}]}]}";
+    try durable.replacePrivate(path, raw);
+
+    snapshotBeforeDelete(allocator, path);
+    // Owner-only, like every other copy of user text.
+    try std.testing.expectEqual(@as(?u32, 0o600), testPathMode(first_copy));
+    const kept = try readFile(allocator, first_copy);
+    defer allocator.free(kept);
+    try std.testing.expectEqualStrings(raw, kept);
+
+    // A second deletion holds different history, so it takes the next slot
+    // rather than replacing the only copy of the first.
+    try durable.replacePrivate(path, "{\"version\":1,\"active_id\":2,\"next_id\":3,\"conversations\":[]}");
+    snapshotBeforeDelete(allocator, path);
+    const kept_again = try readFile(allocator, first_copy);
+    defer allocator.free(kept_again);
+    try std.testing.expectEqualStrings(raw, kept_again);
+    const second = try readFile(allocator, second_copy);
+    defer allocator.free(second);
+    try std.testing.expectEqualStrings("{\"version\":1,\"active_id\":2,\"next_id\":3,\"conversations\":[]}", second);
+}
+
+test "snapshotBeforeDelete on a missing store writes nothing and does not fail" {
+    const allocator = std.testing.allocator;
+    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const path = testPath(&path_buf, "nosnapshot.json");
+    var copy_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const copy = std.fmt.bufPrint(&copy_buf, "{s}.deleted", .{path}) catch unreachable;
+    defer deleteTestPath(copy);
+
+    // Nothing to preserve, so this is a no-op rather than a failure the
+    // delete path has to handle.
+    snapshotBeforeDelete(allocator, path);
+    try std.testing.expectEqual(@as(?u32, null), testPathMode(copy));
+}
+
+test "a deleted conversation survives in the pre-deletion snapshot" {
+    // The delete path end to end: snapshot, then persist a store without the
+    // conversation. The sidecar is the only remaining copy of those messages
+    // until the next backup, so it has to be a loadable store after the
+    // mutation, not a copy of one.
+    const allocator = std.testing.allocator;
+    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const path = testPath(&path_buf, "afterdelete.json");
+    var copy_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const copy = std.fmt.bufPrint(&copy_buf, "{s}.deleted", .{path}) catch unreachable;
+    defer deleteTestPath(path);
+    defer deleteTestPath(copy);
+
+    try save(allocator, path, 1, 2, &.{
+        .{ .id = 1, .title = "gone", .messages = &.{.{ .role = .user, .content = "why" }} },
+    });
+    snapshotBeforeDelete(allocator, path);
+    try save(allocator, path, 1, 2, &.{});
+
+    var after = try load(allocator, path);
+    defer after.deinit();
+    try std.testing.expectEqual(@as(usize, 0), after.conversations.len);
+
+    var snap = try load(allocator, copy);
+    defer snap.deinit();
+    try std.testing.expectEqual(@as(usize, 1), snap.conversations.len);
+    try std.testing.expectEqualStrings("why", snap.conversations[0].messages[0].content);
 }
 
 test "load quarantines a store whose ids overflow u32" {

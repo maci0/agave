@@ -3467,6 +3467,13 @@ fn handleRequest(stream: http.TcpStream, req: http.HttpRequest) void {
             }
         } else if (std.mem.eql(u8, action, "delete")) {
             const id = requireFormConversationId(stream, body, method, path, request_start) orelse return;
+            // The conversation is about to leave the only store that holds it:
+            // the delete wipes the in-memory copy and persists a store without
+            // it, so the live file alone stops being a recovery path and only
+            // a backup taken earlier still has those messages. Keep the store
+            // as it is now beside the live path; `backup` copies it with the
+            // other sidecars and `restore` installs it.
+            snapshotBeforeDeletion();
             const delete_result: ?bool = blk: {
                 g_server.mutex.lockUncancelable(g_server.io);
                 defer g_server.mutex.unlock(g_server.io);
@@ -3940,8 +3947,19 @@ fn handleRequest(stream: http.TcpStream, req: http.HttpRequest) void {
 /// Thread-local buffer for `/model` command response formatting.
 threadlocal var cmd_buf: [cmd_buf_size]u8 = undefined;
 
+/// Copy the live store aside before a destructive mutation drops messages from
+/// it: `action=delete`, `/clear`, and `/reset`. The mutation persists a store
+/// without those messages, so this is the last chance to keep them without
+/// waiting for the next scheduled backup. Best-effort and never fatal; see
+/// `conv_store.snapshotBeforeDelete`, which reports its own failures.
+fn snapshotBeforeDeletion() void {
+    const path = g_server.conv_store_path orelse return;
+    conv_store.snapshotBeforeDelete(g_server.allocator, path);
+}
+
 fn handleChatCommand(cmd: []const u8) ?[]const u8 {
     if (std.mem.eql(u8, cmd, "/clear")) {
+        snapshotBeforeDeletion();
         {
             g_server.mutex.lockUncancelable(g_server.io);
             defer g_server.mutex.unlock(g_server.io);
@@ -3960,6 +3978,7 @@ fn handleChatCommand(cmd: []const u8) ?[]const u8 {
         return "<div class=\"msg assistant\" data-tokens=\"0\" data-time=\"0\" data-tps=\"0\">Conversation cleared.</div>";
     }
     if (std.mem.eql(u8, cmd, "/reset")) {
+        snapshotBeforeDeletion();
         {
             g_server.mutex.lockUncancelable(g_server.io);
             defer g_server.mutex.unlock(g_server.io);
@@ -9512,4 +9531,70 @@ test "escapedToolCall substitutes {} for arguments that are not a complete JSON 
     const wrapped = escapedToolCall(allocator, "{\"name\": \"a\", \"arguments\": \"{\\\"city\\\": \\\"Paris\\\"}\"}") orelse return error.TestUnexpectedResult;
     defer wrapped.deinit(allocator);
     try std.testing.expectEqualStrings("{\\\"city\\\": \\\"Paris\\\"}", wrapped.args);
+}
+
+test "deleting a conversation keeps the store as it was before the delete" {
+    // The delete path end to end: snapshot, then persist a store without the
+    // conversation. Once the save lands the live file is no longer a recovery
+    // path for those messages, so the pre-deletion sidecar is the only copy
+    // until the next backup. Ordering guard: snapshotting after the save would
+    // preserve the already-emptied store, and this test would see zero.
+    const allocator = std.testing.allocator;
+    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const path = std.fmt.bufPrint(&path_buf, "test_server_delpredelete_{d}.json", .{std.c.getpid()}) catch unreachable;
+    var snap_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const snap = std.fmt.bufPrint(&snap_buf, "{s}.deleted", .{path}) catch unreachable;
+    var cpath: [std.fs.max_path_bytes:0]u8 = undefined;
+    var csnap: [std.fs.max_path_bytes:0]u8 = undefined;
+    defer {
+        @memcpy(cpath[0..path.len], path);
+        cpath[path.len] = 0;
+        _ = std.c.unlink(@ptrCast(&cpath));
+        @memcpy(csnap[0..snap.len], snap);
+        csnap[snap.len] = 0;
+        _ = std.c.unlink(@ptrCast(&csnap));
+    }
+
+    var srv: Server = undefined;
+    srv.allocator = allocator;
+    srv.conversations = .empty;
+    srv.active_id = 0;
+    srv.next_id = 1;
+    srv.conv_store_path = path;
+    srv.metrics = .{};
+    g_server = &srv;
+    defer g_server = undefined;
+    defer srv.conversations.deinit(allocator);
+
+    try conv_store.save(allocator, path, 0, 2, &.{
+        .{ .id = 1, .title = "doomed", .messages = &.{.{ .role = .user, .content = "why" }} },
+    });
+
+    // What the delete branch does, in the same order: snapshot, drop the
+    // conversation, persist what is left.
+    snapshotBeforeDeletion();
+    var loaded = try conv_store.load(allocator, path);
+    defer loaded.deinit();
+    for (loaded.conversations) |lc| {
+        var conv: Conversation = .{ .id = lc.id };
+        conv.setTitle(lc.title);
+        for (lc.messages) |m| {
+            try conv.messages.append(allocator, .{
+                .role = m.role,
+                .content = try allocator.dupe(u8, m.content),
+            });
+        }
+        try srv.conversations.append(allocator, conv);
+    }
+    srv.deleteConv(1);
+    srv.persistConversationsLocked();
+
+    var after = try conv_store.load(allocator, path);
+    defer after.deinit();
+    try std.testing.expectEqual(@as(usize, 0), after.conversations.len);
+
+    var kept = try conv_store.load(allocator, snap);
+    defer kept.deinit();
+    try std.testing.expectEqual(@as(usize, 1), kept.conversations.len);
+    try std.testing.expectEqualStrings("why", kept.conversations[0].messages[0].content);
 }

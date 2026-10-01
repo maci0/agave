@@ -16,6 +16,7 @@ else `$HOME/.cache/agave/`. In the compose image that is
 | Conversation store | `<cache>/agave/conversations.json` | no | Web-UI conversations gone for good |
 | Quarantined store | `<cache>/agave/conversations.json.corrupt` | no | Only remaining copy of a store the server could not parse |
 | Overflow store | `<cache>/agave/conversations.json.overflow` | no | The part of a store past the load caps, which the next save overwrites |
+| Pre-deletion store | `<cache>/agave/conversations.json.deleted` | no | The store as it stood just before a conversation was deleted or cleared, which the delete then overwrote |
 | Hub model blobs | `<cache>/huggingface/` | yes, `agave pull` re-downloads | Bandwidth and time only |
 | Hub model symlinks | `<cache>/agave/models/{org}/{repo}` | yes, `agave pull` recreates them | A convenience path, nothing else |
 | Vulkan pipeline cache | `<cache>/agave/vk_pipeline_cache.bin` | yes, rebuilt on first run | One slower startup |
@@ -24,7 +25,7 @@ else `$HOME/.cache/agave/`. In the compose image that is
 | Sampling settings and stats toggle | browser `localStorage`, keys `agave_*` | yes, re-set in the UI | Defaults, so losing it costs nothing. The backup script cannot reach it: it is per-browser state on the client, not a file the server writes |
 | System prompt | browser `sessionStorage`, key `agave_system_prompt` | only by retyping it | Gone when the tab closes. Scoped to the tab on purpose so prompt text does not outlive it, so the durability answer is "do not rely on it" rather than "back it up" |
 
-Only the first three cannot be rebuilt. Everything else is a cache with a
+Only the first four cannot be rebuilt. Everything else is a cache with a
 rebuild path, so this document is about the conversation store.
 
 Two paths in that table sit outside `$XDG_CACHE_HOME/agave/`, which is why
@@ -55,6 +56,20 @@ Other verified properties, so a future pass leaves them alone:
   rather than replacing the first: each holds a different store, and each is the
   only copy of it. Up to 8 slots per kind are kept, and a full set is reported
   with persistence disabled rather than overwriting one of them.
+- Deleting a conversation (`POST /v1/conversations` with `action=delete`), or
+  clearing the active one (`/clear`, `/reset`), is the other way state leaves
+  the live path. The mutation persists a store without those messages, so the
+  live file stops being a recovery path for them in the same request that erases
+  them, and only a backup taken before that moment still holds them. Every one
+  of those paths copies the store aside first, at `{path}.deleted`
+  (`snapshotBeforeDelete`, `src/server/conv_store.zig`), which `backup` then
+  carries with the other sidecars. The snapshot is best-effort and never blocks
+  the delete: a failure is logged and the deletion proceeds, so a log line
+  saying the recovery window is the backup tier alone is the signal that the
+  copy is missing. It holds the store as it was *before* the delete, so
+  restoring it brings back the erased conversation along with anything else
+  that changed since; read it before installing it when that difference
+  matters.
 - Any load failure other than corruption disables persistence for that run
   instead of overwriting the file with an empty list (`src/server/server.zig`,
   `loadConversationsLocked`). A store whose envelope version this build does
@@ -102,7 +117,8 @@ Message content is user data, so every copy of the store is owner-only:
 | `docker compose down -v` | the whole store | n/a | Deletes the volume |
 | Malicious or accidental deletion | last backup taken | same | Only if backups were taken |
 | Logical corruption (a bad build writing a wrong but well-formed store) | the interval between backups | seconds to restore | `verify` checks structure, not meaning; see below |
-| Mass deletion through the API, then the usual retention window | the interval between backups | seconds to restore the newest surviving copy | The live store looks like one the server never had, so the dated copies of the deleted conversations are the only evidence. They rotate on `AGAVE_KEEP`; the rotation log names what went |
+| Mass deletion through the API, then the usual retention window | the interval between backups | seconds to restore | The live store looks like one the server never had, so the dated copies of the deleted conversations are the only evidence. They rotate on `AGAVE_KEEP`; the rotation log names what went |
+| A single conversation deleted or cleared | seconds | seconds to restore | Every such request writes `{store}.deleted` beside the live store before overwriting it, so the deleted messages survive the request itself. Restoring that copy brings back everything that changed since it was taken too |
 | Bad deploy | none expected | n/a | The on-disk envelope is version 1 and validated on load; an unreadable version is left in place, not silently reinterpreted and not quarantined, so a downgrade keeps the newer build's store for the build that wrote it |
 
 RPO is "last server save", not "last token": the server persists on conversation
@@ -145,15 +161,15 @@ directory are not interchangeable:
 | Kind | Name | Retained by | Default |
 |---|---|---|---|
 | Dated backup | `conversations-<stamp>.json` | `AGAVE_KEEP` | 14 |
-| Quarantined store, overflow store, pre-restore snapshot | `conversations-corrupt-<stamp>.json`, `conversations-overflow-<stamp>.json`, `conversations-prerestore-<stamp>.json` (numbered sidecars end in `-<slot>.json`) | `AGAVE_KEEP_SNAPSHOT` | 5 |
+| Quarantined store, overflow store, pre-deletion store, pre-restore snapshot | `conversations-corrupt-<stamp>.json`, `conversations-overflow-<stamp>.json`, `conversations-deleted-<stamp>.json`, `conversations-prerestore-<stamp>.json` (numbered sidecars end in `-<slot>.json`) | `AGAVE_KEEP_SNAPSHOT` | 5 |
 
 Rotation of dated backups never touches the snapshot tier: a quarantined store
-is the only remaining copy of a file the server could not parse, an overflow
-store is the only copy of the part a capped load dropped, and a pre-restore
-snapshot is the only undo for a restore installed by mistake. The snapshot
-tier is a single count, so set `AGAVE_KEEP_SNAPSHOT` above the number of
-snapshot kinds you expect to keep at once (three, if quarantined and overflow
-stores are both present).
+is a file the server could not parse, an overflow store is the part a capped load
+dropped, a pre-deletion store is the only copy of a conversation the API erased,
+and a pre-restore snapshot is the only undo for a restore installed by mistake.
+The snapshot tier is a single count, so set `AGAVE_KEEP_SNAPSHOT` above the
+number of snapshot kinds you expect to keep at once (four, if all four kinds are
+present at the same time).
 
 Pruning matches the exact names above, so it never deletes a file this script
 did not create.
@@ -167,8 +183,9 @@ live path is indistinguishable from one the server never had: without the
 record, the dated copies of deleted conversations are rotated away on schedule
 and the loss becomes permanent with nothing left naming what was there. The
 snapshot tier is recorded for the same reason, and it matters more there: a
-dated copy going is one point in time fewer, while a quarantined, overflow, or
-pre-restore copy going is the last copy of state the live path does not hold.
+dated copy going is one point in time fewer, while a quarantined, overflow,
+pre-deletion, or pre-restore copy going is the last copy of state the live path
+does not hold.
 The record carries no conversation text, is written outside both tiers, and is
 never itself rotated. `check` reads it, and a tier holding the log with no
 dated backup in it was emptied by something other than this script, which it
@@ -235,9 +252,10 @@ because the tier is being checked on a recovery host, has no filesystem to
 compare against and is not a failure.
 
 `check` also reads the snapshot tier instead of only counting it, and names
-each quarantined, overflow, or pre-restore copy that does not verify, so an
-alert can key on `WARNING` or on the `N of them not verifying` count. It does
-not fail the run for one: like `backup`, it keeps the file, because that copy
+each quarantined, overflow, pre-deletion, or pre-restore copy that does not
+verify, so an alert can key on `WARNING` or on the `N of them not verifying`
+count. It does not fail the run for one: like `backup`, it keeps the file,
+because that copy
 is the only one there is and reporting a green check over an unreadable one is
 the failure this is guarding against, while failing would only hide it.
 
@@ -311,6 +329,22 @@ disabled, so the operator had traded a working store for one nothing reads. A
 quoted value (`"version":"1"`) is rejected too, since the server never reads it
 as a version.
 
+`restore` takes any file that verifies, not only a dated copy, so the
+pre-deletion snapshot is an ordinary restore source when a conversation has to
+come back:
+
+```bash
+scripts/conv-store-backup.sh verify ~/.agave-backups/conversations-deleted-20260927T120000Z.json
+scripts/conv-store-backup.sh restore ~/.agave-backups/conversations-deleted-20260927T120000Z.json
+```
+
+That copy is the whole store as it was at the moment of the delete, so it also
+reinstates every conversation added or deleted since, and the pre-restore
+snapshot `restore` writes is the undo for putting the current store back. Read
+it first when the difference matters. `{store}.deleted` beside the live path is
+the same file before the backup tier has run, and `.deleted.N` holds the older
+ones.
+
 ## Verify the restore path
 
 A backup that has never been restored is a hypothesis. This repo runs the
@@ -327,6 +361,7 @@ zig build conv-store-backup-test     # backup, verify, reject-truncated,
                                     # restore, pre-restore snapshot,
                                     # retention, retention scope,
                                     # snapshot rotation record,
+                                    # sidecars, pre-deletion sidecars,
                                     # same-filesystem refusal,
                                     # check fresh/missing/stale,
                                     # check rejects a shared filesystem,

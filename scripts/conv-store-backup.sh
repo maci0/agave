@@ -33,7 +33,8 @@
 # Environment:
 #   AGAVE_BACKUP_DIR   backup destination (default: $HOME/.agave-backups)
 #   AGAVE_KEEP         dated backups to keep, oldest pruned first (default: 14)
-#   AGAVE_KEEP_SNAPSHOT quarantined-store and pre-restore copies to keep
+#   AGAVE_KEEP_SNAPSHOT quarantined, overflow, pre-deletion, and pre-restore
+#                      copies to keep
 #                      (default: 5); ordinary rotation never touches them
 #   AGAVE_MAX_AGE_HOURS newest backup older than this fails `check` (default: 26)
 #   AGAVE_ALLOW_SAME_FS=1 permit a backup dir on the store's own filesystem
@@ -132,16 +133,16 @@ stamp() {
 }
 
 # The file kinds have separate retention because they are not
-# interchangeable: a dated backup is one point in time, while the quarantined
-# and overflow stores and a pre-restore snapshot are the only copies of
-# something the server could not parse, could not keep whole, or an operator
-# replaced by mistake. Rotation of ordinary backups must never decide their
-# fate.
+# interchangeable: a dated backup is one point in time, while the quarantined,
+# overflow, and pre-deletion stores and a pre-restore snapshot are the only
+# copies of something the server could not parse, could not keep whole, was
+# about to erase, or an operator replaced by mistake. Rotation of ordinary
+# backups must never decide their fate.
 # EREs matched against the basename by bash's own regex engine, not find(1):
 # -regextype and -printf are GNU extensions that BSD/macOS find rejects, and
 # the runbook schedules this script with cron on any host, macOS included.
 readonly DATED_RE='^conversations-[0-9]{8}T[0-9]{6}Z(-[0-9]+)?\.json$'
-readonly SNAPSHOT_RE='^conversations-(corrupt|overflow|prerestore)-[0-9]{8}T[0-9]{6}Z(-[0-9]+)?\.json$'
+readonly SNAPSHOT_RE='^conversations-(corrupt|overflow|deleted|prerestore)-[0-9]{8}T[0-9]{6}Z(-[0-9]+)?\.json$'
 
 # Undated rotation record. Matches no tier name, so ordinary rotation and
 # retention never reach it, and it is not a copy of any conversation.
@@ -397,14 +398,15 @@ do_backup() {
     copy_atomic "$live" "$dest"
     verify_store "$dest"
     # The sidecars are the only remaining trace of state the server did not
-    # keep at the live path: a store it could not parse, and a store it
-    # loaded only in part. Losing either loses recoverable data. The server
-    # numbers a second sidecar of the same kind (`.corrupt.1`, `.overflow.1`)
-    # instead of overwriting the first, so every slot is copied. The name is
-    # stamped once: stamping per use straddles a second boundary and verifies
-    # a file that was never written.
+    # keep at the live path: a store it could not parse, a store it loaded only
+    # in part, and the store as it stood just before a conversation was deleted
+    # or cleared. Losing any of them loses recoverable data. The server
+    # numbers a second sidecar of the same kind (`.corrupt.1`, `.overflow.1`,
+    # `.deleted.1`) instead of overwriting the first, so every slot is copied.
+    # The name is stamped once: stamping per use straddles a second boundary
+    # and verifies a file that was never written.
     local suffix sidecar sidecar_copy index
-    for suffix in corrupt overflow; do
+    for suffix in corrupt overflow deleted; do
         for sidecar in "$live.$suffix" "$live.$suffix".[0-9]*; do
             [[ -f "$sidecar" ]] || continue
             index="${sidecar##*.}"
@@ -476,7 +478,8 @@ prune_dated() {
 # Rotate a snapshot tier, recording what went before it goes. This tier holds
 # state the live path does not: a quarantined store is the only remaining copy
 # of a file the server could not parse, an overflow store the only copy of the
-# part a capped load dropped, and a pre-restore snapshot the only undo for a
+# part a capped load dropped, a pre-deletion store the only copy of a
+# conversation the API erased, and a pre-restore snapshot the only undo for a
 # restore installed by mistake. prune_dated records for exactly this reason, and
 # a deletion here is strictly worse than one there: a dated copy going is one
 # point in time fewer, while one of these going is the last copy of something,
@@ -587,8 +590,9 @@ do_check() {
     verify_store "$newest"
     # The snapshot tier holds state the live path does not: a quarantined store
     # is the only copy of a file the server could not parse, an overflow store
-    # the only copy of the part a capped load dropped, and a pre-restore
-    # snapshot the only undo for a restore installed by mistake. Counting them
+    # the only copy of the part a capped load dropped, a pre-deletion store the
+    # only copy of a conversation the API erased, and a pre-restore snapshot the
+    # only undo for a restore installed by mistake. Counting them
     # without reading them makes `check` report a recovery path for a tier
     # whose only remaining copy of something is unreadable, which is the same
     # failure `check` exists to catch for the dated tier. Each one that fails
@@ -608,7 +612,7 @@ do_check() {
         fi
     done < <(list_backups "$dir" "$SNAPSHOT_RE")
     snapshots="$(list_backups "$dir" "$SNAPSHOT_RE" | wc -l)"
-    note "newest backup $newest is $(( age_seconds / HOUR_SECONDS ))h old; $(( age_seconds % HOUR_SECONDS / 60 ))m; $snapshots quarantined/overflow/pre-restore copies on file, $snap_bad of them not verifying"
+    note "newest backup $newest is $(( age_seconds / HOUR_SECONDS ))h old; $(( age_seconds % HOUR_SECONDS / 60 ))m; $snapshots quarantined/overflow/pre-deletion/pre-restore copies on file, $snap_bad of them not verifying"
 }
 
 do_self_test() {
@@ -781,17 +785,32 @@ do_self_test() {
     # of a file the server could not parse, so its tier rotates on its own
     # retention rather than on the dated-backup count. The overflow sidecar
     # holds a store the server loaded only in part, and the next save
-    # destroys the rest, so it travels the same way.
+    # destroys the rest, so it travels the same way. The pre-deletion sidecar
+    # holds the store as it stood before the API erased a conversation: the
+    # live path is rewritten without those messages at once, so until this
+    # copy reaches the tier the next scheduled backup is the only other
+    # evidence they ever existed.
     cp -- "$store" "$tmp/cache/agave/conversations.json.corrupt"
     cp -- "$store" "$tmp/cache/agave/conversations.json.overflow"
+    cp -- "$store" "$tmp/cache/agave/conversations.json.deleted"
     ( KEEP_SNAPSHOT=2; AGAVE_BACKUP_DIR="$tmp/backups" XDG_CACHE_HOME="$tmp/cache" do_backup ) >/dev/null
-    rm -f -- "$tmp/cache/agave/conversations.json.corrupt" "$tmp/cache/agave/conversations.json.overflow"
+    rm -f -- "$tmp/cache/agave/conversations.json.corrupt" "$tmp/cache/agave/conversations.json.overflow" "$tmp/cache/agave/conversations.json.deleted"
     [[ "$(find "$tmp/backups" -name 'conversations-corrupt-*.json' | wc -l)" -ge 1 ]] || {
         echo "conv-store-backup: self-test FAILED: dated-backup rotation deleted the quarantined-store copy" >&2
         status=1
     }
     [[ "$(find "$tmp/backups" -name 'conversations-overflow-*.json' | wc -l)" -ge 1 ]] || {
         echo "conv-store-backup: self-test FAILED: the overflow sidecar was not backed up" >&2
+        status=1
+    }
+    # The numbered slot too: the server keeps the first deletion at
+    # `.deleted` and the next at `.deleted.1`, and each holds different
+    # history, so both have to travel.
+    cp -- "$store" "$tmp/cache/agave/conversations.json.deleted.1"
+    AGAVE_BACKUP_DIR="$tmp/backups" XDG_CACHE_HOME="$tmp/cache" do_backup >/dev/null
+    rm -f -- "$tmp/cache/agave/conversations.json.deleted.1"
+    [[ "$(find "$tmp/backups" -name 'conversations-deleted-*.json' | wc -l)" -ge 2 ]] || {
+        echo "conv-store-backup: self-test FAILED: the pre-deletion sidecars were not both backed up" >&2
         status=1
     }
 
@@ -995,7 +1014,7 @@ do_self_test() {
     fi
 
     if (( status == 0 )); then
-        note "self-test passed: backup, verify, reject-truncated, reject-other-version, reject-version-quoted-in-content, reject-quoted-version, reject-missing-version, format-version-agrees, load-cap-agrees, reject-oversize, braces-in-content, restore, pre-restore snapshot, retention, snapshot-tier-retention, snapshot-rotation-record, sidecars, retention-scope, reject-same-filesystem, check-fresh, check-missing, check-stale, check-rejects-shared-filesystem, check-without-a-store, reject-bad-retention, store-override, whole-help"
+        note "self-test passed: backup, verify, reject-truncated, reject-other-version, reject-version-quoted-in-content, reject-quoted-version, reject-missing-version, format-version-agrees, load-cap-agrees, reject-oversize, braces-in-content, restore, pre-restore snapshot, retention, snapshot-tier-retention, snapshot-rotation-record, sidecars, pre-deletion-sidecars, retention-scope, reject-same-filesystem, check-fresh, check-missing, check-stale, check-rejects-shared-filesystem, check-without-a-store, reject-bad-retention, store-override, whole-help"
     fi
     return "$status"
 }

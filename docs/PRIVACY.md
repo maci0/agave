@@ -66,7 +66,7 @@ past a cap is preserved in `<path>.overflow` rather than silently dropped
   message. In the REPL this also drops the line history that would otherwise
   recall the same prompts.
 - Erase everything: stop the server and delete the store file and its
-  `.corrupt` and `.overflow` sidecars.
+  `.corrupt`, `.overflow`, and `.deleted` sidecars.
 - Keep nothing on disk in the first place: start the server with
   `--no-conv-store`. Conversations then live in memory and are gone on exit.
 - Clear the browser side: the system prompt disappears with the tab, and the
@@ -76,6 +76,16 @@ Deletion wipes the freed buffers rather than leaving prompt text in the
 allocator freelist, in memory (`src/readline.zig:59,76`,
 `src/server/server.zig:535,549`) and on disk (the next store save rewrites the
 file without the deleted conversations).
+
+A deleted conversation is kept on disk for a while, deliberately: deleting one
+(`action=delete`) or clearing the active one (`/clear`, `/reset`) copies the
+store to `<store>.deleted` first, so an accidental deletion can be undone
+instead of being one scheduled backup away from gone. That copy holds the whole
+store as it was at that moment, so restoring it brings back everything that
+changed since as well. It is removed when the user erases everything, or when
+the backup tier rotates it out (`AGAVE_KEEP_SNAPSHOT`, `docs/DURABILITY.md`).
+Someone who needs a delete to take effect on every copy at once removes those
+files too, the same as the live store.
 
 ## Third parties and sub-processors
 
