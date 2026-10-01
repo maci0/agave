@@ -34,6 +34,7 @@ See [Versioning & Releases](CONTRIBUTING.md#versioning--releases).
 | `HF_TOKEN` | Hugging Face token for private model downloads (`agave pull`). Empty/whitespace is unset. |
 | `HF_ENDPOINT` | Hugging Face API base URL for `agave pull` (default `https://huggingface.co`). Must start with `http://` or `https://`; a trailing `/` is trimmed. Use it for a mirror or an air-gapped gateway. Empty/whitespace is unset. |
 | `HF_HOME` | Hugging Face cache directory (default: `~/.cache/huggingface`) |
+| `GITHUB_TOKEN` | GitHub token used by `agave update` to avoid API rate limits when checking for or installing a release. Empty/whitespace is unset; `update` runs unauthenticated without it. |
 | `XDG_CACHE_HOME` | Base cache directory when `HF_HOME` is not set. Also the conversation store location (`$XDG_CACHE_HOME/agave/conversations.json`) and the base for extracted video frames. |
 | `HOME` | Fallback base directory when `XDG_CACHE_HOME` is unset (`$HOME/.cache`) |
 | `TMPDIR` | Base directory for extracted video frames, taking precedence over `XDG_CACHE_HOME` and `HOME` |
@@ -42,9 +43,21 @@ See [Versioning & Releases](CONTRIBUTING.md#versioning--releases).
 | `TERM` | Terminal type. `dumb` disables color and decorations; every other value is auto (color on a TTY). |
 | `NO_COLOR` | Disable colored terminal output (respects [no-color.org](https://no-color.org) convention). Empty/whitespace is unset, so `NO_COLOR=` keeps auto behavior. |
 
-Every variable above is read through `src/config.zig`, which treats missing,
-empty, and whitespace-only values as unset, so a sourced `.env.example` (which
-leaves values blank) behaves exactly like an unset variable.
+Every variable above resolves missing, empty, and whitespace-only values the
+same way, so a sourced `.env.example` (which leaves values blank) behaves
+exactly like an unset variable. Two accessors do that, with the same rule:
+
+- `config.getenv` (`src/config.zig`), which reads the environment directly and
+  applies the trim. Used by `pull` (`HF_TOKEN`, `HF_HOME`, `HF_ENDPOINT`),
+  `update` (`GITHUB_TOKEN`), the conversation store, the Vulkan pipeline cache,
+  and the video-frame temp root.
+- The parsed environment map `main` receives at startup, read with
+  `config.nonemptyEnv`, which applies the same trim inline (`src/main.zig`).
+  Used by every `AGAVE_*` variable and by `TERM`/`NO_COLOR`.
+
+`TERM` and `NO_COLOR` are additionally matched against the raw map value rather
+than the trimmed one, because [no-color.org](https://no-color.org) defines them
+as "present and non-empty" rather than as configured values.
 
 ### Docker Compose variables
 

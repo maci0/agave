@@ -293,6 +293,10 @@ pub fn printUsage() void {
         \\ENVIRONMENT:
         \\  HF_TOKEN             HuggingFace API token for private repos
         \\                         Empty/whitespace is unset
+        \\  HF_ENDPOINT          HuggingFace API base URL, for a mirror or air-gapped
+        \\                         gateway [default: https://huggingface.co]
+        \\                         Must start with http:// or https://; a trailing / is
+        \\                         trimmed, anything else is rejected before any request
         \\  HF_HOME              Custom HuggingFace cache directory
         \\  XDG_CACHE_HOME       XDG cache base (fallback: ~/.cache)
         \\
