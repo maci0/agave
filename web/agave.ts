@@ -11,7 +11,7 @@
  *   await agave.init(); // or agave.init(wasmBytes)
  *   await agave.loadModel('https://example.com/model.gguf');
  *   try {
- *     const output = await agave.generate('What is 2+2?', { maxTokens: 100 });
+ *     const report = await agave.generate('What is 2+2?', { maxTokens: 100 });
  *   } catch (e) {
  *     if (e instanceof AgaveError && e.code === 'no_model') {
  *       // load a model, then retry
@@ -20,9 +20,10 @@
  *   }
  *   agave.destroy();
  *
- * `generate()` resolves with the engine's output string for the prompt; until
- * the wasm32 forward pass lands, that is the tokenization report, not model
- * output. A large download can be streamed and observed first:
+ * `generate()` resolves with the engine's tokenization report, not model output:
+ * until the wasm32 forward pass lands, `agave_generate` encodes the prompt and
+ * writes back what it tokenized. Callers must not present the string as a
+ * completion. A large download can be streamed and observed first:
  *   const bytes = await agave.fetchModel(url, { onProgress: (p) => report(p) });
  *   await agave.loadModel(bytes);
  */
@@ -456,7 +457,7 @@ class AgaveEngine {
   }
 
   /**
-   * Run a prompt and return the engine's output for it.
+   * Tokenize a prompt and return the engine's report for it.
    *
    * `maxTokens` is the generation budget; omit it or pass 0 for the default
    * (100). Anything else must be a non-negative integer that fits in 32 bits,
@@ -464,8 +465,9 @@ class AgaveEngine {
    *
    * Throws `AgaveError` with code `no_model` before `loadModel()`,
    * `tokenize` when the prompt cannot be encoded, and `generate_failed`
-   * otherwise. Until the wasm32 forward pass lands, the returned string is the
-   * tokenization report, not model output.
+   * otherwise. Until the wasm32 forward pass lands the returned string is the
+   * tokenization report, not model output, and the name keeps the promise
+   * narrow: this method does not generate text yet.
    */
   // oxlint-disable-next-line eslint/require-await, typescript-eslint/require-await -- async signature is the documented Promise API contract
   public async generate(prompt: string, options: GenerateOptions = {}): Promise<string> {

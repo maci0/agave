@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>agave - Browser LLM Inference</title>
+    <title>agave - Browser LLM Engine (init, parse, tokenize)</title>
     <!-- Tokens and components are shared with the serve UI (src/web/ui/theme.css),
          so both chat surfaces read as one product. style.css is a committed build
          output: regenerate it with scripts/build-web.sh. -->
@@ -16,7 +16,7 @@
      policy as the serve UI (src/web/head.html): do not hand the local page URL
      to a third-party model host. -->
     <meta name="referrer" content="no-referrer">
-    <meta name="description" content="Run LLM inference directly in your browser via WebAssembly. Load a GGUF model and chat, no server required.">
+    <meta name="description" content="Load a GGUF model in the browser and tokenize prompts with agave compiled to WebAssembly. This build stops before text generation.">
 <link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2064%2064'%3E%3Crect%20width='64'%20height='64'%20rx='14'%20fill='%231a1714'/%3E%3Cg%20transform='translate(11%2011.5)%20scale(.66)'%3E%3Cdefs%3E%3Cmask%20id='f0'%20maskUnits='userSpaceOnUse'%20x='0'%20y='0'%20width='64'%20height='64'%3E%3Crect%20width='64'%20height='64'%20fill='%23fff'/%3E%3Cpath%20d='M24.4%2060.9C16.7%2047.1%2010.6%2030%208.2%2018.6C18.9%2025.8%2032.2%2039.2%2039.6%2053.1Z'%20fill='%23000'%20stroke='%23000'%20stroke-width='3'%20stroke-linejoin='round'/%3E%3Cpath%20d='M24.4%2053.1C31.8%2039.2%2045.1%2025.8%2055.8%2018.6C53.4%2030%2047.3%2047.1%2039.6%2060.9Z'%20fill='%23000'%20stroke='%23000'%20stroke-width='3'%20stroke-linejoin='round'/%3E%3Cpath%20d='M23.5%2057C23.3%2038.8%2027.3%2018%2032%205C36.7%2018%2040.7%2038.8%2040.5%2057Z'%20fill='%23000'%20stroke='%23000'%20stroke-width='3'%20stroke-linejoin='round'/%3E%3C/mask%3E%3Cmask%20id='f1'%20maskUnits='userSpaceOnUse'%20x='0'%20y='0'%20width='64'%20height='64'%3E%3Crect%20width='64'%20height='64'%20fill='%23fff'/%3E%3Cpath%20d='M23.5%2057C23.3%2038.8%2027.3%2018%2032%205C36.7%2018%2040.7%2038.8%2040.5%2057Z'%20fill='%23000'%20stroke='%23000'%20stroke-width='3'%20stroke-linejoin='round'/%3E%3C/mask%3E%3CclipPath%20id='fc'%3E%3Crect%20width='64'%20height='57'/%3E%3C/clipPath%3E%3C/defs%3E%3Cg%20fill='%238faa7b'%20clip-path='url(%23fc)'%3E%3Cg%20mask='url(%23f0)'%3E%3Cpath%20d='M28%2063.9C17.2%2058.8%205.9%2051.2%20-0.6%2045.5C10.3%2043.5%2025.4%2044.7%2036%2050.1Z'/%3E%3Cpath%20d='M28%2050.1C38.6%2044.7%2053.7%2043.5%2064.6%2045.5C58.1%2051.2%2046.8%2058.8%2036%2063.9Z'/%3E%3C/g%3E%3Cg%20mask='url(%23f1)'%3E%3Cpath%20d='M24.4%2060.9C16.7%2047.1%2010.6%2030%208.2%2018.6C18.9%2025.8%2032.2%2039.2%2039.6%2053.1Z'/%3E%3Cpath%20d='M24.4%2053.1C31.8%2039.2%2045.1%2025.8%2055.8%2018.6C53.4%2030%2047.3%2047.1%2039.6%2060.9Z'/%3E%3C/g%3E%3Cg%3E%3Cpath%20d='M23.5%2057C23.3%2038.8%2027.3%2018%2032%205C36.7%2018%2040.7%2038.8%2040.5%2057Z'/%3E%3C/g%3E%3Cpath%20d='M24%2057A8%208%200%200%201%2040%2057Z'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E">
 </head>
 <body>

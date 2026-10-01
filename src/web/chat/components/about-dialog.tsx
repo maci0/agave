@@ -20,9 +20,12 @@ const Row = ({ label, value, chip }: { label: string; value: string; chip?: bool
     </span>
   </div>
 );
-/** A section heading inside the dialog. */
+/** A section heading inside the dialog. Sentence case, per the voice rules in
+ *  docs/brand/README.md: the mono face at `xs` already sets these apart from
+ *  the dialog title, so capitals and wide tracking would add a second, louder
+ *  idea on top of it. */
 const Section = ({ children }: { children: string }) => (
-  <h3 className="mt-5 mb-1.5 font-mono text-xs font-medium tracking-wide text-primary uppercase">{children}</h3>
+  <h3 className="mt-5 mb-1.5 font-mono text-xs font-medium text-primary">{children}</h3>
 );
 
 /** The About dialog. Radix owns the focus trap, Escape and the focus restore the

@@ -266,7 +266,8 @@ const agave = new AgaveEngine();
 await agave.init(); // or agave.init(wasmBytes) / agave.init(url, abortSignal)
 await agave.loadModel('https://example.com/model.gguf');
 try {
-  const output = await agave.generate('What is 2+2?', { maxTokens: 100 });
+  const report = await agave.generate('What is 2+2?', { maxTokens: 100 });
+// "[qwen2.5-1.5b] Tokenized 12 tokens from prompt. ..." (see the note below)
 } catch (e) {
   if (e instanceof AgaveError && e.code === 'no_model') {
     // load a model, then retry
@@ -290,7 +291,9 @@ yourself with `agave.fetchModel(url, { onProgress })` and hand the buffer to
 `agave.wasm` plus the `index.html`, `style.css`, `agave.js` and `shell.js` the
 page loads by relative URL.
 Forward-pass generation in WASM is still blocked by a Zig wasm32 codegen bug;
-load and tokenize work.
+load and tokenize work. `generate()` therefore resolves with the engine's
+tokenization report, not model output, and the browser shell in `web/` says so
+in its header and empty state rather than presenting itself as a working chat.
 
 ## HTTP Server
 

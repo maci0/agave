@@ -33,7 +33,7 @@ const centerClass =
   'top-1/2 left-1/2 w-[min(480px,90vw)] max-h-[85dvh] -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-lg p-7';
 
 const overlayClass =
-  'fixed inset-0 z-40 bg-black/60 transition-opacity duration-200 data-[state=closed]:opacity-0 data-[state=open]:opacity-100';
+  'fixed inset-0 z-40 bg-scrim transition-opacity duration-200 data-[state=closed]:opacity-0 data-[state=open]:opacity-100';
 
 export const DialogContent = ({ className, children, side = 'center', hideClose, ...props }: DialogContentProps) => (
   <Portal>

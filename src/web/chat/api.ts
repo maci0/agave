@@ -22,7 +22,10 @@ export const httpErrorMessage = (status: number): string => {
   if (status === 413) {return 'Message or image is too large.';}
   if (status === 429) {return 'The server is busy. Wait a moment and try again.';}
   if (status === 503) {return 'The model is not ready yet. Try again shortly.';}
-  if (status >= 500) {return 'Something went wrong on the server. Try again.';}
+  /* No "something went wrong": an unnamed 5xx is the one status that could be
+     anything, so the copy names the thing that actually failed and the retry
+     the reader can take. */
+  if (status >= 500) {return 'The server failed to handle the request. Try again.';}
   return `Could not complete the request (error ${status}).`;
 };
 

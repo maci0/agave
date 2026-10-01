@@ -83,6 +83,7 @@ block (light) in theme.css, so no component knows which scheme it is in.
 | `primary` | Amber `#d4a574` | Amber Deep `#8a531c` | Actions, focus ring, links | 6.9:1 / 5.3:1 on the amber wash |
 | `success` | Sage `#8faa7b` | Sage Deep `#5a7a48` | The mark, success states | 7.0:1 / 4.6:1 on the page |
 | `destructive` | Signal `#e57373` | Signal Deep `#a8322a` | Errors, destructive keys | 6.0:1 / 6.3:1 on the page |
+| `scrim` | `rgb(26 23 20 / 0.6)` | `rgb(42 37 34 / 0.45)` | The wash behind a dialog or drawer | Each scheme's own near-black, never stock black |
 | `syntax-*` | kimbie-dark hues | darker steps of the same hues | Code in responses | 5.6:1 or better on the page |
 
 Use the token, never the hex, in UI code: `@shadcn/lint`'s `no-raw-colors` and

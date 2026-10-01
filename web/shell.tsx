@@ -24,7 +24,12 @@ import { useModelLoader, type ModelLoader } from './use-model-loader';
 const MAX_TOKENS = 200;
 const ANNOUNCE_DELAY_MS = 100;
 
-type Role = 'user' | 'assistant' | 'system' | 'error';
+/* There is no `assistant` role: the wasm32 forward pass is blocked (see the
+   note in src/wasm_entry.zig), so `generate()` resolves with the engine's
+   tokenization report, not model output. Everything the engine says is
+   labelled `engine`, which keeps a report from reading as a reply and makes a
+   regression to an `assistant` bubble a type error. */
+type Role = 'user' | 'engine' | 'error';
 
 type Message = {
   id: number;
@@ -32,12 +37,11 @@ type Message = {
   text: string;
 };
 
-const ROLE_LABELS = { user: 'You', assistant: 'Agave', system: 'System', error: 'Error' } as const;
+const ROLE_LABELS = { user: 'You', engine: 'Engine', error: 'Error' } as const;
 
 const BUBBLE = {
   user: 'w-auto max-w-4/5 rounded-ee-xs border-transparent bg-primary/10',
-  assistant: 'border-transparent px-1',
-  system: 'border-border-strong bg-primary/10 text-sm text-muted-foreground',
+  engine: 'border-border bg-card text-sm text-muted-foreground',
   error: 'border-destructive bg-destructive/10 text-sm text-destructive-foreground',
 } as const;
 
@@ -168,18 +172,23 @@ const ModelBar = ({ loader }: { loader: ModelLoader }) => {
 
 /** Before the first prompt. Same anchor as the serve UI's empty state, drawn by
  *  the same component, so the two surfaces read as one product rather than a
- *  chat page and a demo page. */
+ *  chat page and a demo page.
+ *
+ *  The states name what the browser build does, which is init, parse and
+ *  tokenize: docs/brand/README.md ("Honest status") forbids presenting the
+ *  WASM shell as a working chat, and the reader has to learn the limit before
+ *  the first prompt, not from the report it returns. */
 const ShellEmptyState = ({ ready }: { ready: boolean }) => (
   <EmptyState
     title={ready ? 'Prompt the model' : 'Load a model to start'}
     line={ready
-      ? 'Inference runs in this tab. Nothing leaves the browser.'
+      ? 'The engine tokenizes the prompt and reports the token count. It does not generate text in this build.'
       : 'Drop a GGUF file or paste a model URL above, then prompt it.'}
     hints={
       <>
         <HintChip>GGUF only</HintChip>
         <HintChip>Enter to send</HintChip>
-        <HintChip>{`Replies capped at ${String(MAX_TOKENS)} tokens`}</HintChip>
+        <HintChip>Forward pass pending a Zig wasm32 fix</HintChip>
       </>
     }
   />
@@ -209,7 +218,7 @@ const ChatLog = ({ messages, sending, ready }: { messages: Array<Message>; sendi
         <div className="mx-auto flex w-full agave-measure flex-col items-start">
           <div
             role="status"
-            aria-label="Generating response"
+            aria-label="Tokenizing the prompt"
             className="w-full animate-pulse-soft px-1 py-3 text-base text-faint"
           >
             …
@@ -228,7 +237,7 @@ const ShellHeader = ({ ready, busy, onClear }: { ready: boolean; busy: boolean; 
         <Mark />
         agave
       </h1>
-      <small className="text-sm text-faint">LLM inference in the browser, via WebAssembly</small>
+      <small className="text-sm text-faint">Init, parse and tokenize only. Text generation is blocked in this build.</small>
     </div>
         {ready ? (
           <Button type="button" size="sm" onClick={onClear} title="Clear conversation" disabled={busy}>
@@ -290,7 +299,7 @@ const Composer = ({ prompt, onPrompt, onSend, ready, sending, busy, focus }: Com
             aria-busy={sending}
             disabled={!ready || busy || !prompt.trim()}
           >
-            {sending ? 'Generating…' : 'Send'}
+            {sending ? 'Tokenizing…' : 'Send'}
           </Button>
         </div>
       </form>
@@ -314,8 +323,7 @@ const useShellChat = (engine: AgaveEngine) => {
     const id = nextId.current;
     nextId.current += 1;
     setMessages((previous) => [...previous, { id, role, text }]);
-    if (role === 'error' || role === 'system') { announce(text); }
-    else if (role === 'assistant') { announce(`Agave responded: ${text.slice(0, 200)}`); }
+    if (role === 'error' || role === 'engine') { announce(text); }
   }, [announce]);
 
   const send = useCallback((ready: boolean, focus: () => void) => {
@@ -324,15 +332,15 @@ const useShellChat = (engine: AgaveEngine) => {
     setSending(true);
     addMessage('user', text);
     setPrompt('');
-    announce('Generating response…');
+    announce('Tokenizing the prompt…');
     void (async function () {
       try {
-        addMessage('assistant', await engine.generate(text, { maxTokens: MAX_TOKENS }));
+        addMessage('engine', await engine.generate(text, { maxTokens: MAX_TOKENS }));
       } catch (error) { // oxlint-disable-line @rikalabs/no-silent-catch-fallback -- rendered as an alert in the log
         addMessage('error', friendlyGenerateError(error));
       } finally {
         setSending(false);
-        announce('Response complete');
+        announce('Tokenization report ready');
         focus();
       }
     })();
@@ -361,7 +369,7 @@ const Shell = () => {
   const engine = engineRef.current;
   const chat = useShellChat(engine);
   const loader = useModelLoader(engine, (text, level) => {
-    chat.addMessage(level === 'error' ? 'error' : 'system', text);
+    chat.addMessage(level === 'error' ? 'error' : 'engine', text);
   });
 
   const busy = loader.busy || chat.sending;

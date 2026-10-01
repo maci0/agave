@@ -43,9 +43,13 @@
   --color-destructive-foreground: #e8a0a0;
   --color-success: #8faa7b;
   --color-ring: #d4a574;
-  /* The overlay shadow's tone. A token so the light scheme can soften it:
-     Tailwind inlines --shadow-* values into the utility at build time. */
+  /* The overlay shadow's tone, and the scrim behind a dialog or drawer. Tokens
+     so the light scheme can soften both: Tailwind inlines --shadow-* values
+     into the utility at build time. The scrim is the page's own near-black
+     rather than stock black, so a paper-scheme dialog is dimmed with the
+     brand's warm ink instead of a cool grey. */
   --color-shadow: rgb(0 0 0 / 0.45);
+  --color-scrim: rgb(26 23 20 / 0.6);
 
   /* Syntax highlighting (highlight.js classes, styled in .agave-prose below).
      Kimbie-dark's hues, with keyword and tag lifted to clear 4.5:1 on
@@ -160,6 +164,7 @@
       --color-syntax-string: #4d6b3a;
       --color-syntax-title: #9a4a1a;
       --color-shadow: rgb(42 37 34 / 0.16);
+      --color-scrim: rgb(42 37 34 / 0.45);
     }
   }
 

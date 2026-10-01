@@ -11,7 +11,10 @@ import { useCallback, useRef, useState, type DragEvent } from 'react';
 import { friendlyLoadError } from './load-errors';
 
 const IDLE_HINT = 'Load a GGUF model to begin';
-const READY_HINT = 'Ready';
+/* The status names the state the engine is actually in. "Ready" read as "a
+   chat is ready"; the browser build tokenizes prompts and does not generate,
+   so the line says which one it is. */
+const READY_HINT = 'Model loaded. Prompts are tokenized, not answered.';
 const GGUF_MAGIC = [0x47, 0x47, 0x55, 0x46] as const;
 
 export type Report = (text: string, level: 'error' | 'info') => void;

@@ -41,8 +41,10 @@ const transcriptHolds = async (text: string): Promise<boolean> => {
 /** Stands in for `web/agave.ts`'s `AgaveEngine`, which needs agave.wasm. It
  *  keeps the one property the shell depends on: `hasModel` is false until
  *  `loadModel()` and true after, so an engine rebuilt on re-render is
- *  detectable without a WebAssembly instance. Every method is async because
- *  the shell awaits it; the bodies resolve on the microtask queue. */
+ *  detectable without a WebAssembly instance. `generate()` returns the shape
+ *  the real one does while the wasm32 forward pass is blocked: a tokenization
+ *  report, not model output. Every method is async because the shell awaits
+ *  it; the bodies resolve on the microtask queue. */
 class StubEngine {
   public ready = false;
   public hasModel = false;
@@ -70,7 +72,7 @@ class StubEngine {
     await Promise.resolve();
     if (!this.hasModel) { throw new Error('Engine not initialized'); }
     this.prompted.push(prompt);
-    return 'answer';
+    return '[stub-model] Tokenized 1 tokens from prompt.';
   }
 }
 
@@ -118,15 +120,26 @@ afterAll(async () => {
   await GlobalRegistrator.unregister();
 });
 
+/** The transcript, as one line of text, for a copy assertion. */
+const transcriptText = (): string => present(document.querySelector('#chat'), 'chat log').textContent;
+
 test('a loaded model survives the re-render a prompt triggers', async () => {
   stubEngineHost();
   await import('../../web/shell');
   await settle(30);
 
+  /* Docs/brand/README.md ("Honest status") forbids presenting the WASM build
+     as a working chat, so the header and the empty state say what this build
+     does before a prompt is written. */
+  expect(transcriptText()).toContain('Forward pass pending a Zig wasm32 fix');
+  expect(document.querySelector('header')?.textContent).toContain('blocked in this build');
+
   typeInto(present(document.querySelector<HTMLInputElement>('#model-url'), 'model url field'), MODEL_URL);
   await settle();
   clickButtonLabelled('Load model');
   expect(await transcriptHolds('Loaded: stub-model')).toBe(true);
+  /* The model banner is a model-load report, not a reply, so it lands under
+     the Engine label too. */
 
   /* Typing is the re-render: every keystroke runs the Shell body again. */
   typeInto(present(document.querySelector<HTMLInputElement>('#prompt'), 'prompt field'), 'hi');
@@ -134,8 +147,13 @@ test('a loaded model survives the re-render a prompt triggers', async () => {
   present(document.querySelector('form'), 'composer form')
     .dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
 
-  expect(await transcriptHolds('answer')).toBe(true);
+  expect(await transcriptHolds('Tokenized 1 tokens')).toBe(true);
   expect(engines.filter((engine) => engine.prompted.length > 0)).toHaveLength(1);
+
+  /* The engine's report is not model output, so it is labelled Engine and the
+     log never claims a reply from "Agave" the way the serve UI's turns do. */
+  expect(transcriptText()).toContain('Engine');
+  expect(transcriptText()).not.toContain('Agave');
 
   /* One engine for the whole mount: a second one would be a second module. */
   expect(engines).toHaveLength(1);

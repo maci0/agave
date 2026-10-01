@@ -41,32 +41,32 @@ If you can read Zig, C, or Rust code and understand concepts like "cache line" a
 
 Different readers have different goals. Here are recommended paths through the tutorials:
 
-### 🧑‍💻 **Beginner Systems Programmer (Knows C, New to Zig/ML)**
+### **Beginner Systems Programmer (Knows C, New to Zig/ML)**
 You're comfortable with C-style memory management and pointers but haven't touched Zig or ML before. This path front-loads Zig idioms and memory safety before backend/hardware detail, then loops back for the sampling and caching pieces that tie generation together:
 - [**Chapter 0: Getting Started**](00-getting-started.md) → [**Chapter 1: Tokens**](01-tokens-and-text.md) → [**Chapter 2: Transformer**](02-the-transformer.md) → [**Chapter 3: FFN**](03-feed-forward-networks.md)
 - [**Chapter 10: Memory Safety**](10-memory-safety.md) → [**Chapter 8: Backends**](08-backends.md) → [**Chapter 7: Sampling**](07-sampling.md) → [**Chapter 5: Caching**](05-memory-and-caching.md)
 
-### 🎓 **ML Beginners (Systems Programmers New to ML)**
+### **ML Beginners (Systems Programmers New to ML)**
 Start from the beginning and read sequentially. Chapters 0–8 build understanding from first principles:
 - [**Chapter 0: Getting Started**](00-getting-started.md) → [**Chapter 1: Tokens**](01-tokens-and-text.md) → [**Chapter 2: Transformer**](02-the-transformer.md) → [**Chapter 3: FFN**](03-feed-forward-networks.md) → [**Chapter 4: Quantization**](04-quantization.md)
 - [**Chapter 5: Caching**](05-memory-and-caching.md) → [**Chapter 6: SSMs**](06-state-space-models.md) → [**Chapter 7: Sampling**](07-sampling.md) → [**Chapter 8: Backends**](08-backends.md)
 - [**Chapter 9: SIMD**](09-cpu-simd-optimization.md) → [**Chapter 10: Memory Safety**](10-memory-safety.md) → [**Chapter 11: Metal**](11-metal-backend-internals.md) → onward
 
-### 🔧 **Implementation-Focused (Experienced ML Engineers)**
+### **Implementation-Focused (Experienced ML Engineers)**
 You already know transformers and attention, jump straight to implementation:
 - [**Chapter 9: CPU SIMD**](09-cpu-simd-optimization.md), @Vector patterns, multi-row batching
 - [**Chapter 11: Metal Backend**](11-metal-backend-internals.md), GPU optimization on Apple Silicon
 - [**Chapter 13: Batched Dispatch**](13-batched-dispatch-and-fusion.md), Kernel fusion, dispatch reduction
 - [**Appendix: Profiling**](appendix-profiling.md), Performance debugging techniques
 
-### ⚡ **Performance Optimization**
+### **Performance Optimization**
 Focus on chapters that explain speedup techniques:
 - [**Chapter 4: Quantization**](04-quantization.md#mlx-affine-quantization), MLX factored dequantization (fewer arithmetic ops per block)
 - [**Chapter 9: CPU SIMD**](09-cpu-simd-optimization.md), Multi-row GEMV batching (2-4× speedup)
 - [**Chapter 13: Batched Dispatch**](13-batched-dispatch-and-fusion.md), Qwen3.5 optimization journey (15% speedup)
 - [**Appendix: Compile-Time**](appendix-compile-time.md), Lookup tables (20-30× for FP8 dequant)
 
-### 🦀 **Zig-Specific Patterns (Rust/C Programmers)**
+### **Zig-Specific Patterns (Rust/C Programmers)**
 Learn Zig idioms used throughout the codebase:
 - [**Chapter 9: CPU SIMD**](09-cpu-simd-optimization.md), @Vector, @reduce, @mulAdd, @splat
 - [**Chapter 10: Memory Safety**](10-memory-safety.md), defer, errdefer, leak detection
@@ -74,14 +74,14 @@ Learn Zig idioms used throughout the codebase:
 - [**Appendix: Compile-Time**](appendix-compile-time.md), comptime, @embedFile, inline else dispatch
 - [**Appendix: Atomic Operations**](appendix-atomics.md), Memory ordering, lock-free patterns
 
-### 📐 **Architecture & Design Patterns**
+### **Architecture & Design Patterns**
 Understand how the codebase is structured:
 - [**Chapter 8: Backends**](08-backends.md), Tagged union dispatch pattern
 - [**Chapter 14: Format Conventions**](14-format-conventions.md), GGUF vs SafeTensors differences
 - [**Chapter 15: Chat Templates**](15-chat-templates.md), Data-driven configuration
 - [**Chapter 16: Recipe System**](16-recipe-system.md), Per-model/hardware defaults
 
-### 🛠️ **Adding a New Model**
+### **Adding a New Model**
 Everything you need to add a new architecture to Agave:
 - [**Chapter 14: Format Conventions**](14-format-conventions.md), Tensor naming, dimension order, format detection
 - [**Chapter 15: Chat Templates**](15-chat-templates.md), Prompt formatting and EOG tokens
