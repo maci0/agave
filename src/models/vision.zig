@@ -224,11 +224,15 @@ pub const VisionEncoder = struct {
     ///
     /// `patch_size == 0` divides by zero in `patches_per_side` and in the
     /// per-patch element count; `image_size < patch_size` yields zero patches
-    /// and empty working buffers; `embd_dim % n_heads != 0` truncates
-    /// `head_dim`; a zero `projection_dim` produces a zero-width output.
+    /// and empty working buffers; `image_size % patch_size != 0` truncates
+    /// `patches_per_side` and encodes only `patches_per_side * patch_size`
+    /// pixels per side, silently dropping the rest of the image;
+    /// `embd_dim % n_heads != 0` truncates `head_dim`; a zero
+    /// `projection_dim` produces a zero-width output.
     fn validateDims(d: Dims) error{InvalidMetadata}!void {
         if (d.patch_size == 0) return error.InvalidMetadata;
         if (d.image_size < d.patch_size) return error.InvalidMetadata;
+        if (d.image_size % d.patch_size != 0) return error.InvalidMetadata;
         if (d.embd_dim == 0 or d.embd_dim % d.n_heads != 0) return error.InvalidMetadata;
         if (d.projection_dim == 0) return error.InvalidMetadata;
     }
@@ -277,7 +281,12 @@ pub const VisionEncoder = struct {
 
         const patches_per_side = image_size / patch_size;
         const n_patches = patches_per_side * patches_per_side;
-        const qwen_merge_factor: u32 = if (variant == .qwen_vl) 4 else 1;
+        // 4 = qwen_spatial_merge²: the 2×2 spatial grid becomes one LLM token.
+        const qwen_merge_factor: u32 = if (variant == .qwen_vl) qwen_spatial_merge * qwen_spatial_merge else 1;
+        // Both merges are exact grids: an uneven side would drop whole rows or
+        // columns of patches without any error, so reject the header instead.
+        const side_merge: u32 = if (n_merge > 0) n_merge else if (variant == .qwen_vl) qwen_spatial_merge else 1;
+        if (side_merge > 1 and patches_per_side % side_merge != 0) return error.InvalidMetadata;
         const n_output_patches: u32 = if (n_merge > 0) blk: {
             const out_side = patches_per_side / n_merge;
             break :blk out_side * out_side;
@@ -1922,6 +1931,13 @@ test "validateDims rejects degenerate header dimensions" {
 
     d = good;
     d.image_size = d.patch_size - 1;
+    try std.testing.expectError(error.InvalidMetadata, VisionEncoder.validateDims(d));
+
+    d = good;
+    // 100 / 32 = 3 patches per side covers 96 of 100 pixels; the encoder would
+    // silently drop the last 4 rows and columns of the image.
+    d.image_size = 100;
+    d.patch_size = 32;
     try std.testing.expectError(error.InvalidMetadata, VisionEncoder.validateDims(d));
 
     d = good;
