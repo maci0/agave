@@ -7,7 +7,6 @@
 
 const std = @import("std");
 const quant = @import("../../../ops/quant.zig");
-const backend_mod = @import("../../backend.zig");
 const sparsity = @import("activation_sparsity.zig");
 const prefetch = @import("prefetch.zig");
 const V8 = @Vector(8, f32);
@@ -15,7 +14,7 @@ const v8zero: V8 = @splat(0.0);
 const V8u = @Vector(8, u8);
 const V8u16 = @Vector(8, u16);
 /// Elements per Q4_K group (super-block / 4 groups).
-const group_elems = backend_mod.quant_super_block_elems / 4;
+const group_elems = quant.quant_super_block_elems / 4;
 /// Quantized bytes per group (nibble-packed: 2 elements per byte).
 const group_qs_bytes = group_elems / 2;
 /// Nibble extraction mask: low 4 bits of each byte.
@@ -27,8 +26,8 @@ const shift4: @Vector(8, u3) = @splat(4);
 /// Uses factored scale/min: dot(x, d*q - dm) = d*dot(x,q) - dm*sum(x),
 /// accumulating q_dot and x_sum per sub-block, then applying scales once.
 pub fn gemvQ4_K(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize) void {
-    const bpb = backend_mod.q4_k_block_bytes;
-    const bs = backend_mod.quant_super_block_elems;
+    const bpb = quant.q4_k_block_bytes;
+    const bs = quant.quant_super_block_elems;
     const nb = (k + bs - 1) / bs;
     const row_bytes = nb * bpb;
 
@@ -251,7 +250,7 @@ test "gemvQ4_K uniform weights" {
     // scales: sc=1 for all 8 group indices, m=0.
     // All qs nibbles = 1 → weight = 1 per element, x = all 1.0.
     // y = d * sc * sum(q) = 1.0 * 1 * 256 = 256.0
-    const bpb = backend_mod.q4_k_block_bytes; // 144
+    const bpb = quant.q4_k_block_bytes; // 144
     var w: [2 * bpb]u8 = undefined;
     for (0..2) |r| {
         const base = r * bpb;
@@ -272,7 +271,7 @@ test "gemvQ4_K uniform weights" {
         // qs[128]: lo=1, hi=1 → 0x11
         for (16..144) |i| w[base + i] = 0x11;
     }
-    const bs = backend_mod.quant_super_block_elems;
+    const bs = quant.quant_super_block_elems;
     var x: [bs]f32 = undefined;
     for (&x) |*v| v.* = 1.0;
     var y: [2]f32 = undefined;
@@ -282,8 +281,8 @@ test "gemvQ4_K uniform weights" {
 
 test "gemvQ4_K all zeros" {
     // 2 rows, k=256. All nibbles = 0, dmin = 0. y = 0.
-    const bpb = backend_mod.q4_k_block_bytes;
-    const bs = backend_mod.quant_super_block_elems;
+    const bpb = quant.q4_k_block_bytes;
+    const bs = quant.quant_super_block_elems;
     var w: [2 * bpb]u8 = undefined;
     for (0..2) |r| {
         const base = r * bpb;
@@ -313,8 +312,8 @@ test "gemvQ4_K dmin subtraction" {
     // 1 row, k=256. d=1.0, dmin=f16(0.5). sc=1, m=1 for all groups.
     // All qs nibbles=1 → raw sum = 256. dmin subtraction = 0.5 * 1 * 256 = 128.
     // y = d * sc * sum(q) - dmin * m * 256 = 1.0*1*256 - 0.5*1*256 = 128.0
-    const bpb = backend_mod.q4_k_block_bytes;
-    const bs = backend_mod.quant_super_block_elems;
+    const bpb = quant.q4_k_block_bytes;
+    const bs = quant.quant_super_block_elems;
     var w: [bpb]u8 = undefined;
     w[0] = 0x00;
     w[1] = 0x3C; // d = f16(1.0)
@@ -353,8 +352,8 @@ test "gemvQ4_K single row" {
     // n=1 exercises the single-row fallback.
     // d=0.5, dmin=0, sc=1, m=0, all nibbles=2 → q=2.
     // y = 0.5 * 1 * 256 * 2 = 256.0
-    const bpb = backend_mod.q4_k_block_bytes;
-    const bs = backend_mod.quant_super_block_elems;
+    const bpb = quant.q4_k_block_bytes;
+    const bs = quant.quant_super_block_elems;
     var w: [bpb]u8 = undefined;
     w[0] = 0x00;
     w[1] = 0x38; // d = f16(0.5)
@@ -380,8 +379,8 @@ test "gemvQ4_K single row" {
 test "fuzz: gemvQ4_K" {
     try std.testing.fuzz({}, struct {
         fn f(_: void, smith: *std.testing.Smith) !void {
-            const bpb = backend_mod.q4_k_block_bytes; // 144
-            const bs = backend_mod.quant_super_block_elems; // 256
+            const bpb = quant.q4_k_block_bytes; // 144
+            const bs = quant.quant_super_block_elems; // 256
             const n = 2;
             const k = bs;
             var x: [k]f32 = undefined;

@@ -3,7 +3,7 @@
 //! 2-row batching with V8 SIMD for full chunks.
 
 const std = @import("std");
-const backend_mod = @import("../../backend.zig");
+const quant = @import("../../../ops/quant.zig");
 const sparsity = @import("activation_sparsity.zig");
 const prefetch = @import("prefetch.zig");
 const V8 = @Vector(8, f32);
@@ -22,7 +22,7 @@ const q6_k_sc_chunk_bytes: usize = 8;
 const q6_k_d_offset: usize = 208;
 
 /// Elements per half super-block chunk (256 / 2).
-const chunk_elems = backend_mod.quant_super_block_elems / 2;
+const chunk_elems = quant.quant_super_block_elems / 2;
 /// Q6_K dequant bias: 6-bit unsigned [0..63] centered to signed [-32..31].
 const q6_k_dequant_bias: i8 = -32;
 /// Mask for extracting 2-bit high-order field from qh byte.
@@ -30,8 +30,8 @@ const qh_2bit_mask: u8 = 3;
 
 /// Q6_K GEMV: y = W @ x. 2-row batched with V8 SIMD for full chunks.
 pub fn gemvQ6_K(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize) void {
-    const bpb = backend_mod.q6_k_block_bytes;
-    const bs = backend_mod.quant_super_block_elems;
+    const bpb = quant.q6_k_block_bytes;
+    const bs = quant.quant_super_block_elems;
     const nb = (k + bs - 1) / bs;
     const row_bytes = nb * bpb;
 
@@ -231,7 +231,7 @@ test "gemvQ6_K all zeros" {
     // 2 rows, k=256. 6-bit signed values biased -32.
     // ql=0x00, qh=0xAA → q = (0 | (2<<4)) - 32 = 32 - 32 = 0 for all positions.
     // sc=1 (i8), d=1.0. y = 0.
-    const bpb = backend_mod.q6_k_block_bytes; // 210
+    const bpb = quant.q6_k_block_bytes; // 210
     var w: [2 * bpb]u8 = undefined;
     for (0..2) |r| {
         const base = r * bpb;
@@ -241,7 +241,7 @@ test "gemvQ6_K all zeros" {
         w[base + 208] = 0x00;
         w[base + 209] = 0x3C; // d = f16(1.0)
     }
-    const bs = backend_mod.quant_super_block_elems;
+    const bs = quant.quant_super_block_elems;
     var x: [bs]f32 = undefined;
     for (&x) |*v| v.* = 1.0;
     var y: [2]f32 = undefined;
@@ -252,8 +252,8 @@ test "gemvQ6_K all zeros" {
 test "gemvQ6_K uniform positive" {
     // 2 rows, k=256. ql=0x11, qh=0xAA → q = (1 | (2<<4)) - 32 = 1.
     // sc=1, d=1.0. y = 256 * 1.0 = 256.0.
-    const bpb = backend_mod.q6_k_block_bytes;
-    const bs = backend_mod.quant_super_block_elems;
+    const bpb = quant.q6_k_block_bytes;
+    const bs = quant.quant_super_block_elems;
     var w: [2 * bpb]u8 = undefined;
     for (0..2) |r| {
         const base = r * bpb;
@@ -273,8 +273,8 @@ test "gemvQ6_K uniform positive" {
 test "gemvQ6_K single row" {
     // n=1 exercises single-row fallback. d=0.5, sc=1, q=1.
     // y = 0.5 * 1 * 256 = 128.0
-    const bpb = backend_mod.q6_k_block_bytes;
-    const bs = backend_mod.quant_super_block_elems;
+    const bpb = quant.q6_k_block_bytes;
+    const bs = quant.quant_super_block_elems;
     var w: [bpb]u8 = undefined;
     for (0..128) |i| w[i] = 0x11;
     for (128..192) |i| w[i] = 0xAA;
@@ -291,8 +291,8 @@ test "gemvQ6_K single row" {
 test "fuzz: gemvQ6_K" {
     try std.testing.fuzz({}, struct {
         fn f(_: void, smith: *std.testing.Smith) !void {
-            const bpb = backend_mod.q6_k_block_bytes; // 210
-            const bs = backend_mod.quant_super_block_elems; // 256
+            const bpb = quant.q6_k_block_bytes; // 210
+            const bs = quant.quant_super_block_elems; // 256
             const n = 2;
             const k = bs;
             var x: [k]f32 = undefined;

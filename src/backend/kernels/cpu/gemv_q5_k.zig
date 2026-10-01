@@ -4,7 +4,6 @@
 
 const std = @import("std");
 const quant = @import("../../../ops/quant.zig");
-const backend_mod = @import("../../backend.zig");
 const sparsity = @import("activation_sparsity.zig");
 const V8 = @Vector(8, f32);
 const v8zero: V8 = @splat(0.0);
@@ -16,7 +15,7 @@ const nib_mask: V8u = @splat(0x0F);
 const shift4: @Vector(8, u3) = @splat(4);
 
 /// Elements per Q5_K group (super-block / 4 groups).
-const group_elems = backend_mod.quant_super_block_elems / 4;
+const group_elems = quant.quant_super_block_elems / 4;
 /// Quantized bytes per group (nibble-packed: 2 elements per byte).
 const group_qs_bytes = group_elems / 2;
 /// Q5_K high-bit contribution: the 5th bit adds 2^4 = 16 to the value.
@@ -25,8 +24,8 @@ const q5_k_high_bit_int: u8 = 16;
 
 /// Q5_K GEMV: y = W @ x. 2-row batched with V8 SIMD for full sub-blocks.
 pub fn gemvQ5_K(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize) void {
-    const bpb = backend_mod.q5_k_block_bytes;
-    const bs = backend_mod.quant_super_block_elems;
+    const bpb = quant.q5_k_block_bytes;
+    const bs = quant.quant_super_block_elems;
     const nb = (k + bs - 1) / bs;
     const row_bytes = nb * bpb;
 
@@ -252,7 +251,7 @@ test "gemvQ5_K uniform weights" {
     // 2 rows, k=256. d=1.0, dmin=0.0, sc=1, m=0.
     // qs nibbles=1, qh=0 → 5-bit value = 1. x = all 1.0.
     // y = 1.0 * 1 * 256 = 256.0
-    const bpb = backend_mod.q5_k_block_bytes; // 176
+    const bpb = quant.q5_k_block_bytes; // 176
     var w: [2 * bpb]u8 = undefined;
     for (0..2) |r| {
         const base = r * bpb;
@@ -272,7 +271,7 @@ test "gemvQ5_K uniform weights" {
         for (16..48) |i| w[base + i] = 0x00; // qh = 0
         for (48..176) |i| w[base + i] = 0x11; // qs: lo=1, hi=1
     }
-    const bs = backend_mod.quant_super_block_elems;
+    const bs = quant.quant_super_block_elems;
     var x: [bs]f32 = undefined;
     for (&x) |*v| v.* = 1.0;
     var y: [2]f32 = undefined;
@@ -284,8 +283,8 @@ test "gemvQ5_K with high bits" {
     // 2 rows, k=256. d=1.0, dmin=0.0, sc=1, m=0.
     // qs nibbles=1, qh=0xFF → 5-bit value = 1 + 16 = 17.
     // y = 1.0 * 1 * 256 * 17 = 4352.0
-    const bpb = backend_mod.q5_k_block_bytes;
-    const bs = backend_mod.quant_super_block_elems;
+    const bpb = quant.q5_k_block_bytes;
+    const bs = quant.quant_super_block_elems;
     var w: [2 * bpb]u8 = undefined;
     for (0..2) |r| {
         const base = r * bpb;
@@ -316,8 +315,8 @@ test "gemvQ5_K single row" {
     // n=1 exercises single-row fallback.
     // d=2.0, dmin=0, sc=1, m=0, qs nibbles=1, qh=0.
     // y = 2.0 * 1 * 256 = 512.0
-    const bpb = backend_mod.q5_k_block_bytes;
-    const bs = backend_mod.quant_super_block_elems;
+    const bpb = quant.q5_k_block_bytes;
+    const bs = quant.quant_super_block_elems;
     var w: [bpb]u8 = undefined;
     w[0] = 0x00;
     w[1] = 0x40; // d = f16(2.0)
@@ -344,8 +343,8 @@ test "gemvQ5_K single row" {
 test "fuzz: gemvQ5_K" {
     try std.testing.fuzz({}, struct {
         fn f(_: void, smith: *std.testing.Smith) !void {
-            const bpb = backend_mod.q5_k_block_bytes; // 176
-            const bs = backend_mod.quant_super_block_elems; // 256
+            const bpb = quant.q5_k_block_bytes; // 176
+            const bs = quant.quant_super_block_elems; // 256
             const n = 2;
             const k = bs;
             var x: [k]f32 = undefined;

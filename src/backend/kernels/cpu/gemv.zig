@@ -6,7 +6,8 @@
 //! Block-level skip checks avoid processing weight blocks where input is negligible.
 
 const std = @import("std");
-const DType = @import("../../backend.zig").DType;
+const DType = @import("../../../format/dtype.zig").DType;
+const quant = @import("../../../ops/quant.zig");
 
 // ── Activation Sparsity ────────────────────────────────────────
 /// Shared sparsity helper, extracted to a leaf module so per-format kernels
@@ -56,12 +57,12 @@ pub const gemvQ3_K = gemv_q_small.gemvQ3_K;
 
 const builtin = @import("builtin");
 const build_options = @import("build_options");
-const backend_mod = @import("../../backend.zig");
 // Accelerate.framework only available when Metal is enabled (they're linked together).
 const accelerate = if (builtin.os.tag == .macos and build_options.enable_metal) @import("../../accelerate.zig") else struct {};
 
 /// Computes the byte stride of one GEMV row for a given dtype and column count.
-pub const gemvRowBytes = backend_mod.gemvRowBytes;
+/// Re-exported from the quant leaf so callers keep one import path.
+pub const gemvRowBytes = quant.gemvRowBytes;
 
 /// Sequential GEMV, dispatches to the appropriate quantized kernel.
 /// F32 on macOS uses Accelerate.framework (AMX-accelerated) for ~4× speedup.

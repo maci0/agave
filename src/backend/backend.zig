@@ -61,23 +61,9 @@ pub const PagedKvView = @import("../kvcache/view.zig").PagedKvView;
 
 /// Parameters for DeltaNet SSM recurrence (Qwen3.5 hybrid model).
 /// Passed to `Backend.deltaNet()` to keep the function signature manageable.
-pub const DeltaNetParams = struct {
-    conv_ch: u32,
-    d_conv: u32,
-    d_inner: u32,
-    num_k_heads: u32,
-    head_k_dim: u32,
-    num_v_heads: u32,
-    head_v_dim: u32,
-    q_scale: f32,
-    rms_eps: f32,
-    /// True when conv_out split order is K,Q,V (HuggingFace/SafeTensors).
-    /// False (default) when split order is Q,K,V (GGUF/llama.cpp convention).
-    kqv_order: bool = false,
-    /// True when the RMSNormGated output uses sigmoid(z) instead of SiLU(z).
-    /// Qwen3.8-Flash-Next (qwen4exp) GDN; Qwen3.5 keeps the default SiLU path.
-    out_gate_sigmoid: bool = false,
-};
+/// Canonical definition in `kernels/cpu/deltanet.zig`, the leaf that implements
+/// it; re-exported here because every backend spells it `backend_mod.DeltaNetParams`.
+pub const DeltaNetParams = @import("kernels/cpu/deltanet.zig").DeltaNetParams;
 
 /// Backend and system startup information, partially filled by each backend
 /// during init, remainder populated by the caller (see "populated by main" fields).
@@ -275,37 +261,43 @@ pub fn listMetalDevices(out: []MetalDeviceListEntry) usize {
 pub const buf_cache_initial_capacity: usize = 512;
 
 /// Elements per small quantization block (Q4_0, Q8_0, etc.).
+/// Canonical definition in `ops/quant.zig`; the CPU kernels import that leaf
+/// directly, so they do not pull this dispatcher (and every GPU backend) in.
 pub const quant_block_elems: usize = quant_ops.quant_block_elems;
 /// Elements per large quantization super-block (Q4_K, Q5_K, Q6_K, etc.).
-pub const quant_super_block_elems: usize = 256;
+pub const quant_super_block_elems: usize = quant_ops.quant_super_block_elems;
 /// Elements per NVFP4 block (8 nibble pairs + 1 scale byte).
-pub const nvfp4_block_elems: usize = 16;
+pub const nvfp4_block_elems: usize = quant_ops.nvfp4_block_elems;
 
 // ── Element and block byte sizes ──────────────────────────────────────
+// All block layouts live in `ops/quant.zig`, which is the canonical definition
+// and the leaf both the CPU kernels and the GPU backends import. They are
+// re-exported here because backends and models already spell them
+// `backend_mod.<name>_block_bytes`.
 /// Byte size per element for non-quantized types, and per block for quantized
 /// formats. Used by weightBytes, gemvRowBytes, and model dtypeBytes.
 /// f32: 4 bytes per element.
-pub const f32_elem_bytes: usize = 4;
+pub const f32_elem_bytes: usize = quant_ops.f32_elem_bytes;
 /// f16 / bf16: 2 bytes per element.
-pub const f16_elem_bytes: usize = 2;
+pub const f16_elem_bytes: usize = quant_ops.f16_elem_bytes;
 /// Q4_0: f16 scale + 16B quants = 18 bytes per 32-element block.
 pub const q4_0_block_bytes: usize = quant_ops.q4_0_block_bytes;
 /// Q4_1: f16 scale + f16 min + 16B quants = 20 bytes per 32-element block.
-pub const q4_1_block_bytes: usize = 20;
+pub const q4_1_block_bytes: usize = quant_ops.q4_1_block_bytes;
 /// Q5_0: f16 scale + 4B high bits + 16B quants = 22 bytes per 32-element block.
-pub const q5_0_block_bytes: usize = 22;
+pub const q5_0_block_bytes: usize = quant_ops.q5_0_block_bytes;
 /// Q8_0: f16 scale + 32B quants = 34 bytes per 32-element block.
 pub const q8_0_block_bytes: usize = quant_ops.q8_0_block_bytes;
 /// Q2_K: 84 bytes per 256-element super-block.
-pub const q2_k_block_bytes: usize = 84;
+pub const q2_k_block_bytes: usize = quant_ops.q2_k_block_bytes;
 /// Q3_K: 110 bytes per 256-element super-block.
-pub const q3_k_block_bytes: usize = 110;
+pub const q3_k_block_bytes: usize = quant_ops.q3_k_block_bytes;
 /// Q4_K: 144 bytes per 256-element super-block.
-pub const q4_k_block_bytes: usize = 144;
+pub const q4_k_block_bytes: usize = quant_ops.q4_k_block_bytes;
 /// Q5_K: 176 bytes per 256-element super-block.
-pub const q5_k_block_bytes: usize = 176;
+pub const q5_k_block_bytes: usize = quant_ops.q5_k_block_bytes;
 /// Q6_K: 210 bytes per 256-element super-block.
-pub const q6_k_block_bytes: usize = 210;
+pub const q6_k_block_bytes: usize = quant_ops.q6_k_block_bytes;
 /// IQ4_NL: 18 bytes per 32-element block (same layout as Q4_0).
 pub const iq4_nl_block_bytes: usize = quant_ops.iq4_nl_block_bytes;
 /// IQ4_XS: 136 bytes per 256-element super-block.
@@ -313,28 +305,28 @@ pub const iq4_nl_block_bytes: usize = quant_ops.iq4_nl_block_bytes;
 pub const iq4_xs_block_bytes: usize = quant_ops.iq4_xs_block_bytes;
 /// MXFP4: 16B quants (32 FP4 nibbles) + 1B shared E8M0 scale = 17 bytes per
 /// 32-element block.
-pub const mxfp4_block_bytes: usize = 17;
+pub const mxfp4_block_bytes: usize = quant_ops.mxfp4_block_bytes;
 /// NVFP4: 8B quants + 1B scale = 9 bytes per 16-element block.
-pub const nvfp4_block_bytes: usize = 9;
+pub const nvfp4_block_bytes: usize = quant_ops.nvfp4_block_bytes;
 /// TQ1_0: 54 bytes per 256-element super-block.
 /// Layout: f16 scale (2) + qs[48] (48) + qh[4] (4) = 54.
-pub const tq1_0_block_bytes: usize = 54;
+pub const tq1_0_block_bytes: usize = quant_ops.tq1_0_block_bytes;
 /// TQ2_0: 66 bytes per 256-element super-block (f16 scale + 64 bytes data).
-pub const tq2_0_block_bytes: usize = 66;
+pub const tq2_0_block_bytes: usize = quant_ops.tq2_0_block_bytes;
 /// IQ3_XXS: 98 bytes per 256-element super-block.
-pub const iq3_xxs_block_bytes: usize = 98;
+pub const iq3_xxs_block_bytes: usize = quant_ops.iq3_xxs_block_bytes;
 /// IQ3_S: 110 bytes per 256-element super-block.
-pub const iq3_s_block_bytes: usize = 110;
+pub const iq3_s_block_bytes: usize = quant_ops.iq3_s_block_bytes;
 /// IQ2_XXS: 66 bytes per 256-element super-block.
-pub const iq2_xxs_block_bytes: usize = 66;
+pub const iq2_xxs_block_bytes: usize = quant_ops.iq2_xxs_block_bytes;
 /// IQ2_XS: 74 bytes per 256-element super-block.
-pub const iq2_xs_block_bytes: usize = 74;
+pub const iq2_xs_block_bytes: usize = quant_ops.iq2_xs_block_bytes;
 /// IQ2_S: 82 bytes per 256-element super-block.
-pub const iq2_s_block_bytes: usize = 82;
+pub const iq2_s_block_bytes: usize = quant_ops.iq2_s_block_bytes;
 /// IQ1_S: 50 bytes per 256-element super-block.
-pub const iq1_s_block_bytes: usize = 50;
+pub const iq1_s_block_bytes: usize = quant_ops.iq1_s_block_bytes;
 /// IQ1_M: 56 bytes per 256-element super-block.
-pub const iq1_m_block_bytes: usize = 56;
+pub const iq1_m_block_bytes: usize = quant_ops.iq1_m_block_bytes;
 
 /// Compute raw byte size of a weight matrix [n, k] for a given dtype.
 /// Used by GPU backends to determine upload buffer sizes. Accounts for
@@ -380,37 +372,10 @@ pub fn weightBytes(dtype: DType, n: usize, k: usize) usize {
 
 /// Row stride in bytes for a given dtype and column count.
 /// Used by parallel GEMV and TP sharding to compute per-row offsets.
-pub fn gemvRowBytes(dtype: DType, k: usize) usize {
-    const nb = (std.math.add(usize, k, quant_block_elems - 1) catch std.math.maxInt(usize)) / quant_block_elems;
-    const nsb = (std.math.add(usize, k, quant_super_block_elems - 1) catch std.math.maxInt(usize)) / quant_super_block_elems;
-    const nvb = (std.math.add(usize, k, nvfp4_block_elems - 1) catch std.math.maxInt(usize)) / nvfp4_block_elems;
-    return switch (dtype) {
-        .q4_0 => std.math.mul(usize, nb, q4_0_block_bytes) catch std.math.maxInt(usize),
-        .q4_1 => std.math.mul(usize, nb, q4_1_block_bytes) catch std.math.maxInt(usize),
-        .q5_0 => std.math.mul(usize, nb, q5_0_block_bytes) catch std.math.maxInt(usize),
-        .q8_0 => std.math.mul(usize, nb, q8_0_block_bytes) catch std.math.maxInt(usize),
-        .q2_k => std.math.mul(usize, nsb, q2_k_block_bytes) catch std.math.maxInt(usize),
-        .q3_k => std.math.mul(usize, nsb, q3_k_block_bytes) catch std.math.maxInt(usize),
-        .q4_k => std.math.mul(usize, nsb, q4_k_block_bytes) catch std.math.maxInt(usize),
-        .q5_k => std.math.mul(usize, nsb, q5_k_block_bytes) catch std.math.maxInt(usize),
-        .q6_k => std.math.mul(usize, nsb, q6_k_block_bytes) catch std.math.maxInt(usize),
-        .iq4_nl => std.math.mul(usize, nb, iq4_nl_block_bytes) catch std.math.maxInt(usize),
-        .iq4_xs => std.math.mul(usize, nsb, iq4_xs_block_bytes) catch std.math.maxInt(usize),
-        .iq3_xxs => std.math.mul(usize, nsb, iq3_xxs_block_bytes) catch std.math.maxInt(usize),
-        .iq3_s => std.math.mul(usize, nsb, iq3_s_block_bytes) catch std.math.maxInt(usize),
-        .iq2_xxs => std.math.mul(usize, nsb, iq2_xxs_block_bytes) catch std.math.maxInt(usize),
-        .iq2_xs => std.math.mul(usize, nsb, iq2_xs_block_bytes) catch std.math.maxInt(usize),
-        .iq2_s => std.math.mul(usize, nsb, iq2_s_block_bytes) catch std.math.maxInt(usize),
-        .iq1_s => std.math.mul(usize, nsb, iq1_s_block_bytes) catch std.math.maxInt(usize),
-        .iq1_m => std.math.mul(usize, nsb, iq1_m_block_bytes) catch std.math.maxInt(usize),
-        .mxfp4 => std.math.mul(usize, nb, mxfp4_block_bytes) catch std.math.maxInt(usize),
-        .nvfp4 => std.math.mul(usize, nvb, nvfp4_block_bytes) catch std.math.maxInt(usize),
-        .f16, .bf16 => std.math.mul(usize, k, f16_elem_bytes) catch std.math.maxInt(usize),
-        .f32 => std.math.mul(usize, k, f32_elem_bytes) catch std.math.maxInt(usize),
-        .fp8_e4m3, .fp8_e5m2 => k,
-        .tq1_0, .tq2_0, .mlx_q, .gptq, .awq, .hqq, .unknown => 0,
-    };
-}
+/// Canonical implementation in `ops/quant.zig` beside the block layouts it
+/// reads, so `kernels/cpu/gemv.zig` can re-export it without importing this
+/// dispatcher.
+pub const gemvRowBytes = quant_ops.gemvRowBytes;
 
 /// Placeholder for backends disabled at build time.
 /// The tagged union variant exists but can never be instantiated.

@@ -3,20 +3,19 @@
 
 const std = @import("std");
 const quant = @import("../../../ops/quant.zig");
-const backend_mod = @import("../../backend.zig");
-const DType = backend_mod.DType;
+const DType = @import("../../../format/dtype.zig").DType;
 
-// Canonical block size constants (from backend.zig).
-const quant_block_elems = backend_mod.quant_block_elems;
-const quant_super_block_elems = backend_mod.quant_super_block_elems;
-const q4_0_block_bytes = backend_mod.q4_0_block_bytes;
-const iq4_nl_block_bytes = backend_mod.iq4_nl_block_bytes;
-const q5_0_block_bytes = backend_mod.q5_0_block_bytes;
-const q8_0_block_bytes = backend_mod.q8_0_block_bytes;
-const q6_k_block_bytes = backend_mod.q6_k_block_bytes;
-const q4_k_block_bytes = backend_mod.q4_k_block_bytes;
-const q5_k_block_bytes = backend_mod.q5_k_block_bytes;
-const mxfp4_block_bytes = backend_mod.mxfp4_block_bytes;
+// Canonical block size constants (from ops/quant.zig).
+const quant_block_elems = quant.quant_block_elems;
+const quant_super_block_elems = quant.quant_super_block_elems;
+const q4_0_block_bytes = quant.q4_0_block_bytes;
+const iq4_nl_block_bytes = quant.iq4_nl_block_bytes;
+const q5_0_block_bytes = quant.q5_0_block_bytes;
+const q8_0_block_bytes = quant.q8_0_block_bytes;
+const q6_k_block_bytes = quant.q6_k_block_bytes;
+const q4_k_block_bytes = quant.q4_k_block_bytes;
+const q5_k_block_bytes = quant.q5_k_block_bytes;
+const mxfp4_block_bytes = quant.mxfp4_block_bytes;
 
 // Q6_K block layout constants (210-byte super-block).
 const q6_k_ql_chunk_bytes: usize = 64;

@@ -4,7 +4,7 @@
 //! 4-row batching with V8 SIMD for x-vector cache reuse.
 
 const std = @import("std");
-const backend_mod = @import("../../backend.zig");
+const quant = @import("../../../ops/quant.zig");
 const sparsity = @import("activation_sparsity.zig");
 const prefetch = @import("prefetch.zig");
 const V8 = @Vector(8, f32);
@@ -19,8 +19,8 @@ const q4_bias: V8i16 = @splat(q4_0_dequant_bias);
 
 /// Q4_0 GEMV: y = W @ x. 4-row batched with V8 SIMD for x-vector cache reuse.
 pub fn gemvQ4_0(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize) void {
-    const bpb = backend_mod.q4_0_block_bytes;
-    const qk = backend_mod.quant_block_elems;
+    const bpb = quant.q4_0_block_bytes;
+    const qk = quant.quant_block_elems;
     const nb = (k + qk - 1) / qk;
     const row_bytes = nb * bpb;
 
@@ -164,7 +164,7 @@ pub fn gemvQ4_0(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize) 
 test "gemvQ4_0 all zeros (nibble 8 bias cancels)" {
     // Q4_0: nibble value 8 → dequantized = 8 - 8 = 0.
     // 4 rows, k=32, scale=1.0, all nibbles=8 → all weights=0 → y = 0.
-    const bpb = backend_mod.q4_0_block_bytes; // 18
+    const bpb = quant.q4_0_block_bytes; // 18
     var w: [4 * bpb]u8 = undefined;
     for (0..4) |r| {
         const base = r * bpb;
@@ -185,7 +185,7 @@ test "gemvQ4_0 uniform positive weights" {
     // Q4_0: nibble value 9 → dequantized = 9 - 8 = 1.
     // 4 rows, k=32, scale=1.0, all nibbles=9 → all weights=1.
     // x = all 1.0 → each y[i] = 1.0 * 32 * 1 = 32.0
-    const bpb = backend_mod.q4_0_block_bytes;
+    const bpb = quant.q4_0_block_bytes;
     var w: [4 * bpb]u8 = undefined;
     for (0..4) |r| {
         const base = r * bpb;
@@ -205,7 +205,7 @@ test "gemvQ4_0 negative weights" {
     // Q4_0: nibble value 5 → dequantized = 5 - 8 = -3.
     // 2 rows, k=32, scale=1.0, all nibbles=5 → all weights=-3.
     // x = all 1.0 → each y[i] = 1.0 * 32 * (-3) = -96.0
-    const bpb = backend_mod.q4_0_block_bytes;
+    const bpb = quant.q4_0_block_bytes;
     var w: [2 * bpb]u8 = undefined;
     for (0..2) |r| {
         const base = r * bpb;
@@ -225,7 +225,7 @@ test "gemvQ4_0 single row scalar tail" {
     // n=1 exercises the single-row fallback path.
     // scale=0.5, all nibbles=10 → weight=2, x=all 1.0
     // y[0] = 0.5 * 32 * 2 = 32.0
-    const bpb = backend_mod.q4_0_block_bytes;
+    const bpb = quant.q4_0_block_bytes;
     var w: [bpb]u8 = undefined;
     // f16(0.5) = 0x3800 little-endian
     w[0] = 0x00;
@@ -242,8 +242,8 @@ test "gemvQ4_0 single row scalar tail" {
 test "fuzz: gemvQ4_0" {
     try std.testing.fuzz({}, struct {
         fn f(_: void, smith: *std.testing.Smith) !void {
-            const bpb = backend_mod.q4_0_block_bytes; // 18
-            const qk = backend_mod.quant_block_elems; // 32
+            const bpb = quant.q4_0_block_bytes; // 18
+            const qk = quant.quant_block_elems; // 32
             const n = 5;
             const k = qk; // one block per row
             var x: [k]f32 = undefined;

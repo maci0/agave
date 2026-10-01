@@ -40,6 +40,98 @@ const iq4_xs_block_elems: usize = 256;
 /// IQ4_XS sub-scale unit: (s - 32) is mapped through this factor (1/16).
 const iq4_xs_scale_unit: f32 = 0.0625;
 
+// ── Block layout constants ─────────────────────────────────────────
+// Canonical home for the on-disk byte layout of every quantized format.
+// Leaf module: the CPU GEMV kernels import these directly instead of
+// `backend/backend.zig`, which would pull every GPU backend into each
+// kernel file and close a 19-module import cycle. `backend.zig`
+// re-exports them unchanged, so `backend_mod.q4_k_block_bytes` and
+// `quant.q4_k_block_bytes` name the same value.
+
+/// Elements per large quantization super-block (Q2_K … Q6_K, IQ*, TQ*).
+pub const quant_super_block_elems: usize = 256;
+/// Elements per NVFP4 block (8 nibble pairs + 1 scale byte).
+pub const nvfp4_block_elems: usize = 16;
+/// Q4_1: f16 scale + f16 min + 16B quants = 20 bytes per 32-element block.
+pub const q4_1_block_bytes: usize = 20;
+/// Q5_0: f16 scale + 4B high bits + 16B quants = 22 bytes per 32-element block.
+pub const q5_0_block_bytes: usize = 22;
+/// Q2_K: 84 bytes per 256-element super-block.
+pub const q2_k_block_bytes: usize = 84;
+/// Q3_K: 110 bytes per 256-element super-block.
+pub const q3_k_block_bytes: usize = 110;
+/// Q4_K: 144 bytes per 256-element super-block.
+pub const q4_k_block_bytes: usize = 144;
+/// Q5_K: 176 bytes per 256-element super-block.
+pub const q5_k_block_bytes: usize = 176;
+/// Q6_K: 210 bytes per 256-element super-block.
+pub const q6_k_block_bytes: usize = 210;
+/// MXFP4: 16B quants (32 FP4 nibbles) + 1B shared E8M0 scale = 17 bytes per
+/// 32-element block.
+pub const mxfp4_block_bytes: usize = 17;
+/// NVFP4: 8B quants + 1B scale = 9 bytes per 16-element block.
+pub const nvfp4_block_bytes: usize = 9;
+/// TQ1_0: 54 bytes per 256-element super-block.
+/// Layout: f16 scale (2) + qs[48] (48) + qh[4] (4) = 54.
+pub const tq1_0_block_bytes: usize = 54;
+/// TQ2_0: 66 bytes per 256-element super-block (f16 scale + 64 bytes data).
+pub const tq2_0_block_bytes: usize = 66;
+/// IQ3_XXS: 98 bytes per 256-element super-block.
+pub const iq3_xxs_block_bytes: usize = 98;
+/// IQ3_S: 110 bytes per 256-element super-block.
+pub const iq3_s_block_bytes: usize = 110;
+/// IQ2_XXS: 66 bytes per 256-element super-block.
+pub const iq2_xxs_block_bytes: usize = 66;
+/// IQ2_XS: 74 bytes per 256-element super-block.
+pub const iq2_xs_block_bytes: usize = 74;
+/// IQ2_S: 82 bytes per 256-element super-block.
+pub const iq2_s_block_bytes: usize = 82;
+/// IQ1_S: 50 bytes per 256-element super-block.
+pub const iq1_s_block_bytes: usize = 50;
+/// IQ1_M: 56 bytes per 256-element super-block.
+pub const iq1_m_block_bytes: usize = 56;
+
+/// Byte size per element for non-quantized types, and per block for quantized
+/// formats. Used by weightBytes, gemvRowBytes, and model dtypeBytes.
+/// f32: 4 bytes per element.
+pub const f32_elem_bytes: usize = 4;
+/// f16 / bf16: 2 bytes per element.
+pub const f16_elem_bytes: usize = 2;
+
+/// Row stride in bytes for a given dtype and column count.
+/// Used by parallel GEMV and TP sharding to compute per-row offsets.
+pub fn gemvRowBytes(dtype: DType, k: usize) usize {
+    const nb = (std.math.add(usize, k, quant_block_elems - 1) catch std.math.maxInt(usize)) / quant_block_elems;
+    const nsb = (std.math.add(usize, k, quant_super_block_elems - 1) catch std.math.maxInt(usize)) / quant_super_block_elems;
+    const nvb = (std.math.add(usize, k, nvfp4_block_elems - 1) catch std.math.maxInt(usize)) / nvfp4_block_elems;
+    return switch (dtype) {
+        .q4_0 => std.math.mul(usize, nb, q4_0_block_bytes) catch std.math.maxInt(usize),
+        .q4_1 => std.math.mul(usize, nb, q4_1_block_bytes) catch std.math.maxInt(usize),
+        .q5_0 => std.math.mul(usize, nb, q5_0_block_bytes) catch std.math.maxInt(usize),
+        .q8_0 => std.math.mul(usize, nb, q8_0_block_bytes) catch std.math.maxInt(usize),
+        .q2_k => std.math.mul(usize, nsb, q2_k_block_bytes) catch std.math.maxInt(usize),
+        .q3_k => std.math.mul(usize, nsb, q3_k_block_bytes) catch std.math.maxInt(usize),
+        .q4_k => std.math.mul(usize, nsb, q4_k_block_bytes) catch std.math.maxInt(usize),
+        .q5_k => std.math.mul(usize, nsb, q5_k_block_bytes) catch std.math.maxInt(usize),
+        .q6_k => std.math.mul(usize, nsb, q6_k_block_bytes) catch std.math.maxInt(usize),
+        .iq4_nl => std.math.mul(usize, nb, iq4_nl_block_bytes) catch std.math.maxInt(usize),
+        .iq4_xs => std.math.mul(usize, nsb, iq4_xs_block_bytes) catch std.math.maxInt(usize),
+        .iq3_xxs => std.math.mul(usize, nsb, iq3_xxs_block_bytes) catch std.math.maxInt(usize),
+        .iq3_s => std.math.mul(usize, nsb, iq3_s_block_bytes) catch std.math.maxInt(usize),
+        .iq2_xxs => std.math.mul(usize, nsb, iq2_xxs_block_bytes) catch std.math.maxInt(usize),
+        .iq2_xs => std.math.mul(usize, nsb, iq2_xs_block_bytes) catch std.math.maxInt(usize),
+        .iq2_s => std.math.mul(usize, nsb, iq2_s_block_bytes) catch std.math.maxInt(usize),
+        .iq1_s => std.math.mul(usize, nsb, iq1_s_block_bytes) catch std.math.maxInt(usize),
+        .iq1_m => std.math.mul(usize, nsb, iq1_m_block_bytes) catch std.math.maxInt(usize),
+        .mxfp4 => std.math.mul(usize, nb, mxfp4_block_bytes) catch std.math.maxInt(usize),
+        .nvfp4 => std.math.mul(usize, nvb, nvfp4_block_bytes) catch std.math.maxInt(usize),
+        .f16, .bf16 => std.math.mul(usize, k, f16_elem_bytes) catch std.math.maxInt(usize),
+        .f32 => std.math.mul(usize, k, f32_elem_bytes) catch std.math.maxInt(usize),
+        .fp8_e4m3, .fp8_e5m2 => k,
+        .tq1_0, .tq2_0, .mlx_q, .gptq, .awq, .hqq, .unknown => 0,
+    };
+}
+
 /// Convert a BF16 value (stored as u16) to f32.
 /// BF16 shares f32's exponent range; conversion is a 16-bit left shift.
 pub inline fn bf16ToF32(val: u16) f32 {

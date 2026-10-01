@@ -4,13 +4,12 @@
 
 const std = @import("std");
 const quant = @import("../../../ops/quant.zig");
-const backend_mod = @import("../../backend.zig");
 
 /// MXFP4: 32 values per block, 17 bytes (1 E8M0 scale + 16 nibble-packed bytes)
 /// 2-row batched to share x-vector cache reads.
 pub fn gemvMXFP4(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize) void {
-    const bpb = backend_mod.mxfp4_block_bytes;
-    const qk = backend_mod.quant_block_elems;
+    const bpb = quant.mxfp4_block_bytes;
+    const qk = quant.quant_block_elems;
     const nb = (k + qk - 1) / qk;
     const row_bytes = nb * bpb;
 
@@ -101,8 +100,8 @@ pub fn gemvMXFP4(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize)
 /// Uses @Vector(4, f32) with @mulAdd for FMA accumulation on NEON/SSE.
 /// ~2× faster than scalar version on Apple Silicon (M4 Pro measured).
 pub fn gemvMXFP4_V(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize) void {
-    const bpb = backend_mod.mxfp4_block_bytes; // 17
-    const qk: usize = backend_mod.quant_block_elems; // 32
+    const bpb = quant.mxfp4_block_bytes; // 17
+    const qk: usize = quant.quant_block_elems; // 32
     const nb = (k + qk - 1) / qk;
     const row_bytes = nb * bpb;
     const half_qk = qk / 2; // 16
@@ -163,8 +162,8 @@ pub fn gemvMXFP4_V(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usiz
 /// Block layout: 1 byte FP8 scale + 8 bytes packed nibbles = 9 bytes per block.
 /// 2-row batched to share x-vector cache reads.
 pub fn gemvNVFP4(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize) void {
-    const bpb = backend_mod.nvfp4_block_bytes;
-    const qk = backend_mod.nvfp4_block_elems;
+    const bpb = quant.nvfp4_block_bytes;
+    const qk = quant.nvfp4_block_elems;
     const nb = (k + qk - 1) / qk;
     const row_bytes = nb * bpb;
 
@@ -256,7 +255,7 @@ test "gemvMXFP4 uniform weights" {
     // All nibbles=2 → mxfp4Lookup(2)=1.0. x = all 1.0.
     // MXFP4 block: 32 elements, 17 bytes (1 E8M0 scale + 16 nibble-packed bytes).
     // y[i] = 1.0 * 32 * 1.0 = 32.0
-    const bpb = backend_mod.mxfp4_block_bytes; // 17
+    const bpb = quant.mxfp4_block_bytes; // 17
     var w: [2 * bpb]u8 = undefined;
     for (0..2) |r| {
         const base = r * bpb;
@@ -273,7 +272,7 @@ test "gemvMXFP4 uniform weights" {
 test "gemvMXFP4 scale factor" {
     // 1x32. E8M0 scale=128 → 2^1 = 2.0. nibbles=1 → mxfp4Lookup(1)=0.5.
     // y = 2.0 * 32 * 0.5 = 32.0
-    const bpb = backend_mod.mxfp4_block_bytes;
+    const bpb = quant.mxfp4_block_bytes;
     var w: [bpb]u8 = undefined;
     w[0] = 128; // e8m0(128) = 2.0
     for (1..17) |i| w[i] = 0x11; // lo=1 (0.5), hi=1 (0.5)
@@ -287,7 +286,7 @@ test "gemvMXFP4 scale factor" {
 test "gemvNVFP4 uniform weights" {
     // 1x16 NVFP4: FP8 E4M3 scale=0x38 (1.0), nibbles=2 (1.0).
     // y = 1.0 * 16 * 1.0 = 16.0
-    const bpb = backend_mod.nvfp4_block_bytes; // 9
+    const bpb = quant.nvfp4_block_bytes; // 9
     var w: [bpb]u8 = undefined;
     w[0] = 0x38; // FP8 E4M3 1.0
     for (1..9) |i| w[i] = 0x22; // lo=2, hi=2
@@ -300,7 +299,7 @@ test "gemvNVFP4 uniform weights" {
 
 test "gemvNVFP4 multiple rows" {
     // 3x16 NVFP4: verify multi-row produces independent results.
-    const bpb = backend_mod.nvfp4_block_bytes;
+    const bpb = quant.nvfp4_block_bytes;
     var w: [3 * bpb]u8 = undefined;
     for (0..3) |r| {
         const base = r * bpb;
@@ -320,7 +319,7 @@ test "gemvNVFP4 multiple rows" {
 test "gemvNVFP4 varying x" {
     // Verify correct element-to-weight correspondence with non-uniform x.
     // 1x16 NVFP4: all weights=1.0, x[i] = i+1 → y = sum(1..16) = 136.
-    const bpb = backend_mod.nvfp4_block_bytes;
+    const bpb = quant.nvfp4_block_bytes;
     var w: [bpb]u8 = undefined;
     w[0] = 0x38; // FP8 E4M3 1.0
     for (1..9) |i| w[i] = 0x22; // all nibbles=2 → 1.0
@@ -335,7 +334,7 @@ test "gemvNVFP4 varying x" {
 test "gemvMXFP4 varying x" {
     // Verify correct element-to-weight correspondence with non-uniform x.
     // 1x32 MXFP4: all weights=1.0, x[i] = i+1 → y = sum(1..32) = 528.
-    const bpb = backend_mod.mxfp4_block_bytes;
+    const bpb = quant.mxfp4_block_bytes;
     var w: [bpb]u8 = undefined;
     w[0] = 127; // e8m0(127) = 1.0
     for (1..17) |i| w[i] = 0x22; // all nibbles=2 → 1.0
@@ -352,8 +351,8 @@ test "fuzz: gemvMXFP4 gemvNVFP4" {
         fn f(_: void, smith: *std.testing.Smith) !void {
             // -- MXFP4: 2 rows, k=32 --
             {
-                const bpb = backend_mod.mxfp4_block_bytes; // 17
-                const qk = backend_mod.quant_block_elems; // 32
+                const bpb = quant.mxfp4_block_bytes; // 17
+                const qk = quant.quant_block_elems; // 32
                 const n = 2;
                 var x: [qk]f32 = undefined;
                 var w: [n * bpb]u8 = undefined;
@@ -371,8 +370,8 @@ test "fuzz: gemvMXFP4 gemvNVFP4" {
 
             // -- NVFP4: 3 rows, k=16 --
             {
-                const bpb = backend_mod.nvfp4_block_bytes; // 9
-                const qk = backend_mod.nvfp4_block_elems; // 16
+                const bpb = quant.nvfp4_block_bytes; // 9
+                const qk = quant.nvfp4_block_elems; // 16
                 const n = 3;
                 var x: [qk]f32 = undefined;
                 var w: [n * bpb]u8 = undefined;

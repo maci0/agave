@@ -2,7 +2,7 @@
 //! Q4_1, Q5_0, Q2_K, Q3_K, scalar implementations with 2-row batching.
 
 const std = @import("std");
-const backend_mod = @import("../../backend.zig");
+const quant = @import("../../../ops/quant.zig");
 const sparsity = @import("activation_sparsity.zig");
 
 /// Q5_0 dequant bias: 5-bit unsigned [0..31] centered to signed [-16..15].
@@ -19,8 +19,8 @@ const q3_k_lo_mask: u8 = 0x03;
 /// Q4_1: 32 values per block, 20 bytes (f16 scale + f16 min + 16 nibble-packed bytes)
 /// 2-row batched to share x-vector cache reads.
 pub fn gemvQ4_1(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize) void {
-    const bpb = backend_mod.q4_1_block_bytes;
-    const qk = backend_mod.quant_block_elems;
+    const bpb = quant.q4_1_block_bytes;
+    const qk = quant.quant_block_elems;
     const nb = (k + qk - 1) / qk;
     const row_bytes = nb * bpb;
 
@@ -113,8 +113,8 @@ pub fn gemvQ4_1(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize) 
 /// Q5_0: 32 values per block, 22 bytes (f16 scale + 4 bytes qh + 16 nibble-packed bytes)
 /// 2-row batched to share x-vector cache reads.
 pub fn gemvQ5_0(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize) void {
-    const bpb = backend_mod.q5_0_block_bytes;
-    const qk = backend_mod.quant_block_elems;
+    const bpb = quant.q5_0_block_bytes;
+    const qk = quant.quant_block_elems;
     const nb = (k + qk - 1) / qk;
     const row_bytes = nb * bpb;
 
@@ -238,8 +238,8 @@ pub fn gemvQ5_0(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize) 
 /// Layout: scales[16] + qs[64] + d(f16) + dmin(f16)
 /// 2-row batched to share x-vector cache reads.
 pub fn gemvQ2_K(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize) void {
-    const bpb = backend_mod.q2_k_block_bytes;
-    const bs = backend_mod.quant_super_block_elems;
+    const bpb = quant.q2_k_block_bytes;
+    const bs = quant.quant_super_block_elems;
     const nb = (k + bs - 1) / bs;
     const row_bytes = nb * bpb;
 
@@ -369,8 +369,8 @@ pub fn gemvQ2_K(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize) 
 /// Layout: hmask[32] + qs[64] + scales[12] + d(f16)
 /// 2-row batched to share x-vector cache reads.
 pub fn gemvQ3_K(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize) void {
-    const bpb = backend_mod.q3_k_block_bytes;
-    const bs = backend_mod.quant_super_block_elems;
+    const bpb = quant.q3_k_block_bytes;
+    const bs = quant.quant_super_block_elems;
     const nb = (k + bs - 1) / bs;
     const row_bytes = nb * bpb;
 
@@ -558,7 +558,7 @@ pub fn gemvQ3_K(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize) 
 
 test "gemvQ4_1 all zeros" {
     // Q4_1: weight = nibble * d + m. With nibble=0, d=1.0, m=0.0 → weight=0.
-    const bpb = backend_mod.q4_1_block_bytes; // 20
+    const bpb = quant.q4_1_block_bytes; // 20
     var w: [2 * bpb]u8 = undefined;
     for (0..2) |r| {
         const base = r * bpb;
@@ -581,7 +581,7 @@ test "gemvQ4_1 all zeros" {
 test "gemvQ4_1 uniform with min offset" {
     // nibble=1, d=1.0, m=0.5 → weight = 1*1.0 + 0.5 = 1.5.
     // x=all 1.0 → y = 32 * 1.5 = 48.0
-    const bpb = backend_mod.q4_1_block_bytes;
+    const bpb = quant.q4_1_block_bytes;
     var w: [bpb]u8 = undefined;
     // d = f16(1.0)
     w[0] = 0x00;
@@ -601,7 +601,7 @@ test "gemvQ4_1 uniform with min offset" {
 test "gemvQ5_0 all zeros" {
     // Q5_0: value = (lo4 | (hi_bit << 4)) - 16. Value = 16 → 16-16=0.
     // lo4=0, hi_bit=1 → nibble=0, qh bit set → value = (0|16)-16 = 0.
-    const bpb = backend_mod.q5_0_block_bytes; // 22
+    const bpb = quant.q5_0_block_bytes; // 22
     var w: [2 * bpb]u8 = undefined;
     for (0..2) |r| {
         const base = r * bpb;
@@ -625,7 +625,7 @@ test "gemvQ5_0 all zeros" {
 
 test "gemvQ5_0 uniform positive" {
     // lo4=1, hi_bit=1 → value = (1|16)-16 = 1. d=1.0, x=all 1.0 → y=32.
-    const bpb = backend_mod.q5_0_block_bytes;
+    const bpb = quant.q5_0_block_bytes;
     var w: [bpb]u8 = undefined;
     // d = f16(1.0)
     w[0] = 0x00;
@@ -647,8 +647,8 @@ test "gemvQ5_0 uniform positive" {
 test "gemvQ2_K all zeros" {
     // Q2_K: weight = d * sc * q - dmin * m.
     // With q=0, dmin=0 → weight = 0.
-    const bpb = backend_mod.q2_k_block_bytes; // 84
-    const bs = backend_mod.quant_super_block_elems; // 256
+    const bpb = quant.q2_k_block_bytes; // 84
+    const bs = quant.quant_super_block_elems; // 256
     var w: [bpb]u8 = undefined;
     @memset(&w, 0);
     // d = f16(1.0) at offset 80
@@ -666,8 +666,8 @@ test "gemvQ2_K all zeros" {
 test "gemvQ2_K uniform positive" {
     // q=1 (all 2-bit values = 1), sc=1 (lo nibble), m=0 (hi nibble), d=1.0, dmin=0.
     // weight = 1.0 * 1 * 1 - 0 = 1.0. y = 256 * 1.0 = 256.0
-    const bpb = backend_mod.q2_k_block_bytes;
-    const bs = backend_mod.quant_super_block_elems;
+    const bpb = quant.q2_k_block_bytes;
+    const bs = quant.quant_super_block_elems;
     var w: [bpb]u8 = undefined;
     @memset(&w, 0);
     // scales[0..16]: lo nibble=1 (sc), hi nibble=0 (m) → byte=0x01
@@ -687,8 +687,8 @@ test "gemvQ2_K uniform positive" {
 
 test "gemvQ3_K zero scale produces zero output" {
     // d=0.0 → all weights zero.
-    const bpb = backend_mod.q3_k_block_bytes; // 110
-    const bs = backend_mod.quant_super_block_elems;
+    const bpb = quant.q3_k_block_bytes; // 110
+    const bs = quant.quant_super_block_elems;
     var w: [bpb]u8 = undefined;
     @memset(&w, 0);
     // d = f16(0.0) at offset 108, already 0
@@ -708,8 +708,8 @@ test "gemvQ3_K uniform positive" {
     // q3 = (1 | (1<<2)) - 4 = 5 - 4 = 1.
     // raw_scales: lo nibble=9, hi nibble=9 → scales[j] = 9-8 = 1.
     // d=1.0 → weight = 1.0 * 1 * 1 = 1.0. y = 256 * 1.0 = 256.0
-    const bpb = backend_mod.q3_k_block_bytes;
-    const bs = backend_mod.quant_super_block_elems;
+    const bpb = quant.q3_k_block_bytes;
+    const bs = quant.quant_super_block_elems;
     var w: [bpb]u8 = undefined;
     @memset(&w, 0);
     // hmask[0..32]: all bits set → q_hi=1
@@ -740,8 +740,8 @@ test "gemvQ3_K scale mapping matches ggml's aux shuffle" {
     // raw[9] = 3 with every other scale byte zero puts the only nonzero high-bit
     // pair on group 1 under ggml (byte 9 means j % 4 == 1, shift 0 means j < 4),
     // and on group 4 under the swapped reading (byte 9 means j / 4 == 1).
-    const bpb = backend_mod.q3_k_block_bytes;
-    const bs = backend_mod.quant_super_block_elems;
+    const bpb = quant.q3_k_block_bytes;
+    const bs = quant.quant_super_block_elems;
     var w: [bpb]u8 = @splat(0);
     for (0..32) |i| w[i] = 0xFF; // hmask all set -> q_hi = 1
     for (32..96) |i| w[i] = 0x55; // qs: q_lo = 1 for every element
@@ -782,8 +782,8 @@ test "fuzz: gemvQ4_1 gemvQ5_0 gemvQ2_K gemvQ3_K" {
 
             // -- Q4_1: 2 rows, k=32 --
             {
-                const bpb = backend_mod.q4_1_block_bytes; // 20
-                const qk = backend_mod.quant_block_elems; // 32
+                const bpb = quant.q4_1_block_bytes; // 20
+                const qk = quant.quant_block_elems; // 32
                 const n = 2;
                 var x: [qk]f32 = undefined;
                 var w: [n * bpb]u8 = undefined;
@@ -805,8 +805,8 @@ test "fuzz: gemvQ4_1 gemvQ5_0 gemvQ2_K gemvQ3_K" {
 
             // -- Q5_0: 2 rows, k=32 --
             {
-                const bpb = backend_mod.q5_0_block_bytes; // 22
-                const qk = backend_mod.quant_block_elems;
+                const bpb = quant.q5_0_block_bytes; // 22
+                const qk = quant.quant_block_elems;
                 const n = 2;
                 var x: [qk]f32 = undefined;
                 var w: [n * bpb]u8 = undefined;
@@ -825,8 +825,8 @@ test "fuzz: gemvQ4_1 gemvQ5_0 gemvQ2_K gemvQ3_K" {
 
             // -- Q2_K: 2 rows, k=256 --
             {
-                const bpb = backend_mod.q2_k_block_bytes; // 84
-                const bs = backend_mod.quant_super_block_elems; // 256
+                const bpb = quant.q2_k_block_bytes; // 84
+                const bs = quant.quant_super_block_elems; // 256
                 const n = 2;
                 var x: [bs]f32 = undefined;
                 var w: [n * bpb]u8 = undefined;
@@ -848,8 +848,8 @@ test "fuzz: gemvQ4_1 gemvQ5_0 gemvQ2_K gemvQ3_K" {
 
             // -- Q3_K: 2 rows, k=256 --
             {
-                const bpb = backend_mod.q3_k_block_bytes; // 110
-                const bs = backend_mod.quant_super_block_elems;
+                const bpb = quant.q3_k_block_bytes; // 110
+                const bs = quant.quant_super_block_elems;
                 const n = 2;
                 var x: [bs]f32 = undefined;
                 var w: [n * bpb]u8 = undefined;

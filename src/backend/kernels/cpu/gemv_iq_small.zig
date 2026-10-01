@@ -4,7 +4,7 @@
 //! IQ2_XS, IQ2_S, IQ3_S, IQ1_S, IQ1_M use scale-only approximations.
 
 const std = @import("std");
-const backend_mod = @import("../../backend.zig");
+const quant = @import("../../../ops/quant.zig");
 const sparsity = @import("activation_sparsity.zig");
 
 inline fn readF16LE(data: [*]const u8, off: usize) f32 {
@@ -166,7 +166,7 @@ inline fn simdGroup8(x_ptr: [*]const f32, g: u64, sb: u8, dl: f32) f32 {
 
 /// CPU GEMV for IQ2_XXS quantization (2.06 bits/weight).
 pub fn gemvIQ2_XXS(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize) void {
-    const bpb = backend_mod.iq2_xxs_block_bytes;
+    const bpb = quant.iq2_xxs_block_bytes;
     const qk: usize = 256;
     const nsb = (k + qk - 1) / qk;
     const row_bytes = nsb * bpb;
@@ -235,7 +235,7 @@ pub fn gemvIQ2_XXS(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usiz
 //   gas[0..3] = uint32 aux: bits 28-31=sub-scale(0-15), bits 0-27=4×7-bit ksigns indices
 /// CPU GEMV for IQ3_XXS quantization (3.06 bits/weight).
 pub fn gemvIQ3_XXS(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize) void {
-    const bpb = backend_mod.iq3_xxs_block_bytes;
+    const bpb = quant.iq3_xxs_block_bytes;
     const qk: usize = 256;
     const nsb = (k + qk - 1) / qk;
     const row_bytes = nsb * bpb;
@@ -443,7 +443,7 @@ const ksigns_iq2xs = [128]u8{
 
 /// CPU GEMV for IQ2_XS quantization (2.31 bits/weight).
 pub fn gemvIQ2_XS(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize) void {
-    const bpb = backend_mod.iq2_xs_block_bytes; // 74
+    const bpb = quant.iq2_xs_block_bytes; // 74
     const qk: usize = 256;
     const nsb = (k + qk - 1) / qk;
     const row_bytes = nsb * bpb;
@@ -566,7 +566,7 @@ const iq3s_grid = [512]u32{
 //   Sign: signs[4*ib32+l] bit j/j+4 for grid1[j]/grid2[j]
 /// CPU GEMV for IQ3_S quantization (3.44 bits/weight).
 pub fn gemvIQ3_S(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize) void {
-    const bpb = backend_mod.iq3_s_block_bytes; // 110
+    const bpb = quant.iq3_s_block_bytes; // 110
     const qk: usize = 256;
     const nsb = (k + qk - 1) / qk;
     const row_bytes = nsb * bpb;
@@ -895,7 +895,7 @@ const iq2s_grid = [1024]u64{
 //   signs = qs[32+4*ib32+l], bit j → sign for element j in group
 /// CPU GEMV for IQ2_S quantization (2.5 bits/weight).
 pub fn gemvIQ2_S(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize) void {
-    const bpb = backend_mod.iq2_s_block_bytes; // 82
+    const bpb = quant.iq2_s_block_bytes; // 82
     const qk: usize = 256;
     const nsb = (k + qk - 1) / qk;
     const row_bytes = nsb * bpb;
@@ -971,7 +971,7 @@ fn gemvStub(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize, bpb:
 
 test "gemvIQ2_XXS scale-zero produces zero output" {
     // d=0 in f16 → dl=0 → GEMV output must be 0 regardless of other bits.
-    var block = [_]u8{0} ** backend_mod.iq2_xxs_block_bytes; // d=0, all else 0
+    var block = [_]u8{0} ** quant.iq2_xxs_block_bytes; // d=0, all else 0
     var x = [_]f32{1.0} ** 256;
     var y = [_]f32{0.0};
     gemvIQ2_XXS(&x, &block, &y, 1, 256);
@@ -983,7 +983,7 @@ test "gemvIQ2_XXS all-same-grid positive signs" {
     // aux = 0: sub_scale=0, all sign_idx=0 → ksigns_iq2xs[0]=0 → all positive.
     // dl = 1.0 * (0.5 + 0) * 0.25 = 0.125. Each element = 0.125 * 8 = 1.0.
     // x = all-ones[256], 1 row. Expected: sum = 256 * 1.0 * 1.0 = 256.0.
-    var block = [_]u8{0} ** backend_mod.iq2_xxs_block_bytes;
+    var block = [_]u8{0} ** quant.iq2_xxs_block_bytes;
     // Write f16(1.0) = 0x3C00 at byte 0 (little-endian).
     block[0] = 0x00;
     block[1] = 0x3C;
@@ -995,7 +995,7 @@ test "gemvIQ2_XXS all-same-grid positive signs" {
 }
 
 test "gemvIQ3_XXS scale-zero produces zero output" {
-    var block = [_]u8{0} ** backend_mod.iq3_xxs_block_bytes;
+    var block = [_]u8{0} ** quant.iq3_xxs_block_bytes;
     var x = [_]f32{1.0} ** 256;
     var y = [_]f32{0.0};
     gemvIQ3_XXS(&x, &block, &y, 1, 256);
@@ -1003,7 +1003,7 @@ test "gemvIQ3_XXS scale-zero produces zero output" {
 }
 
 test "gemvIQ3_S scale-zero produces zero output" {
-    var block = [_]u8{0} ** backend_mod.iq3_s_block_bytes;
+    var block = [_]u8{0} ** quant.iq3_s_block_bytes;
     var x = [_]f32{1.0} ** 256;
     var y = [_]f32{0.0};
     gemvIQ3_S(&x, &block, &y, 1, 256);
@@ -1012,7 +1012,7 @@ test "gemvIQ3_S scale-zero produces zero output" {
 
 test "gemvIQ2_XS scale-zero produces zero output" {
     // align(2) required because gemvIQ2_XS casts bp+2 to [*]const u16.
-    var block align(2) = [_]u8{0} ** backend_mod.iq2_xs_block_bytes;
+    var block align(2) = [_]u8{0} ** quant.iq2_xs_block_bytes;
     var x = [_]f32{1.0} ** 256;
     var y = [_]f32{0.0};
     gemvIQ2_XS(&x, &block, &y, 1, 256);
@@ -1020,7 +1020,7 @@ test "gemvIQ2_XS scale-zero produces zero output" {
 }
 
 test "gemvIQ2_S scale-zero produces zero output" {
-    var block = [_]u8{0} ** backend_mod.iq2_s_block_bytes;
+    var block = [_]u8{0} ** quant.iq2_s_block_bytes;
     var x = [_]f32{1.0} ** 256;
     var y = [_]f32{0.0};
     gemvIQ2_S(&x, &block, &y, 1, 256);
@@ -1036,7 +1036,7 @@ test "gemvIQ2_XXS ksigns_iq2xs lookup distinguishes from direct-bit extraction" 
     //   dl = 0.125.  Group 0: g0 all-neg → -8×1.0 = -8, g1+g2+g3 all-pos → +24.  Sum = 16.
     //   Groups 1..7: aux=0 → all positive. Each = 32×1.0. Total: 7×32 = 224.
     //   Expected total: 16 + 224 = 240.  Old code gives 18+224=242 (bit-7 of g0 wrong).
-    var block = [_]u8{0} ** backend_mod.iq2_xxs_block_bytes;
+    var block = [_]u8{0} ** quant.iq2_xxs_block_bytes;
     block[0] = 0x00;
     block[1] = 0x3C; // f16(1.0)
     // Group 0 aux at bytes 6..9: lower 7 bits = 0x7F, rest 0.
@@ -1060,7 +1060,7 @@ test "gemvIQ3_S split qs layout: grid1 from qs[l], grid2 from qs[l+4]" {
     //   l=0 grid2=[1,1,1,1]×x[4..7]=[100,1,1,1] → 103.
     //   l=0: 4+103=107.  l=2 grid1=iq3s_grid[qs[4]]=iq3s_grid[3]=[11,1,1,1]×x[16..19]=0 → 0.
     //   Sub-block 0 old: 107. Total: 107.  1107 ≠ 107 → test catches the bug.
-    var block = [_]u8{0} ** backend_mod.iq3_s_block_bytes;
+    var block = [_]u8{0} ** quant.iq3_s_block_bytes;
     block[0] = 0x00;
     block[1] = 0x3C; // f16(1.0)
     block[6] = 3; // qs[4] = 3 → iq3s_grid[3] (byte offset: 2 + 4 = 6)
@@ -1099,7 +1099,7 @@ test "gemvIQ3_XXS ksigns_iq2xs lookup: sign_idx=1 gives 0b10000001 not 0b0000000
     // Group 0 total: 28.0.  Groups 1..7 (aux=0 → all positive): 7×32 = 224.0.
     // Grand total: 252.0.
     // Old code (direct bits, signs=1): only element 0 negative → group 0 = 30. Total = 254. DIFFERENT.
-    var block = [_]u8{0} ** backend_mod.iq3_xxs_block_bytes;
+    var block = [_]u8{0} ** quant.iq3_xxs_block_bytes;
     block[0] = 0x00;
     block[1] = 0x3C; // f16(1.0)
     // qs[0..7] = 0 (all groups use iq3xxs_grid[0])
@@ -1133,7 +1133,7 @@ test "fuzz: all IQ2/IQ3 GEMV functions produce finite output" {
 
             // IQ2_XXS
             {
-                var w: [backend_mod.iq2_xxs_block_bytes]u8 = undefined;
+                var w: [quant.iq2_xxs_block_bytes]u8 = undefined;
                 smith.bytesWithHash(&w, 1);
                 clampF16(&w, 0);
                 var y: [1]f32 = undefined;
@@ -1142,7 +1142,7 @@ test "fuzz: all IQ2/IQ3 GEMV functions produce finite output" {
             }
             // IQ3_XXS
             {
-                var w: [backend_mod.iq3_xxs_block_bytes]u8 = undefined;
+                var w: [quant.iq3_xxs_block_bytes]u8 = undefined;
                 smith.bytesWithHash(&w, 2);
                 clampF16(&w, 0);
                 var y: [1]f32 = undefined;
@@ -1151,7 +1151,7 @@ test "fuzz: all IQ2/IQ3 GEMV functions produce finite output" {
             }
             // IQ2_XS
             {
-                var w: [backend_mod.iq2_xs_block_bytes]u8 align(2) = undefined;
+                var w: [quant.iq2_xs_block_bytes]u8 align(2) = undefined;
                 smith.bytesWithHash(&w, 3);
                 clampF16(&w, 0);
                 var y: [1]f32 = undefined;
@@ -1160,7 +1160,7 @@ test "fuzz: all IQ2/IQ3 GEMV functions produce finite output" {
             }
             // IQ3_S
             {
-                var w: [backend_mod.iq3_s_block_bytes]u8 = undefined;
+                var w: [quant.iq3_s_block_bytes]u8 = undefined;
                 smith.bytesWithHash(&w, 4);
                 clampF16(&w, 0);
                 var y: [1]f32 = undefined;
@@ -1169,7 +1169,7 @@ test "fuzz: all IQ2/IQ3 GEMV functions produce finite output" {
             }
             // IQ2_S
             {
-                var w: [backend_mod.iq2_s_block_bytes]u8 = undefined;
+                var w: [quant.iq2_s_block_bytes]u8 = undefined;
                 smith.bytesWithHash(&w, 5);
                 clampF16(&w, 0);
                 var y: [1]f32 = undefined;
@@ -1182,9 +1182,9 @@ test "fuzz: all IQ2/IQ3 GEMV functions produce finite output" {
 
 /// CPU GEMV for IQ1_S quantization (1.56 bits/weight).
 pub fn gemvIQ1_S(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize) void {
-    gemvStub(x, w, y, n, k, backend_mod.iq1_s_block_bytes);
+    gemvStub(x, w, y, n, k, quant.iq1_s_block_bytes);
 }
 /// CPU GEMV for IQ1_M quantization (1.75 bits/weight).
 pub fn gemvIQ1_M(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize) void {
-    gemvStub(x, w, y, n, k, backend_mod.iq1_m_block_bytes);
+    gemvStub(x, w, y, n, k, quant.iq1_m_block_bytes);
 }

@@ -3,7 +3,7 @@
 //! 4-row batching with V8 SIMD and vector byte widening.
 
 const std = @import("std");
-const backend_mod = @import("../../backend.zig");
+const quant = @import("../../../ops/quant.zig");
 const sparsity = @import("activation_sparsity.zig");
 const prefetch = @import("prefetch.zig");
 const V8 = @Vector(8, f32);
@@ -18,8 +18,8 @@ inline fn widenI8(raw: @Vector(8, u8)) V8 {
 /// Uses vector accumulators instead of per-chunk scalar reduction,
 /// deferring @reduce to once per block.
 pub fn gemvQ8_0(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize) void {
-    const bpb = backend_mod.q8_0_block_bytes;
-    const qk = backend_mod.quant_block_elems;
+    const bpb = quant.q8_0_block_bytes;
+    const qk = quant.quant_block_elems;
     const nb = (k + qk - 1) / qk;
     const row_bytes = nb * bpb;
 
@@ -134,7 +134,7 @@ pub fn gemvQ8_0(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize) 
 test "gemvQ8_0 uniform weights" {
     // 4 rows, k=32 (one block per row). scale=1.0, all quant values = 1.
     // x = all 1.0 → each y[i] = 1.0 * 32 * 1 = 32.0
-    const bpb = backend_mod.q8_0_block_bytes; // 34
+    const bpb = quant.q8_0_block_bytes; // 34
     var w: [4 * bpb]u8 = undefined;
     for (0..4) |r| {
         const base = r * bpb;
@@ -153,7 +153,7 @@ test "gemvQ8_0 uniform weights" {
 test "gemvQ8_0 scale factor" {
     // 1 row, k=32, scale=2.0, all quant values = 3.
     // x = all 1.0 → y[0] = 2.0 * 32 * 3 = 192.0
-    const bpb = backend_mod.q8_0_block_bytes;
+    const bpb = quant.q8_0_block_bytes;
     var w: [bpb]u8 = undefined;
     // f16(2.0) = 0x4000 little-endian
     w[0] = 0x00;
@@ -169,7 +169,7 @@ test "gemvQ8_0 scale factor" {
 test "gemvQ8_0 negative quant values" {
     // 1 row, k=32, scale=1.0, quant values alternate +1/-1.
     // x = all 1.0 → y[0] = 1.0 * (16*1 + 16*(-1)) = 0.0
-    const bpb = backend_mod.q8_0_block_bytes;
+    const bpb = quant.q8_0_block_bytes;
     var w: [bpb]u8 = undefined;
     w[0] = 0x00;
     w[1] = 0x3C; // f16(1.0)
@@ -187,8 +187,8 @@ test "gemvQ8_0 negative quant values" {
 test "fuzz: gemvQ8_0" {
     try std.testing.fuzz({}, struct {
         fn f(_: void, smith: *std.testing.Smith) !void {
-            const bpb = backend_mod.q8_0_block_bytes; // 34
-            const qk = backend_mod.quant_block_elems; // 32
+            const bpb = quant.q8_0_block_bytes; // 34
+            const qk = quant.quant_block_elems; // 32
             const n = 5;
             const k = qk;
             var x: [k]f32 = undefined;

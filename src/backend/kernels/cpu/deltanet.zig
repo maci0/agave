@@ -3,9 +3,30 @@
 const std = @import("std");
 const math_ops = @import("../../../ops/math.zig");
 const ssm_ops = @import("../../../ops/ssm.zig");
-const DeltaNetParams = @import("../../backend.zig").DeltaNetParams;
 
 const V8 = @Vector(8, f32);
+
+/// Parameters for DeltaNet SSM recurrence (Qwen3.5 hybrid model).
+/// Passed to `Backend.deltaNet()` to keep the function signature manageable.
+/// Canonical definition in this kernel; `backend.zig` re-exports it so every
+/// backend keeps one spelling without importing the dispatcher downward.
+pub const DeltaNetParams = struct {
+    conv_ch: u32,
+    d_conv: u32,
+    d_inner: u32,
+    num_k_heads: u32,
+    head_k_dim: u32,
+    num_v_heads: u32,
+    head_v_dim: u32,
+    q_scale: f32,
+    rms_eps: f32,
+    /// True when conv_out split order is K,Q,V (HuggingFace/SafeTensors).
+    /// False (default) when split order is Q,K,V (GGUF/llama.cpp convention).
+    kqv_order: bool = false,
+    /// True when the RMSNormGated output uses sigmoid(z) instead of SiLU(z).
+    /// Qwen3.8-Flash-Next (qwen4exp) GDN; Qwen3.5 keeps the default SiLU path.
+    out_gate_sigmoid: bool = false,
+};
 
 /// Maximum number of SSM v-heads supported by DeltaNet stack buffers.
 const max_deltanet_v_heads: usize = 128;

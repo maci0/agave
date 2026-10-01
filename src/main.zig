@@ -6175,3 +6175,50 @@ test "fuzz: main.zig pure functions" {
         }
     }.f, .{});
 }
+
+// Upper bound on one kernel source file the import-direction guard reads.
+// A guard against scanning an unrelated file, not a size these files reach.
+const kernel_src_max_bytes = 128 * 1024;
+
+// The CPU kernels are the bottom of the compute stack. Importing
+// `backend/backend.zig` from one of them — even for a block-layout constant —
+// pulls every GPU backend into that file and closes a 19-module import cycle
+// (dispatcher -> cpu.zig -> kernels -> dispatcher), which is how the graph
+// regressed once already. The constants they need now live in the
+// `ops/quant.zig` and `format/dtype.zig` leaves; this fails the build if a
+// kernel reaches back into the backend layer again.
+test "cpu kernels import no backend module" {
+    const io = std.testing.io;
+    const dir = Io.Dir.cwd().openDir(io, "src/backend/kernels/cpu", .{ .iterate = true }) catch |err| {
+        std.debug.print("cannot open src/backend/kernels/cpu: {t}\n", .{err});
+        return err;
+    };
+    defer dir.close(io);
+
+    var it = dir.iterate();
+    while (try it.next(io)) |entry| {
+        if (entry.kind != .file or !std.mem.endsWith(u8, entry.name, ".zig")) continue;
+        const path = try std.fmt.allocPrint(std.testing.allocator, "src/backend/kernels/cpu/{s}", .{entry.name});
+        defer std.testing.allocator.free(path);
+        const src = Io.Dir.cwd().readFileAlloc(io, path, std.testing.allocator, .limited(kernel_src_max_bytes)) catch |err| {
+            std.debug.print("cannot read {s}: {t}\n", .{ path, err });
+            return err;
+        };
+        defer std.testing.allocator.free(src);
+
+        // `backend.zig` is the dispatcher; a kernel reaches it as
+        // "../../backend.zig" or "../../../backend.zig".
+        var offset: usize = 0;
+        while (std.mem.indexOfPos(u8, src, offset, "@import(")) |at| {
+            offset = at + 1;
+            const rest = src[offset..];
+            const line_end = std.mem.indexOfScalar(u8, rest, '\n') orelse rest.len;
+            const line = rest[0..line_end];
+            if (std.mem.indexOf(u8, line, "backend.zig") != null) {
+                std.debug.print("{s} imports the backend dispatcher: {s}\n" ++
+                    "  import ops/quant.zig or format/dtype.zig for block layouts and types\n", .{ path, line });
+                return error.TestUnexpectedResult;
+            }
+        }
+    }
+}
