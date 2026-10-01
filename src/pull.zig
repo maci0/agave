@@ -819,35 +819,60 @@ fn httpGet(allocator: Allocator, url: []const u8, token: ?[]const u8) (PullError
         break :blk priv_headers_buf[0..1];
     } else &.{};
 
+    const uri = std.Uri.parse(url) catch return PullError.HttpRequestFailed;
+    // Issue the request through `client.request` rather than `client.fetch`
+    // so the underlying socket is reachable for `api_stall_timeout_sec`.
+    // Without it, a server that accepts the connection and then stops
+    // responding blocks this call forever and `agave pull` never returns or
+    // retries. Same bound and rationale as the download path below.
+    var req = client.request(.GET, uri, .{ .privileged_headers = priv_headers }) catch |err| {
+        eprint("Error: HTTP request failed: {}\n", .{err});
+        return PullError.HttpRequestFailed;
+    };
+    defer req.deinit();
+    req.sendBodiless() catch |err| {
+        eprint("Error: HTTP request failed: {}\n", .{err});
+        return PullError.HttpRequestFailed;
+    };
+    setSocketReadTimeout(req, api_stall_timeout_sec);
+
     // Cap the listing body while reading. Checking length after
     // `toOwnedSlice` still allocated the full payload (CWE-400).
     const cap = max_api_response_size + 1;
     const buf = try allocator.alloc(u8, cap);
     defer allocator.free(buf);
-    var writer: std.Io.Writer = .fixed(buf);
 
-    const result = client.fetch(.{
-        .location = .{ .url = url },
-        .privileged_headers = priv_headers,
-        .response_writer = &writer,
-    }) catch |err| {
+    var redirect_buf: [8 * 1024]u8 = undefined;
+    var response = req.receiveHead(&redirect_buf) catch |err| {
         eprint("Error: HTTP request failed: {}\n", .{err});
         return PullError.HttpRequestFailed;
     };
 
-    if (writer.end > max_api_response_size) {
-        eprint("Error: API response exceeds {d} bytes\n", .{max_api_response_size});
+    var transfer_buf: [64 * 1024]u8 = undefined;
+    const reader = response.reader(&transfer_buf);
+    var writer: std.Io.Writer = .fixed(buf);
+    _ = reader.streamRemaining(&writer) catch |err| {
+        if (err == error.WriteFailed) {
+            eprint("Error: API response exceeds {d} bytes\n", .{max_api_response_size});
+        } else {
+            eprint("Error: HTTP request failed after {d}s without completing: {}\n", .{ api_stall_timeout_sec, err });
+        }
         return PullError.HttpRequestFailed;
-    }
+    };
 
-    switch (result.status) {
+    switch (response.head.status) {
         .ok => {},
         .not_found => return PullError.RepoNotFound,
         .unauthorized, .forbidden => return PullError.AuthenticationFailed,
         else => {
-            eprint("Error: HTTP {d}\n", .{@intFromEnum(result.status)});
+            eprint("Error: HTTP {d}\n", .{@intFromEnum(response.head.status)});
             return PullError.HttpRequestFailed;
         },
+    }
+
+    if (writer.end > max_api_response_size) {
+        eprint("Error: API response exceeds {d} bytes\n", .{max_api_response_size});
+        return PullError.HttpRequestFailed;
     }
 
     return allocator.dupe(u8, buf[0..writer.end]);
@@ -1157,13 +1182,19 @@ fn downloadFile(
 /// sending bytes never trips it.
 const download_stall_timeout_sec: i64 = 60;
 
+/// Bound on the gap between two reads of an API listing response, in seconds.
+/// Same reasoning as the download bound above: it never fires while bytes keep
+/// arriving, and a connection that accepts the request and then goes quiet
+/// fails fast instead of hanging `agave pull` with no output forever.
+const api_stall_timeout_sec: i64 = 60;
+
 /// Set SO_RCVTIMEO on the socket backing `req`, so the body read loop cannot
 /// block forever on a connection that stopped delivering. Advisory: a socket
 /// that cannot take the option (an already-released connection) warns and
-/// leaves the read untimed rather than failing the download.
+/// leaves the read untimed rather than failing the request.
 fn setSocketReadTimeout(req: std.http.Client.Request, seconds: i64) void {
     const conn = req.connection orelse {
-        eprint("Warning: download connection already released, no read timeout set\n", .{});
+        eprint("Warning: connection already released, no read timeout set\n", .{});
         return;
     };
     const timeout = std.posix.timeval{ .sec = seconds, .usec = 0 };

@@ -291,6 +291,25 @@ fn fail(comptime fmt: []const u8, args: anytype) u8 {
     return 1;
 }
 
+/// Bound on the gap between two reads of a GitHub API response, in seconds.
+/// Without it a proxy or middlebox that accepts the connection and then stops
+/// responding leaves `agave update` blocked forever with no output. Matches the
+/// download stall bound in `pull.zig`; it never fires while bytes keep arriving.
+const fetch_stall_timeout_sec: i64 = 60;
+
+/// Apply SO_RCVTIMEO to the socket backing `req` so the body read cannot block
+/// forever. Advisory: a socket that cannot take the option is left untimed.
+fn setFetchSocketTimeout(req: std.http.Client.Request, seconds: i64) void {
+    const conn = req.connection orelse return;
+    const timeout = std.posix.timeval{ .sec = seconds, .usec = 0 };
+    std.posix.setsockopt(
+        conn.stream_reader.stream.socket.handle,
+        std.posix.SOL.SOCKET,
+        std.posix.SO.RCVTIMEO,
+        std.mem.asBytes(&timeout),
+    ) catch {};
+}
+
 fn fetchBody(
     io: std.Io,
     gpa: std.mem.Allocator,
@@ -312,20 +331,29 @@ fn fetchBody(
         .user_agent = .{ .override = "agave/" ++ version },
     };
 
-    var writer = try std.Io.Writer.Allocating.initCapacity(gpa, @min(max_size, 64 * 1024));
-    defer writer.deinit();
-
-    const result = client.fetch(.{
-        .location = .{ .url = url },
+    // Goes through `request` rather than `fetch` so the socket is reachable
+    // for the read timeout; `fetch` hides it and would leave this call able to
+    // hang indefinitely.
+    const uri = std.Uri.parse(url) catch |err| return err;
+    var req = client.request(.GET, uri, .{
         .headers = headers,
         .privileged_headers = priv_headers,
-        .response_writer = &writer.writer,
-    }) catch |err| {
-        return err;
-    };
+    }) catch |err| return err;
+    defer req.deinit();
+    try req.sendBodiless();
+    setFetchSocketTimeout(req, fetch_stall_timeout_sec);
 
-    const status_code = @intFromEnum(result.status);
+    var redirect_buf: [8 * 1024]u8 = undefined;
+    var response = req.receiveHead(&redirect_buf) catch |err| return err;
+
+    const status_code = @intFromEnum(response.head.status);
     if (status_code >= 400) return error.HttpStatus;
+
+    var transfer_buf: [64 * 1024]u8 = undefined;
+    const reader = response.reader(&transfer_buf);
+    var writer = try std.Io.Writer.Allocating.initCapacity(gpa, @min(max_size, 64 * 1024));
+    defer writer.deinit();
+    _ = reader.streamRemaining(&writer.writer) catch |err| return err;
 
     const data = writer.written();
     if (data.len > max_size) return error.PayloadTooLarge;

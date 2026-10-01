@@ -192,19 +192,40 @@ fn applyLoraGgufFile(
         addLoraMatrix(merged, lb, la, n, rank, k, scale);
 
         // Insert override keyed by the GGUF canonical name (dupe'd, mmap pointer will be freed).
+        // `key` is owned by the map once `getOrPut` finds a free slot; from that
+        // point a plain `errdefer allocator.free(key)` would double-free it
+        // against the explicit free below, so the guard only covers the window
+        // before ownership moves.
         const key = try allocator.dupe(u8, base_ti.name);
-        errdefer allocator.free(key);
+        var key_owned = true;
+        errdefer if (key_owned) allocator.free(key);
         const gop = try base_gguf.lora_overrides.getOrPut(allocator, key);
         const prev: ?gguf.GGUFFile.LoraOverride = if (gop.found_existing) blk: {
+            key_owned = false;
             allocator.free(key);
             break :blk gop.value_ptr.*;
         } else null;
+        // Publish, then record. If the record append fails the map already
+        // holds `merged`, and the rollback below puts `prev` back (or removes
+        // the fresh entry) so the override map never keeps a freed pointer and
+        // a failed apply leaves `base_gguf` exactly as it was. Appending first
+        // and publishing after cannot work: `restoreOverride` frees whatever the
+        // map holds, which on a fresh insert is not yet a valid override.
         gop.value_ptr.* = .{
             .data = merged,
             .n_dims = base_ti.n_dims,
             .dims = base_ti.dims,
         };
-        try handle.records.append(allocator, .{ .key = gop.key_ptr.*, .prev = prev });
+        handle.records.append(allocator, .{ .key = gop.key_ptr.*, .prev = prev }) catch |err| {
+            if (prev) |p| {
+                gop.value_ptr.* = p;
+            } else {
+                const removed = base_gguf.lora_overrides.fetchRemove(gop.key_ptr.*).?;
+                key_owned = false;
+                allocator.free(removed.key);
+            }
+            return err;
+        };
     }
     return handle;
 }
@@ -331,6 +352,101 @@ test "lora handle dispose is idempotent" {
     var handle = Handle{ .allocator = allocator };
     handle.dispose();
     handle.dispose();
+}
+
+/// Allocator wrapper that fails every allocation once `budget` allocations
+/// have succeeded, so a mid-apply failure can be reproduced deterministically.
+const FailingAfter = struct {
+    inner: std.mem.Allocator,
+    remaining: usize,
+
+    const vtable = std.mem.Allocator.VTable{
+        .alloc = alloc,
+        .remap = std.mem.Allocator.noRemap,
+        .free = free,
+        .resize = resize,
+    };
+
+    fn alloc(ctx: *anyopaque, len: usize, alignment: std.mem.Alignment, ret_addr: usize) ?[*]u8 {
+        const self: *FailingAfter = @ptrCast(@alignCast(ctx));
+        if (self.remaining == 0) return null;
+        self.remaining -= 1;
+        return self.inner.rawAlloc(len, alignment, ret_addr) orelse null;
+    }
+    fn free(ctx: *anyopaque, memory: []u8, alignment: std.mem.Alignment, ret_addr: usize) void {
+        const self: *FailingAfter = @ptrCast(@alignCast(ctx));
+        self.inner.vtable.free(self.inner.ptr, memory, alignment, ret_addr);
+    }
+    fn resize(ctx: *anyopaque, memory: []u8, alignment: std.mem.Alignment, new_len: usize, ret_addr: usize) bool {
+        const self: *FailingAfter = @ptrCast(@alignCast(ctx));
+        return self.inner.vtable.resize(self.inner.ptr, memory, alignment, new_len, ret_addr);
+    }
+};
+
+// A failed `applyLoraGgufFile` must leave `lora_overrides` exactly as it was.
+// The merged buffer is freed on the rollback, so any override left behind
+// would dangle, and every tensor a partially-completed apply already merged
+// must be unmerged rather than left silently applied.
+test "a failed apply rolls every override back" {
+    const n: usize = 2;
+    const k: usize = 2;
+    const allocator = std.testing.allocator;
+
+    var base_data: [n * k]f32 = undefined;
+    for (&base_data, 0..) |*slot, i| slot.* = @floatFromInt(i);
+
+    var a_data: [4]f32 = @splat(1);
+    var b_data: [4]f32 = @splat(1);
+
+    // Fail at each allocation index in turn. Every failing run must publish
+    // nothing; the first budget large enough to finish is the success case.
+    var budget: usize = 0;
+    while (budget < 16) : (budget += 1) {
+        var base_gguf = testGguf(allocator);
+        defer base_gguf.deinit();
+        base_gguf.tensors.put("p0.weight", .{
+            .name = "p0.weight",
+            .n_dims = 2,
+            .dims = .{ n, k, 0, 0 },
+            .ggml_type = .f32,
+            .offset = 0,
+            .abs_ptr = @ptrCast(&base_data),
+        }) catch return;
+
+        var lora_gguf = testGguf(allocator);
+        defer lora_gguf.deinit();
+        lora_gguf.metadata.put("adapter.type", .{ .string = "lora" }) catch return;
+        lora_gguf.tensors.put("p0.lora_a", .{
+            .name = "p0.lora_a",
+            .n_dims = 2,
+            .dims = .{ 2, k, 0, 0 },
+            .ggml_type = .f32,
+            .offset = 0,
+            .abs_ptr = @ptrCast(&a_data),
+        }) catch return;
+        lora_gguf.tensors.put("p0.lora_b", .{
+            .name = "p0.lora_b",
+            .n_dims = 2,
+            .dims = .{ n, 2, 0, 0 },
+            .ggml_type = .f32,
+            .offset = 0,
+            .abs_ptr = @ptrCast(&b_data),
+        }) catch return;
+
+        var failing = FailingAfter{ .inner = allocator, .remaining = budget };
+        const fa: std.mem.Allocator = .{ .vtable = &FailingAfter.vtable, .ptr = &failing };
+        var applied = applyLoraGgufFile(fa, &base_gguf, &lora_gguf);
+        if (applied) |*handle| {
+            handle.dispose();
+            // The apply completed within budget; dispose must unmerge it.
+            if (base_gguf.lora_overrides.count() != 0) return error.OverrideSurvivedDispose;
+            break;
+        } else |_| {
+            // A failed apply must publish nothing: no handle is returned, so
+            // nothing ever calls dispose. Anything left here is a rollback gap.
+            if (base_gguf.lora_overrides.count() != 0) return error.OverrideSurvivedFailedApply;
+        }
+    }
 }
 
 // ── Fuzzing ──────────────────────────────────────────────────────
