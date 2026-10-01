@@ -4199,19 +4199,13 @@ fn generateEscapedNPre(prompt: []const u8, reset: bool, max_tokens: usize, sampl
 /// Run inference on a pre-formatted prompt string. When `reset` is true,
 /// the KV cache is cleared and BOS is sent (first turn). When false, the
 /// existing KV cache is reused (continuation turn).
-fn generate(formatted: []const u8, reset: bool) GenResult {
-    return generateN(formatted, reset, default_max_gen_tokens, .{});
-}
-
-/// Run inference with a configurable max_tokens limit and optional sampling.
+///
 /// When the scheduler is active, routes through RequestManager.enqueue()
 /// and blocks until completion. Falls back to direct model.forward()
 /// when no scheduler is running.
-fn generateN(formatted: []const u8, reset: bool, max_tokens: usize, sampling: SamplingParams) GenResult {
-    return generateNPre(formatted, reset, max_tokens, sampling, null);
-}
-
-/// Like generateN, but reuses caller-owned `pre_ids` when non-null (skips encode).
+///
+/// `pre_ids` is the caller's already-tokenized prompt; non-null reuses it
+/// and skips the BPE encode.
 fn generateNPre(formatted: []const u8, reset: bool, max_tokens: usize, sampling: SamplingParams, pre_ids: ?[]const u32) GenResult {
     const tok = g_server.tokenizer;
     const zero_stats = Stats.zero;
@@ -4862,11 +4856,9 @@ fn generateNPre(formatted: []const u8, reset: bool, max_tokens: usize, sampling:
 /// Sends final stats as `data: {"done":true,...}` followed by `data: [DONE]`.
 /// Returns GenResult with accumulated decoded text for conversation storage.
 /// When the scheduler is active, routes through RequestManager.enqueue().
-fn chatStreamGenerate(stream: http.TcpStream, formatted: []const u8, reset: bool, max_tokens: usize, sampling: SamplingParams) GenResult {
-    return chatStreamGeneratePre(stream, formatted, reset, max_tokens, sampling, null);
-}
-
-/// Like chatStreamGenerate, but reuses caller-owned `pre_ids` when non-null.
+///
+/// `pre_ids` is the caller's already-tokenized prompt; non-null reuses it
+/// and skips the BPE encode.
 fn chatStreamGeneratePre(stream: http.TcpStream, formatted: []const u8, reset: bool, max_tokens: usize, sampling: SamplingParams, pre_ids: ?[]const u32) GenResult {
     const tok = g_server.tokenizer;
     const zero_stats = Stats.zero;

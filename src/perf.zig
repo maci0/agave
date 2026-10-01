@@ -41,7 +41,6 @@ pub const Op = enum {
     gelu_mul,
     add,
     deltanet,
-    total_layer,
 };
 
 const n_ops = @typeInfo(Op).@"enum".fields.len;
