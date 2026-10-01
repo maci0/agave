@@ -25,7 +25,7 @@ import {
   useSettings,
   useToasts,
 } from './chat/hooks';
-import { fmtInt, fmtNum, localDateYmd } from './chat/format';
+import { fmtInt, fmtPercent, localDateYmd } from './chat/format';
 import type { Toast } from './chat/types';
 
 const DRAWER_BREAKPOINT = '(max-width: 700px)';
@@ -107,7 +107,7 @@ const reportContext = (reply: (text: string) => void, model: ReturnType<typeof u
     const used = record?.kv_seq_len ?? 0;
     const max = record?.ctx_size ?? 0;
     if (record === null || max <= 0) { reply('Could not retrieve context info.'); return; }
-    reply(`Context: **${fmtInt(used)} / ${fmtInt(max)}** tokens (${fmtNum((used / max) * 100, 1)}% used)`);
+    reply(`Context: **${fmtInt(used)} / ${fmtInt(max)}** tokens (${fmtPercent(used / max, 1)} used)`);
   });
 };
 

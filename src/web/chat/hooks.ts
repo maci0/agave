@@ -19,6 +19,7 @@ import {
   streamChat,
   userFacingError,
 } from './api';
+import { fmtMegabytes } from './format';
 import { loadMarkdown } from './markdown';
 import { clearStoredSystemPrompt, readSampling, readShowStats, writeSampling, writeShowStats } from './storage';
 import type { Bubble, ConvRecord, ModelRecord, Sampling, StreamStats, Toast } from './types';
@@ -30,6 +31,10 @@ const ANNOUNCE_DELAY_MS = 100;
 /** The tok/s counter is a live region, so it refreshes at most once a second. */
 const TPS_UPDATE_MS = 1000;
 const MAX_IMAGE_BYTES = 10_485_760;
+/* One statement of the ceiling, rendered in the reader's own units: a
+   hardcoded "10 MB" beside the binary threshold read "10.0 MB" in a
+   decimal locale, 5% over the limit it claims. */
+const MAX_IMAGE_LABEL = fmtMegabytes(MAX_IMAGE_BYTES);
 const ALLOWED_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp']);
 
 /** `setTimeout` handle. The DOM lib types it as a number, the Bun types as a
@@ -459,7 +464,7 @@ export const useImageAttachment = ({ vision, visionKnown, announce, pushToast }:
   const attach = useCallback((file: File, label: string) => {
     if (visionKnown && !vision) { pushToast('This model cannot view images.'); return; }
     if (!ALLOWED_IMAGE_TYPES.has(file.type)) { pushToast('Unsupported image format. Use JPEG, PNG, GIF, or WebP.'); return; }
-    if (file.size > MAX_IMAGE_BYTES) { pushToast('Image too large (max 10 MB).'); return; }
+    if (file.size > MAX_IMAGE_BYTES) { pushToast(`Image too large (max ${MAX_IMAGE_LABEL}).`); return; }
     const reader = new FileReader();
     reader.addEventListener('load', (event) => {
       const encoded = event.target?.result;

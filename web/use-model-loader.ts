@@ -9,6 +9,7 @@
 
 import { useCallback, useRef, useState, type DragEvent } from 'react';
 import { friendlyLoadError } from './load-errors';
+import { fmtMegabytes, fmtPercent } from '../src/web/chat/format';
 
 const IDLE_HINT = 'Load a GGUF model to begin';
 /* The status names the state the engine is actually in. "Ready" read as "a
@@ -39,9 +40,6 @@ export type ModelLoader = {
   onReport: Report;
   focusPrompt: () => void;
 };
-
-const fmtMb = (bytes: number): string =>
-  (bytes / 1024 / 1024).toLocaleString(undefined, { maximumFractionDigits: 1, minimumFractionDigits: 1 });
 
 const isGgufName = (name: string): boolean => name.toLowerCase().endsWith('.gguf');
 
@@ -134,11 +132,14 @@ const useModelSources = (
       state.setStatus('Downloading model…');
       const modelBytes = await engine.fetchModel(target, {
         onProgress ({ received, total }) {
+          /* Both figures go through the locale formatter: the size keeps its
+             own unit label and the percent its own mark, instead of a "MB"
+             and a "%" pasted onto numbers that already carry a grouped
+             thousands separator. */
           if (total > 0) {
-            const percent = Math.round((received / total) * 100);
-            state.setStatus(`Downloading model… ${fmtMb(received)} / ${fmtMb(total)} MB (${String(percent)}%)`);
+            state.setStatus(`Downloading model… ${fmtMegabytes(received)} / ${fmtMegabytes(total)} (${fmtPercent(received / total, 0)})`);
           } else {
-            state.setStatus(`Downloading model… ${fmtMb(received)} MB`);
+            state.setStatus(`Downloading model… ${fmtMegabytes(received)}`);
           }
         },
       });
@@ -155,7 +156,7 @@ const useModelSources = (
       return;
     }
     void initAndLoad(async (engineReady: () => Promise<void>) => {
-      state.setStatus(`Reading ${file.name} (${fmtMb(file.size)} MB)…`);
+      state.setStatus(`Reading ${file.name} (${fmtMegabytes(file.size)})…`);
       const modelBytes = await file.arrayBuffer();
       if (!isGgufBuffer(modelBytes)) { throw new Error('This file is not a valid GGUF model.'); }
       await engineReady();

@@ -17,6 +17,7 @@ import { afterAll, expect, test } from 'bun:test';
 import { GlobalRegistrator } from '@happy-dom/global-registrator';
 
 import { renderMarkdown } from './chat/markdown';
+import { fmtMegabytes, fmtNum, fmtPercent } from './chat/format';
 import type { Bubble } from './chat/types';
 
 GlobalRegistrator.register({ url: 'http://127.0.0.1:49453' });
@@ -294,4 +295,35 @@ test('a link that survives the sanitizer loses its script scheme', () => {
   } finally {
     clearCdn();
   }
+});
+
+test("a percentage carries the locale's mark, not a pasted one", () => {
+  /* German writes the mark tight, French puts a narrow no-break space before
+     it, and Arabic-Indic digits carry their own sign: `fmtNum(x * 100) + "%"`
+     produced "12,3%" for de-DE and "١٢٫٣%" for ar-EG, both wrong. */
+  /* U+00A0, not an ASCII space: CLDR's percent pattern for both locales puts a
+     no-break space before the mark, so a pasted "%" lost a separator the
+     line wrapping and the screen reader both rely on. */
+  expect(fmtPercent(0.123, 1, 'de-DE')).toBe('12,3\u00A0%');
+  expect(fmtPercent(0.123, 1, 'fr-FR')).toBe('12,3\u00A0%');
+  expect(fmtPercent(0.5, 0, 'en-US')).toBe('50%');
+  /* A bidi locale supplies its own percent sign (U+066A) and the isolation
+     mark (U+061C) that keeps a trailing Latin sign from being reordered
+     around the digits; an appended ASCII "%" had neither. */
+  const arabic = fmtPercent(0.5, 0, 'ar-EG');
+  expect(arabic).toContain('\u066A');
+  expect(arabic).toContain('\u061C');
+  expect(arabic).not.toContain('%');
+});
+
+test("megabytes keep the locale's unit label and spacing", () => {
+  expect(fmtMegabytes(10_485_760, 'de-DE')).toBe('10,0 MB');
+  expect(fmtMegabytes(1_572_864, 'en-US')).toBe('1.5 MB');
+  /* A grouped size beside a hardcoded " MB" read "1,572,864.0 MB". */
+  expect(fmtMegabytes(1_572_864, 'en-US')).not.toContain(',');
+});
+
+test('the tok/s readout rounds like the rest of the stats', () => {
+  expect(fmtNum(1234.56, 1, 'en-US')).toBe('1,234.6');
+  expect(fmtNum(12.34, 2, 'de-DE')).toBe('12,34');
 });
