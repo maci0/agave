@@ -1,8 +1,9 @@
 # Research Ideas for Agave DS V4 Flash Maximum Performance
 
-**Status**: proposals. Nothing here is a decision or a shipped feature; an item ships only when
+**Status**: proposals, except where an item is marked **SHIPPED** and points at its canonical
+home. Nothing here is a decision or a shipped feature unless marked; an item ships only when
 `docs/TODO.md` says so. Expected gains are the papers' or the authors' numbers unless marked measured.
-**Last reviewed**: 2026-09-27 (no item moved to Done in the TODO roadmap).
+**Last reviewed**: 2026-10-01 (item F, DSpark, reclassified SHIPPED: it is a live `--spec-mode dspark` in `src/spec/dspark.zig`; every other item re-checked and still a proposal).
 
 ## Priority 1: IMPLEMENT NOW
 
@@ -73,7 +74,8 @@
 **Paper:** "DSpark: Confidence-Scheduled Speculative Decoding"
 - Semi-autoregressive generation with Markov head
 - Confidence-scheduled verification length trimming
-- Already partially implemented in Agave
+- **SHIPPED** (no longer a proposal): selectable as `--spec-mode dspark`, implemented in
+  `src/spec/dspark.zig`. Tracked as Working in `docs/TODO.md`.
 
 ### G. FlashMemory-DeepSeek-V4 (arXiv 2606.09079)
 **Paper:** "Lightning Index Ultra-Long Context via Lookahead Sparse Attention"

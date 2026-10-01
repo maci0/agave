@@ -1,7 +1,8 @@
 # DS4 Flash 0731 — 2-Node DGX Spark Performance Handoff
 
 **Goal:** match vLLM on 2× DGX Spark (~50 tok/s single stream, 300-500 concurrent).
-**Status:** batched expert gemv kernel + async heap uploads validated on the tiny-random model (**272 tok/s**); the full Flash 2-node decode measurement is BLOCKED by a spark2 ssh outage (needs a reboot).
+**Status:** OPEN handoff, not a decision record. Scope: the unmeasured DS4 2-node decode and the instrumentation cleanup below. The performance numbers already in the tree (`docs/BENCHMARKS.md`, `docs/DS4_BENCHMARK.md`) are the canonical record; this file is the working log behind them.
+**Last updated:** 2026-10-01 (status line reconciled with the code: step 4, removing the `DS4PERF`/`FFNPERF`/`TPPERF` instrumentation, is done — no such symbols remain in `src/` or `scripts/`; steps 1–3 and 5 are still open).
 
 ## Environment (verified)
 
@@ -36,16 +37,15 @@ NCCL_NET_GDR_LEVEL=3 NCCL_IB_PCI_RELAXED_ORDERING=1 NCCL_IB_RETRY_CNT=7 NCCL_IB_
 ## Gotchas
 
 - **spark2's sshd hangs under load** (banner timeout, ping OK) — recovery has required a reboot (the node came back "up 2 min"). Ask the user to reboot it if unreachable.
-- The concurrent gauntlet bot edits/commits the repo (it deleted this file once) — re-read before editing; exclude `scripts/build-web.sh` and untracked bot files from commits.
 - `pkill -f "zig-out/bin/aga[v]e /home"` (the `[v]` avoids killing your own ssh).
-- `zig build test` is broken by an abandoned sdpa fuzz — don't chase it.
+- If `zig build test` fails here, check `docs/TODO.md` first: suite breakage is tracked there, not in this note.
 
 ## Next steps
 
 1. Reboot/verify spark2, then the standard 2-node launch → measure the Flash decode with the batched kernel (expect the FFN to drop from ~2s toward the bandwidth floor).
 2. If the attention (~400ms) persists, the per-call syncs (q_a→rmsNorm→q_b chains) are the tax — batch or GPU-ize the attention gemvs.
 3. GPU SDPA/kvDot kernel for the attention scores (CPU now — grows with context).
-4. Remove the TEMP instrumentation (DS4PERF/FFNPERF/TPPERF/CUDA timers), then commit.
+4. ~~Remove the TEMP instrumentation (DS4PERF/FFNPERF/TPPERF/CUDA timers), then commit.~~ Done — no such symbols remain in `src/` or `scripts/`.
 5. Concurrency/numseq testing (`--numseq`, server mode) toward the 300-500 concurrent target.
 
 ---

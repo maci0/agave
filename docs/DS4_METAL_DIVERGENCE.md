@@ -1,6 +1,7 @@
 # DeepSeek V4 Metal: Output Divergence Fix and the CPU Path That Resolved It
 
 **Status**: accepted outcome (bit-identical Metal vs CPU) still holds. Current `Ds4Model` routes rms/SDPA/HC through a dedicated `CpuBackend` on every selected backend; Metal GEMV also stays on that CPU path (`gemvBackend` is GPU only for Vulkan/WebGPU/CUDA). The ten kernels below still compile into Metal pipelines. MoE/top-k Metal kernels listed in earlier drafts were removed.
+**Last verified**: 2026-10-01 (`computeBackend`/`gemvBackend` routing, the ten `makePipeline` calls in `metal.zig`, the `ds4*.metal` kernel inventory, and the `use_fused = false` gate in `Ds4Model.ffnLayer` checked against source; the throughput table is from the run recorded below).
 
 ## Result
 
