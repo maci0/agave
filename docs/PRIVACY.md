@@ -21,11 +21,11 @@ is either downloaded content or derived numbers with no free-text field.
 
 | Data | Location | Protection |
 | --- | --- | --- |
-| Server conversations | `$XDG_CACHE_HOME/agave/conversations.json`, else `$HOME/.cache/agave/conversations.json` (override with `--conv-store <path>`) | owner-only mode 0600, written atomically (`src/server/conv_store.zig`, `src/durable_file.zig:160`) |
-| Store sidecars | `<path>.corrupt` (a corrupt store moved aside), `<path>.overflow` (the part past the load caps) | same 0600 handling; a store an older build left world-readable is narrowed to 0600 on load (`src/server/conv_store.zig:205`) |
-| Browser UI state | `localStorage`: temperature, top_p, max_tokens, stats toggle. `sessionStorage`: the system prompt | origin-scoped by the browser, never sent anywhere. The system prompt was moved out of `localStorage` and the legacy key is deleted on first read (`src/web/chat/storage.ts:29`) |
-| REPL history | process memory only, up to 256 lines, wiped on free and on `/clear` (`src/readline.zig:56`) | never written to disk |
-| Request logs | stderr | method, sanitized path, request id, status, duration. No prompt, reply, header value, or key (`src/server/server.zig:1158`) |
+| Server conversations | `$XDG_CACHE_HOME/agave/conversations.json`, else `$HOME/.cache/agave/conversations.json` (override with `--conv-store <path>`) | owner-only mode 0600, written atomically (`src/server/conv_store.zig`, `src/durable_file.zig:152,163`) |
+| Store sidecars | `<path>.corrupt` (a corrupt store moved aside), `<path>.overflow` (the part past the load caps) | same 0600 handling; a store an older build left world-readable is narrowed to 0600 on load (`src/server/conv_store.zig:210,215`) |
+| Browser UI state | `localStorage`: temperature, top_p, max_tokens, stats toggle. `sessionStorage`: the system prompt | origin-scoped by the browser, never sent anywhere. The system prompt was moved out of `localStorage` and the legacy key is deleted on first read (`src/web/chat/storage.ts:29,36`) |
+| REPL history | process memory only, up to 256 lines, wiped on eviction and on `/clear` (`src/readline.zig:12,59,76`) | never written to disk |
+| Request logs | stderr | method, sanitized path, request id, status, duration. No prompt, reply, header value, or key (`src/server/server.zig:1221,1236`) |
 | Prometheus metrics | `/metrics`, in memory | counters and histograms only, no free-text labels |
 
 Nothing is written outside these locations. There is no telemetry, no crash
@@ -41,7 +41,7 @@ reporting, no third-party script, and no analytics in the web UI: every
 unauthenticated caller, `/favicon.ico` is a static asset with no server state
 behind it). An unauthenticated server additionally rejects non-loopback `Host`
 headers and cross-origin requests, so a page in a browser cannot drive inference
-or read conversation state (`src/server/server.zig:2304`).
+or read conversation state (`src/server/server.zig:2236,2249`).
 
 `agave pull` is the only component that talks to a third party: it requests
 model metadata and weights from `huggingface.co`. It sends the repository id
@@ -70,8 +70,8 @@ past a cap is preserved in `<path>.overflow` rather than silently dropped
   sampling keys are removable from `localStorage`.
 
 Deletion wipes the freed buffers rather than leaving prompt text in the
-allocator freelist, in memory (`src/main.zig:4042`,
-`src/server/server.zig:549`) and on disk (the next store save rewrites the
+allocator freelist, in memory (`src/readline.zig:59,76`,
+`src/server/server.zig:535,549`) and on disk (the next store save rewrites the
 file without the deleted conversations).
 
 ## Third parties and sub-processors

@@ -4,7 +4,7 @@ Claims in this file are checked against source by the threat-model pass. If one
 disagrees with the code, the code wins; see the docs-vs-code check at the end of
 [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md#4-mitigations-map).
 
-- **Last reviewed:** 2026-10-01
+- **Last reviewed:** 2026-10-02
 
 ## Supported versions
 
@@ -45,7 +45,7 @@ Peer discovery has **no port of its own**: it reuses the parallel group's
 TCP data-port base. `discoverPeer` takes that same base from
 `src/main.zig` (`src/parallel/peer_discovery.zig:62`), and rank 0 binds
 UDP `port` while broadcasting the beacon to UDP `port + 1`, where workers
-bind (`src/parallel/peer_discovery.zig:99,111`). For tensor parallelism
+bind (`src/parallel/peer_discovery.zig:102,111`). For tensor parallelism
 that is UDP 49454/49455; for pipeline parallelism, UDP 49455/49456. A
 firewall rule that allows 49454-49456 for TCP but denies UDP leaves
 discovery closed; a rule written against any other port number, including
