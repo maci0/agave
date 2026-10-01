@@ -6,8 +6,21 @@
  * Usage:
  *   bun run docs/render-diagrams.mjs [--out-dir docs/diagrams] [--png] [--svg]
  *
- * Requires (installed globally via bun):
- *   bun add -g beautiful-mermaid @resvg/resvg-js
+ * Requires (installed globally via bun, at the versions pinned below):
+ *   bun add -g beautiful-mermaid@1.1.3 @resvg/resvg-js@2.6.2
+ *
+ * These two stay out of the root package.json on purpose. Both are only ever
+ * needed to re-render committed diagram PNG/SVG copies that no build, test or
+ * release step reads (scripts/check-docs.py warns about a diagram count but
+ * never regenerates one), so putting them in the root manifest would add a
+ * Mermaid layout engine and a native Rust rasterizer to every contributor's
+ * and CI runner's `bun install`, plus an MPL-2.0 entry to audit, in exchange
+ * for a command nobody runs on a release path. They are pinned here instead,
+ * at the versions this script was last run with, so a re-render is
+ * reproducible rather than silently following the registry's latest tag.
+ *
+ * licenses: beautiful-mermaid MIT, @resvg/resvg-js MPL-2.0. Neither ships:
+ * the rendered PNG/SVG output carries no third-party code.
  */
 
 import { renderMermaidSVG } from 'beautiful-mermaid';

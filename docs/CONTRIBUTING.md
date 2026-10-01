@@ -295,8 +295,11 @@ Two rules hold the palette together, so keep them if you edit it:
 
 `docs/diagrams/` is an offline PNG and SVG copy of every Mermaid block; the
 docs themselves embed the Mermaid source, which GitHub renders. Re-render it
-with `bun docs/render-diagrams.mjs --png --svg` (needs `beautiful-mermaid` and
-`@resvg/resvg-js` installed globally with bun, and the Adwaita Sans font). The
+with `bun docs/render-diagrams.mjs --png --svg`, which needs
+`bun add -g beautiful-mermaid@1.1.3 @resvg/resvg-js@2.6.2` (the exact pins the
+renderer records in its own header; they are deliberately not root
+dependencies, since no build or test reads the output) and the Adwaita Sans
+font. The
 layout engine collapses some nested subgraphs to a zero-size frame; the
 renderer drops those frames and their titles rather than print the titles over
 each other, so the offline copy of such a diagram is untitled per group.
