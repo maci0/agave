@@ -32,9 +32,11 @@ line only; the server ID stays authoritative.
 Both health endpoints collapse details when the request is unauthenticated, so an
 orchestrator probe sees `{"status":...}` only.
 
-There is no `agave_ready` gauge: `/metrics` does not mirror the `/ready` decision,
-so an alert has to probe `GET /ready` directly rather than re-implementing the
-health formula as a metric query.
+`agave_ready` mirrors the `/ready` decision on `/metrics` (1 when `GET /ready`
+would return 200, 0 when degraded or shutting down), so an alert reads the gauge
+instead of probing the endpoint. The gauge is computed by the same
+`loadHealthView()` the endpoint uses, not by a second formula; `GET /ready` stays
+the authority when an operator needs the JSON `reason`.
 
 ## Metrics
 
@@ -57,7 +59,9 @@ Rate and error signals (PromQL uses `rate()` or `increase()` over these):
 
 Latency histograms (use `histogram_quantile` over `_bucket`):
 
-- `agave_request_duration_seconds`: end-to-end request latency.
+- `agave_request_duration_seconds`: end-to-end request latency, sampled for
+  streaming requests too, including a stream that ended in a server fault, so a
+  latency alert does not exclude exactly the requests that failed.
 - `agave_ttft_seconds`: time to first token.
 - `agave_request_prompt_tokens`, `agave_request_generation_tokens`: size distributions.
 - `agave_time_per_output_token_seconds`, `agave_inter_token_latency_seconds`,
@@ -76,7 +80,7 @@ Saturation and cache:
 | `agave_tokens_per_second`, `agave_avg_prompt_throughput_toks_per_s`, `agave_avg_generation_throughput_toks_per_s` | Throughput; the first is the last request, the other two are since-start averages. |
 | `agave_tokens_generated_total`, `agave_prefill_tokens_total` | Token counters. |
 
-Process state: `agave_up`, `agave_sleeping` (idle sleep mode, `--sleep-after`),
+Process state: `agave_up` (liveness), `agave_ready` (readiness), `agave_sleeping` (idle sleep mode, `--sleep-after`),
 `agave_process_start_time_seconds`, `agave_build_info{version,backend,language}`,
 `agave_cache_config_info{block_size,num_gpu_blocks}`.
 

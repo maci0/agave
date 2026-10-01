@@ -636,6 +636,19 @@ const Server = struct {
     sleeping: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     /// Last published `/health` state (`HealthState`) for transition-only logs.
     health_state: std.atomic.Value(u8) = std.atomic.Value(u8).init(@intFromEnum(HealthState.ok)),
+    /// Completed and failed request counts as of the last time the server was
+    /// healthy. The error-rate check subtracts this baseline so it measures the
+    /// failures since the last known-good point instead of the process
+    /// lifetime; without it one early failure keeps a healthy long-running
+    /// server in `high_error_rate` until enough successes catch up.
+    ///
+    /// Written as a pair, never as one 128-bit atomic: a reader that lands
+    /// between the two stores sees a window that is one snapshot stale in one
+    /// half. That can only skew a single `/health` or `/metrics` scrape, and
+    /// the next one reads the finished pair. Locking instead would put a lock
+    /// on the probe path, which is the wrong place for one.
+    health_baseline_completed: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    health_baseline_failed: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
     /// Process-level tools (register/dispose). Request JSON tools overlay these.
     tool_registry: tools_mod.Registry = .{},
     /// gzip of `html_page`, filled once in `run()`. Empty if compression failed.
@@ -2037,6 +2050,10 @@ const HealthView = struct {
     queue: u32,
     completed: u64,
     failed: u64,
+    /// Completed and failed since the last known-good snapshot. The error-rate
+    /// decision reads these; the lifetime totals stay for the log line.
+    window_completed: u64,
+    window_failed: u64,
     cancelled: u64,
     sched_errs: u64,
     kv_demotions: u64,
@@ -2079,19 +2096,30 @@ fn loadHealthView() HealthView {
     const kv_total = m.kv_blocks_total.load(.monotonic);
     const completed = m.requests_completed.load(.monotonic);
     const failed = m.requests_failed.load(.monotonic);
-    const settled: u64 = @as(u64, completed) + failed;
+    // Error rate is measured over the requests that settled since the last
+    // known-good health snapshot, not over the process lifetime: a cumulative
+    // ratio latches. Ten failures in the first hour of a server that has since
+    // served a million good requests would hold `/ready` at 503 and hold
+    // `agave_ready` at 0 until enough successes diluted the ratio, taking a
+    // healthy instance out of a load balancer with no cause left to find.
+    const baseline_completed = g_server.health_baseline_completed.load(.monotonic);
+    const baseline_failed = g_server.health_baseline_failed.load(.monotonic);
+    const settled = completed -| baseline_completed + (failed -| baseline_failed);
+    const window_failed = failed -| baseline_failed;
     return .{
         .shutting_down = g_server.shutdown_requested.load(.acquire),
         // Widen before the multiply: kv_total is a u32 block count, so kv_used * 100
         // wraps past 2^32 and reports "no pressure" on a full cache. failed needs
         // the same widening, and the sum needs it to keep settled non-zero.
         .kv_pressure = kv_total > 0 and @as(u64, kv_used) * 100 / kv_total >= kv_cache_degradation_pct,
-        .high_error_rate = settled >= error_rate_min_requests and failed * 100 / settled >= error_rate_degradation_pct,
+        .high_error_rate = settled >= error_rate_min_requests and window_failed * 100 / settled >= error_rate_degradation_pct,
         .kv_used = kv_used,
         .kv_total = kv_total,
         .queue = m.queue_depth.load(.monotonic),
         .completed = completed,
         .failed = failed,
+        .window_completed = completed -| baseline_completed,
+        .window_failed = window_failed,
         .cancelled = m.requests_cancelled.load(.monotonic),
         .sched_errs = m.scheduler_errors.load(.monotonic),
         .kv_demotions = m.kv_demotions_vram_to_ram.load(.monotonic) + m.kv_demotions_ram_to_ssd.load(.monotonic),
@@ -2114,8 +2142,14 @@ fn noteHealthTransition(view: HealthView) void {
         });
     } else {
         std.log.warn("server: health {s} (was {s}, kv={d}/{d} errors={d}/{d} queue={d})", .{
-            @tagName(view.state()), @tagName(prev_state), view.kv_used, view.kv_total, view.failed, view.completed + view.failed, view.queue,
+            @tagName(view.state()), @tagName(prev_state), view.kv_used, view.kv_total, view.window_failed, view.window_completed + view.window_failed, view.queue,
         });
+    }
+    // Rebase the error-rate window every time health is ok, so the next
+    // degradation is measured from here rather than from process start.
+    if (view.state() == .ok) {
+        g_server.health_baseline_completed.store(view.completed, .monotonic);
+        g_server.health_baseline_failed.store(view.failed, .monotonic);
     }
 }
 
@@ -2502,6 +2536,7 @@ fn handleRequest(stream: http.TcpStream, req: http.HttpRequest) void {
                 startStreamWithTools(stream, formatted, max_tokens, sampling, serverToolCallCtx(&tool_params))
             else
                 startStream(stream, formatted, true, false, max_tokens, sampling);
+            recordStreamLatency(stream_status, request_start);
             logRequestDone(method, path, stream_status, elapsedMs(request_start));
             return;
         }
@@ -3049,6 +3084,7 @@ fn handleRequest(stream: http.TcpStream, req: http.HttpRequest) void {
 
         if (json.extractBoolField(body, "stream")) {
             const stream_status = startResponsesStream(stream, input, max_tokens, sampling_r);
+            recordStreamLatency(stream_status, request_start);
             logRequestDone(method, path, stream_status, elapsedMs(request_start));
             return;
         }
@@ -3213,6 +3249,7 @@ fn handleRequest(stream: http.TcpStream, req: http.HttpRequest) void {
                 startAnthropicStreamWithTools(stream, formatted_m, max_tokens_m, prompt_tokens_m, sampling_m, serverToolCallCtx(&tool_params_m))
             else
                 startAnthropicStream(stream, formatted_m, max_tokens_m, prompt_tokens_m, sampling_m);
+            recordStreamLatency(stream_status, request_start);
             logRequestDone(method, path, stream_status, elapsedMs(request_start));
             return;
         }
@@ -6519,6 +6556,22 @@ fn streamFinishStatus(client_connected: bool, failed: bool, timed_out: bool) u16
     return if (timed_out) stream_status_timeout else 500;
 }
 
+/// Record request latency for a stream that ended in a server fault.
+///
+/// The streaming paths measure latency only on their success, cancellation,
+/// and client-gone returns, so a stream that failed before the first token
+/// (tokenizer, enqueue, BOS, prefill) counted into `requests_failed` but never
+/// into `agave_request_duration_seconds`. That leaves the latency histogram
+/// describing only the requests that worked, which is the population a
+/// latency alert must not exclude. Recording it here, at the one place the
+/// whole-request start stamp is in scope, keeps the metric honest without a
+/// timestamp per call site. Successes are skipped: those paths already record
+/// their own duration.
+fn recordStreamLatency(stream_status: u16, request_start: i64) void {
+    if (stream_status != 500) return;
+    g_server.metrics.recordLatency(elapsedMs(request_start));
+}
+
 /// Start an SSE streaming response. Writes headers, generates tokens inline,
 /// and writes each as an SSE frame. Runs synchronously on the handler thread.
 /// Returns the status the access log records for the request.
@@ -6586,7 +6639,9 @@ fn startStreamWithTools(stream: http.TcpStream, prompt: []const u8, max_tokens: 
     if (std.mem.eql(u8, gen.finish_reason, "error")) {
         _ = sseWriteData(stream, "{\"error\":\"Generation failed\"}");
         _ = sseWriteData(stream, "[DONE]");
-        g_server.metrics.recordLatency(elapsedMs(tool_stream_start));
+        // Latency for this status is recorded by the caller
+        // (see `recordStreamLatency`); recording it here too would
+        // double-count the same request in the histogram.
         g_server.metrics.recordFailure();
         return 500;
     }
@@ -7993,6 +8048,93 @@ test "streamFinishStatus names a stream outcome in the access log" {
     try std.testing.expectEqual(@as(u16, 499), streamFinishStatus(false, true, true));
 }
 
+test "error-rate readiness tracks the window, not the process lifetime" {
+    // A cumulative failed/(completed+failed) ratio latches: after an early
+    // incident it keeps `/ready` at 503 until enough later successes dilute
+    // it. The baseline rebased on every healthy snapshot, so the same totals
+    // read healthy once the window has moved past the incident.
+    var srv: Server = undefined;
+    srv.metrics = .{};
+    srv.shutdown_requested = .init(false);
+    srv.health_baseline_completed = .init(0);
+    srv.health_baseline_failed = .init(0);
+    g_server = &srv;
+    defer g_server = undefined;
+
+    const m = &g_server.metrics;
+    _ = m.requests_completed.fetchAdd(4, .monotonic);
+    _ = m.requests_failed.fetchAdd(6, .monotonic);
+    // 6 of 10 settled requests failed, past the 50% degradation threshold.
+    try std.testing.expect(loadHealthView().high_error_rate);
+
+    // Healthy before the incident, as noteHealthTransition rebases it.
+    g_server.health_baseline_completed.store(4, .monotonic);
+    g_server.health_baseline_failed.store(6, .monotonic);
+
+    // 100 good requests after it: the same lifetime totals, but zero failures
+    // in the current window, so readiness must return.
+    _ = m.requests_completed.fetchAdd(100, .monotonic);
+    const after = loadHealthView();
+    try std.testing.expectEqual(@as(u64, 100), after.window_completed);
+    try std.testing.expectEqual(@as(u64, 0), after.window_failed);
+    try std.testing.expect(!after.high_error_rate);
+    try std.testing.expect(after.ready());
+
+    // A fresh burst after the next healthy rebase degrades again.
+    g_server.health_baseline_completed.store(after.completed, .monotonic);
+    g_server.health_baseline_failed.store(after.failed, .monotonic);
+    _ = m.requests_failed.fetchAdd(8, .monotonic);
+    _ = m.requests_completed.fetchAdd(2, .monotonic);
+    try std.testing.expect(loadHealthView().high_error_rate);
+
+    // Below the minimum request count the ratio is not consulted, so a single
+    // early failure in a quiet window does not flap readiness.
+    var srv2: Server = undefined;
+    srv2.metrics = .{};
+    srv2.shutdown_requested = .init(false);
+    srv2.health_baseline_completed = .init(0);
+    srv2.health_baseline_failed = .init(0);
+    g_server = &srv2;
+    defer g_server = undefined;
+    _ = g_server.metrics.requests_completed.fetchAdd(1, .monotonic);
+    _ = g_server.metrics.requests_failed.fetchAdd(1, .monotonic);
+    try std.testing.expect(!loadHealthView().high_error_rate);
+}
+
+test "recordStreamLatency samples failed streams only" {
+    // A stream that ends in a server fault must reach the latency histogram.
+    // The streaming bodies record their own duration on success, so skipping
+    // this leaves `agave_request_duration_seconds` describing only the
+    // requests that worked, hiding the slow ones that broke.
+    defer sim_clock.setOverrideMs(null);
+    sim_clock.setOverrideMs(10_000);
+
+    var srv: Server = undefined;
+    srv.metrics = .{};
+    g_server = &srv;
+    defer g_server = undefined;
+
+    // Successes record their own duration, and a disconnect or deadline is
+    // not a server fault, so none of these may add a sample here.
+    recordStreamLatency(200, 9_000);
+    recordStreamLatency(499, 9_000);
+    recordStreamLatency(504, 9_000);
+    try std.testing.expectEqual(@as(u64, 0), g_server.metrics.latency_sum.load(.monotonic));
+    try std.testing.expectEqual(@as(u64, 0), g_server.metrics.latency_1s.load(.monotonic));
+
+    recordStreamLatency(500, 9_000);
+    try std.testing.expectEqual(@as(u64, 1_000), g_server.metrics.latency_sum.load(.monotonic));
+    try std.testing.expectEqual(@as(u64, 1), g_server.metrics.latency_1s.load(.monotonic));
+
+    // Each failed stream adds its own sample rather than replacing the last.
+    // The clock is pinned, so this second stream measures 2000ms and lands in
+    // its own bucket, proving the histogram keeps both observations.
+    recordStreamLatency(500, 8_000);
+    try std.testing.expectEqual(@as(u64, 3_000), g_server.metrics.latency_sum.load(.monotonic));
+    try std.testing.expectEqual(@as(u64, 1), g_server.metrics.latency_1s.load(.monotonic));
+    try std.testing.expectEqual(@as(u64, 1), g_server.metrics.latency_5s.load(.monotonic));
+}
+
 test "prngSeedFromSampling uses sim_clock when seed omitted" {
     defer sim_clock.setOverrideMs(null);
     sim_clock.setOverrideMs(1_700_000_000_000);
@@ -8162,6 +8304,8 @@ test "HealthView maps degradation reasons" {
         .queue = 0,
         .completed = 0,
         .failed = 0,
+        .window_completed = 0,
+        .window_failed = 0,
         .cancelled = 0,
         .sched_errs = 0,
         .kv_demotions = 0,
