@@ -477,8 +477,45 @@ check_exact_pins "pyproject dependencies" < <(
         ' {} +
 )
 
-if ((exact_pin_fail)); then
+# A PEP 723 block (`# /// script`) turns any Python file in the tree into its own
+# environment: `uv run scripts/brand-glyphs.py` resolves the requirements in its
+# header against PyPI, with no lockfile in between. A range written there
+# ("fonttools>=4.66") ships code from whatever satisfies it that day, and no
+# other check here can see it, because the requirement is not in a pyproject.toml
+# and not in any uv.lock. The header is the only manifest such a script has, so
+# it is the only place the pin can be enforced; scripts/brand-glyphs.py
+# (fonttools) is the one file that names a requirement today.
+#
+# A `# dependencies = []` header is fine and carries no token, so the three
+# stdlib-only scripts are skipped by the same parse. The list is read as a
+# block from `dependencies = [` to the first line ending the list, not as one
+# line: a header that wraps across lines is the same header to uv, so a
+# single-line read would let a range through as soon as someone reformatted it.
+pep723_fail=0
+while IFS= read -r pep723_file; do
+    while IFS= read -r spec; do
+        [[ -n "$spec" ]] || continue
+        if [[ ! "$spec" =~ ^[A-Za-z0-9._-]+(==)?[0-9][A-Za-z0-9._+-]*(\[[^]]+\])?(\;.*)?$ ]]; then
+            echo "check-pins: $pep723_file (PEP 723 header): '$spec' does not pin one exact version" >&2
+            pep723_fail=1
+        fi
+    done < <(
+        # shellcheck disable=SC2016  # awk's $0 and /^# dependencies = \[/ are the awk language, not the shell
+        awk '
+            /^# dependencies = \[/ { in_deps = 1 }
+            in_deps {
+                while (match($0, /"[^"]+"/)) {
+                    print substr($0, RSTART + 1, RLENGTH - 2)
+                    $0 = substr($0, RSTART + RLENGTH)
+                }
+                if ($0 ~ /\]/) { in_deps = 0 }
+            }
+        ' "$pep723_file"
+    )
+done < <(find scripts tools tests -name '*.py' -not -path '*/.venv/*' -exec grep -l '^# /// script' {} + | LC_ALL=C sort)
+
+if ((exact_pin_fail || pep723_fail)); then
     echo "check-pins: every third-party requirement must pin one exact version" >&2
     exit 1
 fi
-echo "Dependency pins OK: package.json dependencies, devDependencies and pyproject requirements are exact"
+echo "Dependency pins OK: package.json dependencies, devDependencies, pyproject requirements and PEP 723 headers are exact"

@@ -11,8 +11,20 @@ notices of the bundled code to travel with it. A notices file nobody regenerates
 is a notices file that goes stale on the first dependency bump, so the closure
 is recomputed here from package.json and bun.lock and compared both ways.
 
-Only the production closure is checked: devDependencies are installed but never
-bundled, and the Python trees are harnesses that no release artifact carries.
+Two other dependency sets exist in-tree, and neither is covered by
+package.json, bun.lock or any uv.lock, so nothing else can see them:
+
+- PEP 723 headers (`# /// script`) make a Python file its own environment.
+  `uv run scripts/brand-glyphs.py` resolves the requirements in that header
+  against PyPI with no lockfile in between.
+- docs/render-diagrams.mjs pins its two renderer packages in a comment and
+  installs them globally, so no manifest holds them.
+
+Neither ships in a release artifact, so the closure above cannot name them and
+the versioned `name@version` table is the wrong shape for them. They are
+recorded in the notices file in PEP 508 form (`name==version`), which the
+table's PACKAGE_REF does not match, and the check below compares that set both
+ways so neither direction drifts.
 """
 
 from __future__ import annotations
@@ -126,6 +138,40 @@ def listed_entries(notices: Path) -> set[str]:
     return {match.group(0).strip("`") for match in PACKAGE_REF.finditer(notices.read_text())}
 
 
+# A PEP 508 reference (`name==version`), the form an inline requirement takes in
+# a PEP 723 header. Distinct from PACKAGE_REF, so a `name==version` in the
+# notices file is not read as a bundle entry and vice versa.
+PEP508_REF = re.compile(r"`(?P<name>@?[\w.-]+)==(?P<version>[^\s`]+)`")
+
+
+def listed_pep508(notices: Path) -> set[str]:
+    """name==version pairs listed in the notices file."""
+    return {match.group(0).strip("`") for match in PEP508_REF.finditer(notices.read_text())}
+
+
+# `# dependencies = ["fonttools==4.66.0", ...]` in a PEP 723 header. The list
+# is read as a block from the opening bracket to the line that closes it, so a
+# header that wraps across lines is read the same as an inline one: uv reads
+# both identically, so this must too.
+PEP723_DEPENDENCIES = re.compile(r"^# dependencies = \[(?P<body>.*?)\]", re.MULTILINE | re.DOTALL)
+PEP723_MARKER = re.compile(r"^# /// script$", re.MULTILINE)
+
+
+def pep723_requirements(root: Path) -> set[str]:
+    """Every inline requirement a PEP 723 script in the tree carries."""
+    found: set[str] = set()
+    for base in ("scripts", "tools", "tests"):
+        for path in sorted((root / base).rglob("*.py")):
+            if ".venv" in path.parts:
+                continue
+            text = path.read_text(encoding="utf-8", errors="replace")
+            if not PEP723_MARKER.search(text):
+                continue
+            for body in PEP723_DEPENDENCIES.findall(text):
+                found.update(re.findall(r'"([^"]+)"', body))
+    return found
+
+
 def main() -> int:
     root = find_root()
     notices = root / "THIRD_PARTY_NOTICES.md"
@@ -154,7 +200,29 @@ def main() -> int:
             + "\nremove them, or move them to the not-shipped section if they are build-only"
         )
 
-    print(f"Third-party notices OK: {len(closure)} bundled packages listed in THIRD_PARTY_NOTICES.md")
+    inline = pep723_requirements(root)
+    listed_inline = listed_pep508(notices)
+    unlisted_inline = sorted(inline - listed_inline)
+    if unlisted_inline:
+        sys.exit(
+            "check-third-party-notices: these PEP 723 script requirements are missing from "
+            "THIRD_PARTY_NOTICES.md:\n"
+            + "\n".join(f"  {entry}" for entry in unlisted_inline)
+            + "\nrecord each with its license in the not-shipped section, then rerun"
+        )
+    stale_inline = sorted(listed_inline - inline)
+    if stale_inline:
+        sys.exit(
+            "check-third-party-notices: THIRD_PARTY_NOTICES.md lists PEP 508 requirements that "
+            "no PEP 723 header in the tree carries:\n"
+            + "\n".join(f"  {entry}" for entry in stale_inline)
+            + "\nremove them, or record the package that needs them"
+        )
+
+    print(
+        f"Third-party notices OK: {len(closure)} bundled packages and "
+        f"{len(inline)} PEP 723 requirement(s) listed in THIRD_PARTY_NOTICES.md"
+    )
     return 0
 
 

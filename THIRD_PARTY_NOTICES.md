@@ -84,6 +84,22 @@ The Python trees are harnesses, not shipped code: `rich` for
 `research/kernels/`. They run in a developer or CI environment and are not part
 of any distributed artifact.
 
+Two dependency sets live in the tree but in no manifest, so neither
+`package.json` nor any `uv.lock` records them. Both are build-time only:
+
+| Requirement | License | Used by | Why it is not a lockfile entry |
+| --- | --- | --- | --- |
+| `fonttools==4.66.0` | MIT | `scripts/brand-glyphs.py` | PEP 723 header: `uv run` on the file builds its own environment from it. Nothing else references it, so a project-level entry would be an orphan. |
+
+`docs/render-diagrams.mjs` is the other one: it pins `beautiful-mermaid` (MIT)
+and `@resvg/resvg-js` (MPL-2.0) in its own header and installs them with
+`bun add -g`, deliberately outside `package.json` so a layout engine and a
+native rasterizer stay out of every contributor's and CI runner's
+`bun install`. Neither ships: the rendered PNG/SVG copies carry no third-party
+code. `scripts/check-pins.sh` holds the exact version of everything named
+here, and `scripts/check-third-party-notices.py` fails when the `fonttools`
+pin drifts from the header that carries it.
+
 The Zig engine itself has no third-party dependencies: `build.zig.zon` declares
 none, so there is nothing to attribute there.
 

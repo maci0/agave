@@ -542,6 +542,10 @@ DOCS_CHECK_PATH_INPUTS = (
     "src/backend/vulkan.zig",
     "scripts/check-docs.py",
     "scripts/test_check_docs.py",
+    "scripts/check-third-party-notices.py",
+    "scripts/test_check_third_party_notices.py",
+    "scripts/brand-glyphs.py",
+    "THIRD_PARTY_NOTICES.md",
     "scripts/check-shader-artifacts.sh",
     ".github/workflows/ci.yml",
 )
