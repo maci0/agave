@@ -234,7 +234,11 @@ jobs:
           path: |
             .zig-cache
             ~/.cache/zig
-          key: zig-${{ steps.zig.outputs.version }}-cross-${{ matrix.target }}-${{ hashFiles('build.zig', 'build.zig.zon', 'src/**') }}
+          # tests/** too: the x86_64-linux-musl leg runs `zig build test`,
+          # which compiles tests/sdpa_oracle.zig and tests/models/
+          # golden_harness.zig. Without it a test-only edit reuses the whole
+          # restored prefix and the leg pays a cold rebuild.
+          key: zig-${{ steps.zig.outputs.version }}-cross-${{ matrix.target }}-${{ hashFiles('build.zig', 'build.zig.zon', 'src/**', 'tests/**') }}
           restore-keys: zig-${{ steps.zig.outputs.version }}-cross-${{ matrix.target }}-
 
       - name: Build for target
