@@ -29,6 +29,9 @@ const beacon_prefix = "AGAVE-DISCOVER:";
 const join_prefix = "AGAVE-JOIN:";
 const max_msg_len: usize = 64;
 const usec_per_ms: u32 = 1000;
+/// Discovery port the bind-conflict test holds, kept off the 8080 the other
+/// tests use so the suite's sockets cannot collide.
+const discovery_test_port: u16 = 45177;
 
 /// Monotonic milliseconds for the discovery deadline. Counting assumed
 /// `beacon_interval_ms` after a 1s `SO_RCVTIMEO` made a 30s timeout take ~60s.
@@ -72,7 +75,10 @@ pub fn discoverPeer(rank: u32, world_size: u32, port: u16) ?[4]u8 {
     }
 
     const sock = c.socket(posix.AF.INET, posix.SOCK.DGRAM, 0);
-    if (sock < 0) return null;
+    if (sock < 0) {
+        std.log.warn("discovery: could not create the UDP discovery socket: {s}", .{@tagName(c.errno(sock))});
+        return null;
+    }
     defer _ = c.close(sock);
 
     // Enable broadcast
@@ -99,7 +105,17 @@ fn discoverAsRank0(sock: c_int, world_size: u32, port: u16) ?[4]u8 {
         .port = std.mem.nativeToBig(u16, port),
         .addr = 0,
     };
-    if (c.bind(sock, @ptrCast(&bind_addr), @sizeOf(@TypeOf(bind_addr))) != 0) return null;
+    // A bind failure (port already taken by another rank or a stale socket)
+    // is otherwise indistinguishable from "no peer out there", and far more
+    // actionable, so name the port and the errno.
+    const bind_rc = c.bind(sock, @ptrCast(&bind_addr), @sizeOf(@TypeOf(bind_addr)));
+    if (bind_rc != 0) {
+        std.log.warn("discovery: could not bind the UDP discovery socket to port {d}: {s}", .{
+            port,
+            @tagName(c.errno(bind_rc)),
+        });
+        return null;
+    }
 
     // Recv timeout matches the beacon interval so each empty poll waits ~500ms,
     // not 1s (which previously doubled the advertised 30s discovery window).
@@ -200,6 +216,26 @@ test "discovery times out in virtual time under sim_clock override" {
     try std.testing.expectEqual(@as(?[4]u8, null), result);
     try std.testing.expectEqual(@as(i64, 1_000 + discovery_timeout_ms), sim_clock.milliNow());
     try std.testing.expectEqual(@as(?[4]u8, null), discoverPeer(1, 2, 8080));
+}
+
+test "discovery, an occupied port fails instead of scanning for peers" {
+    // Hold the rank-0 discovery port, then confirm discovery gives up right
+    // away rather than blocking in recvfrom for discovery_timeout_ms. The bind
+    // failure is the operator's only clue that another rank already owns the
+    // port, so it is logged rather than swallowed.
+    const held = c.socket(posix.AF.INET, posix.SOCK.DGRAM, 0);
+    try std.testing.expect(held >= 0);
+    defer _ = c.close(held);
+    var held_addr: posix.sockaddr.in = .{
+        .port = std.mem.nativeToBig(u16, discovery_test_port),
+        .addr = 0,
+    };
+    try std.testing.expect(c.bind(held, @ptrCast(&held_addr), @sizeOf(@TypeOf(held_addr))) == 0);
+
+    const start_ms = monoMilli();
+    try std.testing.expectEqual(@as(?[4]u8, null), discoverPeer(0, 2, discovery_test_port));
+    // Without the bind check this call spins for the whole discovery window.
+    try std.testing.expect(monoMilli() - start_ms < discovery_timeout_ms);
 }
 
 test "discovery, beacon message format" {
@@ -327,7 +363,14 @@ fn discoverAsWorker(sock: c_int, rank: u32, world_size: u32, port: u16) ?[4]u8 {
         .port = std.mem.nativeToBig(u16, port + 1),
         .addr = 0,
     };
-    if (c.bind(sock, @ptrCast(&bind_addr), @sizeOf(@TypeOf(bind_addr))) != 0) return null;
+    const bind_rc = c.bind(sock, @ptrCast(&bind_addr), @sizeOf(@TypeOf(bind_addr)));
+    if (bind_rc != 0) {
+        std.log.warn("discovery: could not bind the UDP discovery socket to port {d}: {s}", .{
+            port + 1,
+            @tagName(c.errno(bind_rc)),
+        });
+        return null;
+    }
 
     const tv = msToTimeval(discovery_timeout_ms);
     _ = c.setsockopt(sock, posix.SOL.SOCKET, posix.SO.RCVTIMEO, @ptrCast(&tv), @sizeOf(@TypeOf(tv)));

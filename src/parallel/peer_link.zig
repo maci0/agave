@@ -98,12 +98,28 @@ pub fn setup(allocator: std.mem.Allocator, peers_str: []const u8, rank: u32, wor
     if (rank == 0) {
         var la: std.posix.sockaddr.in = .{ .port = std.mem.nativeToBig(u16, port), .addr = 0 };
         const ls = std.c.socket(std.posix.AF.INET, std.posix.SOCK.STREAM, 0);
-        if (ls < 0) return null;
+        if (ls < 0) {
+            std.log.err("could not create the rank 0 listening socket: {s}", .{@tagName(std.c.errno(ls))});
+            return null;
+        }
         defer _ = std.c.close(ls);
         var one: c_int = 1;
         _ = std.c.setsockopt(ls, std.posix.SOL.SOCKET, std.posix.SO.REUSEADDR, @ptrCast(&one), @sizeOf(c_int));
-        if (std.c.bind(ls, @ptrCast(&la), @sizeOf(@TypeOf(la))) != 0) return null;
-        if (std.c.listen(ls, 1) != 0) return null;
+        // A bind failure is the most common way this setup fails, so name the
+        // port and the errno rather than returning null with no output.
+        const bind_rc = std.c.bind(ls, @ptrCast(&la), @sizeOf(@TypeOf(la)));
+        if (bind_rc != 0) {
+            std.log.err("could not bind the rank 0 listener to port {d}: {s} (already in use by another rank?)", .{
+                port,
+                @tagName(std.c.errno(bind_rc)),
+            });
+            return null;
+        }
+        const listen_rc = std.c.listen(ls, 1);
+        if (listen_rc != 0) {
+            std.log.err("could not listen on port {d}: {s}", .{ port, @tagName(std.c.errno(listen_rc)) });
+            return null;
+        }
         std.log.info("waiting for rank 1 on port {d}...", .{port});
         t.acceptPeer(ls) catch |err| {
             std.log.err("rank 1 never connected on port {d}: {s}", .{ port, @errorName(err) });

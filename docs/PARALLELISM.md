@@ -150,6 +150,8 @@ Layers split into `pp_degree` contiguous stages. Stage assignment: `layer * pp_d
 
 **Bubble**: During single-token decode, pipeline utilization is `1/pp_degree`. The primary benefit of PP is fitting larger models in memory, not throughput improvement.
 
+**Setup is fatal on failure**: if the peer transport cannot be brought up, or no `--peers` was given and UDP discovery found no peer, the rank logs the reason and exits non-zero. It does not fall back to running every layer locally, which would silently duplicate the whole model on each rank. A bind failure names the port and errno (`could not bind the rank 0 listener to port N: ADDRINUSE`); most often the port is already taken by the peer rank's own discovery socket.
+
 ---
 
 ## Disaggregated Prefill/Decode

@@ -3194,11 +3194,25 @@ fn initAndRun(
                 if (ip_str.len > 0) cli.tp_peers = ip_str;
             }
         }
-        if (cli.tp_peers) |peers_str| {
-            if (setupTransport(allocator, peers_str, cli.tp_rank, cli.pp_degree, cli.transport, pp_discovery_port, be)) |t| {
-                mdl.setPpConfig(cli.tp_rank, cli.pp_degree, t);
-            }
-        }
+        const peers_str = cli.tp_peers orelse {
+            // No --peers and discovery found nothing. Same reasoning as the
+            // transport failure below: continuing here would leave pp_degree=1
+            // and run the whole model on this rank instead of the requested
+            // slice of it.
+            std.log.err("PP={d} rank={d}: no peers given and none discovered on port {d}, exiting", .{
+                cli.pp_degree, cli.tp_rank, pp_discovery_port,
+            });
+            return false;
+        };
+        // Fatal, not a skip: without the transport the rank keeps the default
+        // pp_degree=1 and runs every layer itself, so each rank duplicates the
+        // whole model and the pipeline the user asked for never forms. Same
+        // rule as the TP setup above.
+        const tr = setupTransport(allocator, peers_str, cli.tp_rank, cli.pp_degree, cli.transport, pp_discovery_port, be) orelse {
+            std.log.err("PP transport setup failed (rank {d}): peer unreachable, exiting", .{cli.tp_rank});
+            return false;
+        };
+        mdl.setPpConfig(cli.tp_rank, cli.pp_degree, tr);
     }
 
     // TriAttention: load calibration data when --kv-eviction tri
