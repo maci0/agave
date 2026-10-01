@@ -7,6 +7,7 @@
  *  forgotten on another.
  */
 
+import { asciiDigits, parseLocaleInt, parseLocaleNumber } from './format';
 import type { Sampling } from './types';
 
 /** Key the system prompt used before it moved to sessionStorage. */
@@ -38,9 +39,11 @@ const readSystemPrompt = (): string => {
 };
 
 /** Clamp a raw max-tokens field to the allowed range; unparseable text becomes
- *  the minimum. */
+ *  the minimum. The field is read with `parseLocaleInt`, so digits in any
+ *  script and the grouping marks the reader's locale writes are accepted
+ *  instead of falling through to the minimum as a bare `Number()` would. */
 export const clampMaxTokens = (raw: string): number => {
-  const parsed = Math.trunc(Number(raw));
+  const parsed = parseLocaleInt(raw);
   if (Number.isNaN(parsed) || parsed < MAX_TOKENS_MIN) {return MAX_TOKENS_MIN;}
   if (parsed > MAX_TOKENS_MAX) {return MAX_TOKENS_MAX;}
   return parsed;
@@ -49,8 +52,14 @@ export const clampMaxTokens = (raw: string): number => {
 /** A field is valid only when it holds a whole number inside the range, with no
  *  stray text. */
 export const isMaxTokensValid = (raw: string): boolean => {
-  const parsed = Math.trunc(Number(raw));
-  return !Number.isNaN(parsed) && String(parsed) === raw.trim() && parsed >= MAX_TOKENS_MIN && parsed <= MAX_TOKENS_MAX;
+  const parsed = parseLocaleInt(raw);
+  if (Number.isNaN(parsed) || parsed < MAX_TOKENS_MIN || parsed > MAX_TOKENS_MAX) {return false;}
+  /* What the reader typed must be the same number and nothing else, so "512"
+     passes while "512.0", "1e3" and "٥١٢abc" do not. The comparison is against
+     the canonical digits the parser read, which is what lets the same value
+     written in another digit script, or with the locale's grouping marks, stay
+     valid instead of reading as stray text. */
+  return String(parsed) === asciiDigits(raw).replaceAll(/[\s ,٬،]/gu, '');
 };
 
 /** The stored max-tokens field, normalized on the way out. A stored value can
@@ -64,10 +73,13 @@ const readMaxTokens = (): string => {
 };
 
 /** A stored number, or `fallback` when the key is missing, blank or not a
- *  finite number. `Number('')` is 0, so blank is checked before coercing. */
+ *  finite number. `parseLocaleNumber('')` is NaN, so blank is checked before
+ *  coercing. Read with the locale parser for the same reason as the token
+ *  budget: a value written by an earlier build in another digit script, or with
+ *  the reader's own grouping marks, still loads. */
 const readFinite = (key: string, fallback: number): number => {
   const raw = localStorage.getItem(key)?.trim() ?? '';
-  const value = raw === '' ? Number.NaN : Number(raw);
+  const value = raw === '' ? Number.NaN : parseLocaleNumber(raw);
   return Number.isFinite(value) ? value : fallback;
 };
 

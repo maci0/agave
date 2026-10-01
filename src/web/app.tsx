@@ -25,7 +25,7 @@ import {
   useSettings,
   useToasts,
 } from './chat/hooks';
-import { fmtInt, fmtPercent, localDateYmd } from './chat/format';
+import { fmtInt, fmtPercent, localDateYmd, writingDirection } from './chat/format';
 import type { Toast } from './chat/types';
 
 const DRAWER_BREAKPOINT = '(max-width: 700px)';
@@ -356,4 +356,9 @@ const ChatApp = () => {
 
 const root = document.querySelector('#root');
 if (root === null) { throw new Error('missing #root'); }
+/* Every layout rule in the tree is a CSS logical property, so mirroring the
+   page for a right-to-left reader is this attribute and nothing else. Set
+   before the first render so the sidebar, the message bubbles and the composer
+   start on the reader's own side instead of flipping after paint. */
+document.documentElement.dir = writingDirection(navigator.language);
 createRoot(root).render(<ChatApp />);

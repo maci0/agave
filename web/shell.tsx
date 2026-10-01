@@ -20,6 +20,7 @@ import { SkipLink } from '../src/web/ui/skip-link';
 import { cn } from '../src/web/ui/cn';
 import { friendlyGenerateError } from './load-errors';
 import { useModelLoader, type ModelLoader } from './use-model-loader';
+import { writingDirection } from '../src/web/chat/format';
 
 const MAX_TOKENS = 200;
 const ANNOUNCE_DELAY_MS = 100;
@@ -405,4 +406,8 @@ const Shell = () => {
 
 const root = document.querySelector('#root');
 if (root === null) { throw new Error('missing #root'); }
+/* The shell stylesheet uses logical properties throughout, so this attribute
+   is the whole of its right-to-left support. Set before the first render so
+   the panel starts on the reader's own side instead of flipping after paint. */
+document.documentElement.dir = writingDirection(navigator.language);
 createRoot(root).render(<Shell />);

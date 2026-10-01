@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { truncateAnnounce } from './format';
+import { parseLocaleInt, parseLocaleNumber, truncateAnnounce, writingDirection } from './format';
 
 /** One user-perceived character spread over several code points. Truncating
  *  mid-cluster announces a lone ZWJ or half a flag, so each of these must come
@@ -67,4 +67,113 @@ test('every cut point leaves whole clusters behind', () => {
     // Every regional indicator that survived kept its partner.
     expect(indicatorsIn(body) % 2).toBe(0);
   }
+});
+
+/** A reader types the digits their own keyboard produces. `Number()` and
+ *  `parseInt` read ASCII only, so every other script parsed as NaN and a field
+ *  that clamps on an unparseable value fell silently to its minimum. */
+
+/** Arabic-Indic ٠٧ as "0.7": an Arabic-Indic zero, the Arabic decimal mark and
+ *  an Arabic-Indic seven. */
+const ARABIC_DECIMAL = '٠٫٧';
+
+const ARABIC_INDIC = '٥١٢';
+const EXTENDED_ARABIC = '۵۱۲';
+const FULLWIDTH = '５１２';
+const THAI = '๕๑๒';
+
+test('a whole number reads the same in every digit script', () => {
+  for (const digits of ['512', ARABIC_INDIC, EXTENDED_ARABIC, FULLWIDTH, THAI]) {
+    expect(parseLocaleInt(digits)).toBe(512);
+  }
+});
+
+test('a grouped whole number is a grouping mark, not stray text', () => {
+  expect(parseLocaleInt('1,024')).toBe(1024);
+  // German, Swiss and Finnish group with a period.
+  expect(parseLocaleInt('1.024')).toBe(1024);
+  // The spaces a thousands separator is typed as, narrow no-break included.
+  expect(parseLocaleInt('1 024')).toBe(1024);
+  expect(parseLocaleInt('1 024')).toBe(1024);
+  expect(parseLocaleInt('1 024')).toBe(1024);
+  // Indian lakh and crore grouping.
+  expect(parseLocaleInt('1,00,000')).toBe(100_000);
+});
+
+test('a decimal mark on a whole-number field is a rejection', () => {
+  // "512.0" must not read as 5120, and "0.7" is not a whole number.
+  expect(Number.isNaN(parseLocaleInt('512.0'))).toBe(true);
+  expect(Number.isNaN(parseLocaleInt('0.7'))).toBe(true);
+  // A group that is not a group.
+  expect(Number.isNaN(parseLocaleInt('1,0000'))).toBe(true);
+  expect(Number.isNaN(parseLocaleInt('1,,024'))).toBe(true);
+});
+
+test('a decimal reads the same whichever mark the locale writes', () => {
+  for (const raw of ['0.7', '0,7', '٠,٧', ARABIC_DECIMAL]) {
+    expect(parseLocaleNumber(raw)).toBeCloseTo(0.7, 10);
+  }
+  // Both spellings of a grouped four-digit decimal mean the same number.
+  expect(parseLocaleNumber('1.024,5')).toBe(1024.5);
+  expect(parseLocaleNumber('1,024.5')).toBe(1024.5);
+});
+
+test('a signed decimal keeps its sign away from the digits', () => {
+  expect(parseLocaleNumber('-0.5')).toBe(-0.5);
+  expect(parseLocaleNumber('-,5')).toBe(-0.5);
+  expect(parseLocaleNumber('+0,5')).toBe(0.5);
+});
+
+test('text that is not a number stays unparseable', () => {
+  for (const raw of ['', 'abc', '1e3', '512abc', '.', ',']) {
+    expect(Number.isNaN(parseLocaleNumber(raw))).toBe(true);
+  }
+  for (const raw of ['', 'abc', '1e3', '51a']) {
+    expect(Number.isNaN(parseLocaleInt(raw))).toBe(true);
+  }
+});
+
+/**
+ * The layout rules in the tree are all CSS logical properties, so the whole of
+ * RTL support is one `dir` attribute. Without it an Arabic or Hebrew reader
+ * gets an LTR page with the sidebar and the message bubbles on the wrong side.
+ * These pin the direction a browser tag maps to.
+ */
+
+const RTL_TAGS = ['ar', 'ar-EG', 'he', 'he-IL', 'fa', 'fa_AF', 'ur', 'ps', 'sd', 'ug', 'ckb', 'dv', 'yi', 'arc'];
+
+test('a right-to-left tag mirrors the page', () => {
+  for (const tag of RTL_TAGS) {
+    expect(writingDirection(tag)).toBe('rtl');
+  }
+});
+
+test('a left-to-right tag does not', () => {
+  for (const tag of ['en', 'en-US', 'de', 'fr-FR', 'ja', 'ko', 'zh-Hans', 'ru', 'hi', 'th', 'az-Latn']) {
+    expect(writingDirection(tag)).toBe('ltr');
+  }
+});
+
+test('an absent or blank language is left-to-right, not a crash', () => {
+  expect(writingDirection(undefined)).toBe('ltr');
+  expect(writingDirection(null)).toBe('ltr');
+  expect(writingDirection('')).toBe('ltr');
+  expect(writingDirection('  ')).toBe('ltr');
+});
+
+test('a script subtag decides over the language prefix', () => {
+  /* Kurdish (Kurmanji) is written in Latin script and Azeri in Latin too, so a
+     language prefix alone would mirror these pages for readers who do not read
+     them right to left. The script subtag is the authoritative signal. */
+  expect(writingDirection('az-Arab')).toBe('rtl');
+  expect(writingDirection('az-Latn')).toBe('ltr');
+  expect(writingDirection('ku-Latn')).toBe('ltr');
+  expect(writingDirection('ar-Latn')).toBe('ltr');
+  /* The script decides even where the language prefix says otherwise: Fulah
+     is written right to left in the Adlam script, and a reader whose browser
+     reports that tag must get a mirrored page. */
+  expect(writingDirection('ff-Adlm')).toBe('rtl');
+  expect(writingDirection('ff-Latn')).toBe('ltr');
+  /* A script the list does not name is LTR, not a guess at RTL. */
+  expect(writingDirection('en-Latn')).toBe('ltr');
 });
