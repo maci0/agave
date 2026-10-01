@@ -76,6 +76,29 @@ if [[ "$lic" != "GPL-3.0-or-later" ]]; then
 fi
 echo "OCI licenses ok: $lic"
 
+# The version label and /usr/share/agave/version must be the same product
+# version, and neither may be the "dev" fallback: LABEL cannot read files, so an
+# image built without --build-arg AGAVE_VERSION ships "dev" in the label while
+# the file says the real version, and a consumer that trusts the label cannot
+# tell which build it has. CI passes the version from build.zig.zon through the
+# fmt-check job's output.
+want_version="$(sed -n 's/^[[:space:]]*\.version[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$(dirname "${BASH_SOURCE[0]}")/../build.zig.zon" | head -n1)"
+if [[ -z "$want_version" ]]; then
+    echo "::error::could not parse .version from build.zig.zon to check the image version" >&2
+    exit 1
+fi
+label_version="$(docker inspect --format='{{index .Config.Labels "org.opencontainers.image.version"}}' "$image")"
+if [[ "$label_version" != "$want_version" ]]; then
+    echo "::error::OCI version label is '$label_version'; expected $want_version (pass --build-arg AGAVE_VERSION=$want_version)" >&2
+    exit 1
+fi
+file_version="$(docker run --rm --entrypoint cat "$image" /usr/share/agave/version)"
+if [[ "$file_version" != "$want_version" ]]; then
+    echo "::error::/usr/share/agave/version is '$file_version'; expected $want_version" >&2
+    exit 1
+fi
+echo "OCI version ok: $label_version (label and /usr/share/agave/version match build.zig.zon)"
+
 # All dlopen backends disabled in the build above, so the Dockerfile must
 # select a static musl binary. ldd exits nonzero on a static binary, which is
 # the expected path, not a failure.

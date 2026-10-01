@@ -42,6 +42,10 @@ jobs:
     name: Check formatting
     runs-on: ubuntu-24.04
     timeout-minutes: 5
+    outputs:
+      # The product SemVer from build.zig.zon, so docker-build stamps the OCI
+      # version label from the manifest instead of shipping "dev".
+      agave-version: ${{ steps.product-version.outputs.agave-version }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -53,6 +57,15 @@ jobs:
       # gate cannot disagree with CI on the reproducibility pins.
       - name: Check Zig and Docker reproducibility pins agree
         run: scripts/check-pins.sh
+
+      # The product SemVer, read once here and handed to the docker-build job as
+      # AGAVE_VERSION. LABEL cannot read files, so an image built without the
+      # arg ships org.opencontainers.image.version="dev"; spelling the version
+      # into the workflow instead of reading it turns every product bump into a
+      # docker-build failure.
+      - name: Read the product version
+        id: product-version
+        run: echo "agave-version=$(bash scripts/product-version.sh)" >> "$GITHUB_OUTPUT"
 
       # src/web/app.js and web/shell.js are minified bundles of React, Radix
       # and friends. The bundler strips their license headers, so this file is
@@ -139,6 +152,20 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
+      # The compose file is the documented local entry point but nothing parsed
+      # it: a syntax error or a bad healthcheck reached a developer's
+      # `docker compose up` instead of a red check. `config` parses the file and
+      # expands every ${VAR}, including the :? on AGAVE_API_KEY, so a value is
+      # supplied here.
+      #
+      # Before the image build, not after: parsing is a second of work and the
+      # build below is the 60-minute job. Running the cheap check second meant a
+      # compose typo cost a full runner before it surfaced.
+      - name: Validate docker-compose.yml
+        env:
+          AGAVE_API_KEY: ci-compose-validate
+        run: docker compose config --quiet
+
       - name: Build Docker image (CPU-only, single model)
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
@@ -147,6 +174,14 @@ jobs:
           load: true
           tags: agave:ci
           build-args: |
+            # LABEL cannot read files, so an image built without this arg ships
+            # org.opencontainers.image.version="dev" and a consumer cannot tell
+            # which release it came from. The value is read from build.zig.zon
+            # by the fmt-check job (scripts/product-version.sh), never spelled
+            # out here: the build stage refuses a literal that has drifted from
+            # the manifest, which would turn the next product bump into a
+            # docker-build failure about an unrelated change.
+            AGAVE_VERSION=${{ needs.fmt-check.outputs.agave-version }}
             ENABLE_CUDA=false
             ENABLE_VULKAN=false
             ENABLE_ROCM=false
@@ -166,16 +201,6 @@ jobs:
             ENABLE_DFLASH2=false
           cache-from: type=gha
           cache-to: type=gha,mode=max
-
-      # The compose file is the documented local entry point but nothing parsed
-      # it: a syntax error or a bad healthcheck reached a developer's
-      # `docker compose up` instead of a red check. `config` parses the file and
-      # expands every ${VAR}, including the :? on AGAVE_API_KEY, so a value is
-      # supplied here.
-      - name: Validate docker-compose.yml
-        env:
-          AGAVE_API_KEY: ci-compose-validate
-        run: docker compose config --quiet
 
       - name: Smoke test binary
         run: bash scripts/check-docker-image.sh agave:ci

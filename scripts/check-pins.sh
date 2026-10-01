@@ -177,6 +177,112 @@ if [[ "$compose_user" != "$df_uid:$df_gid" || "$compose_tmpfs" != "$df_uid:$df_g
 fi
 echo "Runtime user OK: $df_uid:$df_gid (Dockerfile, compose user:, compose tmpfs, check-docker-image.sh)"
 
+# The image is built from three files that each spell out the backend and model
+# -Denable-* flags: docker-compose.yml (the documented local entry point), the
+# ci.yml docker-build job's build-args, and scripts/check-reproducible.sh's
+# BUILD_FLAGS. They agree today because someone edited all three; a new
+# architecture added to only one of them compiles fine everywhere and ships an
+# image, or gates a reproducibility check, that silently does not cover it.
+# None of the three can see the others, so compare the lists here.
+#
+# ENABLE_METAL is unset in compose and CI (macOS-only, unusable in Docker, and
+# the Dockerfile already defaults it off) and ENABLE_CPU / ENABLE_BENCH are
+# never turned off, so only the flags each side actually spells out are
+# compared. compose and CI are the same build and their lists must match
+# exactly; check-reproducible.sh builds a deliberately smaller one, so only its
+# GPU backends are compared (below).
+compose_build_flags="$(
+    sed -n '/^[[:space:]]*args:/,/^[[:space:]]*image:/p' docker-compose.yml |
+        sed -n 's/^[[:space:]]*\(ENABLE_[A-Z0-9_]*\):[[:space:]]*"\([a-z]*\)".*/\1=\2/p' |
+        LC_ALL=C sort
+)"
+ci_build_flags="$(
+    sed -n '/^[[:space:]]*build-args:[[:space:]]*|/,/^[[:space:]]*cache-from:/p' .github/workflows/ci.yml |
+        sed -n 's/^[[:space:]]*\(ENABLE_[A-Z0-9_]*\)=[[:space:]]*\([a-z]*\)[[:space:]]*$/\1=\2/p' |
+        LC_ALL=C sort
+)"
+if [[ -z "$compose_build_flags" || -z "$ci_build_flags" ]]; then
+    echo "check-pins: could not parse the -Denable-* flag list from docker-compose.yml or ci.yml" >&2
+    exit 1
+fi
+flag_diff="$(comm -3 <(printf '%s\n' "$compose_build_flags") <(printf '%s\n' "$ci_build_flags"))"
+if [[ -n "$flag_diff" ]]; then
+    echo "check-pins: -Denable-* build-arg mismatch between docker-compose.yml and ci.yml" >&2
+    printf '%s\n' "$flag_diff" | sed 's/^\t/  only in ci.yml: /;s/^\([^ ]\)/  only in docker-compose.yml: \1/' >&2
+    echo "check-pins: update both files in the same change" >&2
+    exit 1
+fi
+# check-reproducible.sh spells the same backends as -Denable-<slug>=false,
+# one quoted array element per line with kebab-case slugs, so fold both sides
+# to one spelling and compare the four dlopen backends. Those decide whether
+# the build is musl or glibc: a GPU backend left on here builds and measures a
+# glibc binary, while CI's docker-build job disables all four and ships the
+# static musl one. Its model list is deliberately different (it keeps
+# qwen4exp), so only the backends are compared.
+backend_re='^ENABLE_(CUDA|VULKAN|ROCM|WEBGPU)='
+compose_backends="$(printf '%s\n' "$compose_build_flags" | grep -E "$backend_re" | LC_ALL=C sort)"
+ci_backends="$(printf '%s\n' "$ci_build_flags" | grep -E "$backend_re" | LC_ALL=C sort)"
+repro_backends="$(
+    sed -n 's/^[[:space:]]*-Denable-\([a-z]*\)=false.*$/\1=false/p' scripts/check-reproducible.sh |
+        awk 'BEGIN { FS = "=" } $1 ~ /^(cuda|vulkan|rocm|webgpu)$/ { print "ENABLE_" toupper($1) "=" $2 }' |
+        LC_ALL=C sort
+)"
+if [[ -z "$compose_backends" || -z "$ci_backends" || -z "$repro_backends" ]]; then
+    echo "check-pins: could not parse the backend enable flags from docker-compose.yml, ci.yml or check-reproducible.sh" >&2
+    exit 1
+fi
+backend_mismatch() {
+    local name=$1 have=$2
+    if [[ "$have" != "$ci_backends" ]]; then
+        echo "check-pins: $name does not disable the same GPU backends as ci.yml" >&2
+        echo "check-pins:   $name: $(printf '%s ' "$have")" >&2
+        echo "check-pins:   ci.yml: $(printf '%s ' "$ci_backends")" >&2
+        exit 1
+    fi
+}
+backend_mismatch "docker-compose.yml" "$compose_backends"
+backend_mismatch "check-reproducible.sh" "$repro_backends"
+echo "Image build flags OK: $(printf '%s\n' "$ci_build_flags" | wc -l | tr -d ' ') -Denable-* flag(s) agree (docker-compose.yml, ci.yml, check-reproducible.sh)"
+
+# The CI image must carry the real product version. LABEL cannot read files, so
+# the Dockerfile falls back to "dev" unless AGAVE_VERSION is passed, and the
+# only thing that passes it is the fmt-check job's output read from
+# build.zig.zon. Two ways that wiring rots, both silent until someone inspects
+# a published image: the docker-build job stops forwarding the output (the
+# build still succeeds, the label is "dev"), or someone hardcodes the version
+# in the workflow (the next product bump fails the docker build for a reason
+# that has nothing to do with the change). Check the wiring, not the value.
+# shellcheck disable=SC2016  # the ${{ }} below is the literal GitHub Actions expression, not a shell expansion
+if ! grep -q 'AGAVE_VERSION=\${{ needs\.fmt-check\.outputs\.agave-version }}' .github/workflows/ci.yml; then
+    echo "check-pins: ci.yml docker-build must pass AGAVE_VERSION from needs.fmt-check.outputs.agave-version" >&2
+    echo "check-pins: LABEL cannot read files, so an image built without it ships version 'dev'" >&2
+    exit 1
+fi
+# shellcheck disable=SC2016  # the ${{ }} below is the literal GitHub Actions expression, not a shell expansion
+if ! grep -q 'agave-version: \${{ steps\.product-version\.outputs\.agave-version }}' .github/workflows/ci.yml; then
+    echo "check-pins: ci.yml fmt-check must expose the .version of build.zig.zon as the agave-version job output" >&2
+    exit 1
+fi
+# The smoke test reads the same value out of the image, so a missing label is a
+# red docker-build rather than a mystery for whoever deploys it.
+if ! grep -q 'org.opencontainers.image.version' scripts/check-docker-image.sh; then
+    echo "check-pins: scripts/check-docker-image.sh must assert org.opencontainers.image.version" >&2
+    exit 1
+fi
+# The job output is filled by the script, not by a sed pasted into the YAML, so
+# the read lives in scripts/ where `zig build lint-shell` analyses it and there
+# is one implementation to keep correct.
+if ! grep -qF 'bash scripts/product-version.sh' .github/workflows/ci.yml; then
+    echo "check-pins: ci.yml must read the product version with scripts/product-version.sh, not an inline run: block" >&2
+    exit 1
+fi
+zon_version="$(sed -n 's/^[[:space:]]*\.version[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' build.zig.zon | head -n1)"
+if [[ -z "$zon_version" || "$(bash scripts/product-version.sh)" != "$zon_version" ]]; then
+    echo "check-pins: scripts/product-version.sh disagrees with build.zig.zon .version" >&2
+    exit 1
+fi
+echo "Image version wiring OK: build.zig.zon .version -> product-version.sh -> fmt-check output -> AGAVE_VERSION -> label and /usr/share/agave/version"
+
 # `zig fmt --check` and `zig build fmt-check` must cover the same files. A path
 # added to build.zig's fmt_paths but not to the ci.yml step is formatted locally
 # and shipped unformatted; the reverse is a file CI rejects that no local gate
