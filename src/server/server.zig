@@ -777,6 +777,13 @@ const Server = struct {
         defer self.mutex.unlock(self.io);
         const claim = self.idem.claim(key, log_idem_route[0..log_idem_route_len], milliTimestamp());
         log_idem_token = if (claim == .fresh) claim.fresh else 0;
+        // A key longer than the route cap claims nothing, which is ordinary;
+        // a key inside every cap that still gets no slot means the ring is full
+        // of requests that have not finished. That one runs unclaimed, so the
+        // retry window is gone for it and a retry would repeat the mutation.
+        if (claim == .fresh and claim.fresh == 0 and log_idem_route_len != 0) {
+            std.log.warn("req={d} replay ledger full ({d} in-flight keys); running {s} without an idempotency key", .{ log_request_id, Idempotency.capacity, log_idem_route[0..log_idem_route_len] });
+        }
         return claim;
     }
 

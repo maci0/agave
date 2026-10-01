@@ -31,6 +31,12 @@
 //! `in_flight_ttl_ms` can have its slot re-armed for a retry; without the token
 //! its late `complete` would answer the retry, and its late `release` would
 //! hand the key to a third request while the retry is still executing.
+//!
+//! A full ring reclaims the oldest completed slot, never one still `in_flight`:
+//! freeing a live claim would hand its key to a concurrent retry, which would
+//! then run the same mutation a second time while the first is still running.
+//! With every slot in flight the new key runs unclaimed (a zero `fresh`
+//! token), which costs that one operation its replay window and nothing else.
 
 const std = @import("std");
 
@@ -40,7 +46,9 @@ pub const max_key_len: usize = 64;
 /// `/v1/chat/regenerate`; anything longer is left unclaimed rather than
 /// truncated, since a truncated route would match a different one.
 pub const max_route_len: usize = 32;
-/// Ring size. Only the most recent `capacity` keys stay replayable.
+/// Ring size. Only the most recent `capacity` keys stay replayable. A slot
+/// holding a live `in_flight` claim is never evicted (see `claim`), so the
+/// effective ceiling on concurrently deduplicated requests is this many.
 pub const capacity: usize = 64;
 /// Largest response body kept for replay. A longer one is still recorded as
 /// completed, so a retry collapses instead of re-running, but the retry is
@@ -66,6 +74,12 @@ const Slot = struct {
     /// match on it so a request whose claim expired and was re-armed for
     /// another caller cannot overwrite or drop the new claim.
     token: u64 = 0,
+    /// Arm order, monotonic across the ledger's life. Breaks eviction ties
+    /// between two `done` slots whose `deadline_ms` are equal, which is the
+    /// normal case when many requests complete in one millisecond: without it
+    /// the oldest-by-index slot is evicted over and over and the ring stops
+    /// holding the most recent `capacity` keys.
+    seq: u64 = 0,
     /// In-flight claim start, or completion time, depending on `state`.
     deadline_ms: i64 = 0,
     status_line: []const u8 = "",
@@ -108,8 +122,9 @@ pub const Replay = struct {
 
 pub const Claim = union(enum) {
     /// Caller owns the key under `token` and must pass it to `complete` or
-    /// `release`. A zero token means the key was not claimable (empty or
-    /// oversized) and there is nothing to complete.
+    /// `release`. A zero token means the key was not claimable (empty,
+    /// oversized, or every slot held a live in-flight claim) and there is
+    /// nothing to complete.
     fresh: u64,
     /// A live request already holds the key.
     duplicate,
@@ -120,8 +135,8 @@ pub const Claim = union(enum) {
 pub const Ledger = struct {
     allocator: std.mem.Allocator,
     slots: [capacity]Slot = @splat(.{}),
-    next: usize = 0,
     next_token: u64 = 1,
+    next_seq: u64 = 1,
 
     pub fn init(allocator: std.mem.Allocator) Ledger {
         return .{ .allocator = allocator };
@@ -136,42 +151,59 @@ pub const Ledger = struct {
     /// is scoped to `route`, so the same id on a different route is a different
     /// key. A fresh claim carries a token that scopes its `complete` and
     /// `release`.
+    ///
+    /// A `fresh` token of 0 means the ring held no slot this key could take
+    /// without stealing one from a request still running. Evicting that one
+    /// would let its owner's retry re-enter as `fresh` and run the same
+    /// mutation twice at once, so instead the new key runs unclaimed: it has
+    /// no duplicate yet, and an unclaimed run repeats no side effect. Only
+    /// the deduplication window is lost, not the run.
     pub fn claim(self: *Ledger, key: []const u8, route: []const u8, now_ms: i64) Claim {
         if (key.len == 0 or key.len > max_key_len) return .{ .fresh = 0 };
         if (route.len == 0 or route.len > max_route_len) return .{ .fresh = 0 };
 
         var free_slot: ?*Slot = null;
+        // Oldest live `done` slot. Its replay is a convenience for a retry,
+        // not the guard against a second execution, so reclaiming it only
+        // costs that one retry its cached bytes. `in_flight` slots are never
+        // candidates: reclaiming one re-opens its key to a concurrent retry.
+        var oldest_done: ?*Slot = null;
+        var oldest_seq: u64 = 0;
         for (&self.slots) |*s| {
             if (s.state == .free) {
                 if (free_slot == null) free_slot = s;
                 continue;
             }
-            if (!s.matches(key, route)) continue;
-            if (s.live(now_ms)) {
-                if (s.state == .in_flight) return .duplicate;
-                return .{
-                    .replay = .{
-                        .status_line = s.status_line,
-                        .content_type = s.content_type,
-                        // Copied out under the ledger lock: the slot body is freed
-                        // as soon as any other request claims, evicts, or completes.
-                        .body = blk: {
-                            if (s.body.len == 0) break :blk @as([]u8, @constCast(""));
-                            break :blk self.allocator.dupe(u8, s.body) catch @as([]u8, @constCast(""));
+            if (s.matches(key, route)) {
+                if (s.live(now_ms)) {
+                    if (s.state == .in_flight) return .duplicate;
+                    return .{
+                        .replay = .{
+                            .status_line = s.status_line,
+                            .content_type = s.content_type,
+                            // Copied out under the ledger lock: the slot body is freed
+                            // as soon as any other request claims, evicts, or completes.
+                            .body = blk: {
+                                if (s.body.len == 0) break :blk @as([]u8, @constCast(""));
+                                break :blk self.allocator.dupe(u8, s.body) catch @as([]u8, @constCast(""));
+                            },
                         },
-                    },
-                };
+                    };
+                }
+                // Expired: reuse this slot rather than leaving its body resident.
+                self.discard(s);
+                return .{ .fresh = self.arm(s, key, route, now_ms) };
             }
-            // Expired: reuse this slot rather than leaving its body resident.
-            self.discard(s);
-            return .{ .fresh = self.arm(s, key, route, now_ms) };
+            // Not this key. Track the cheapest reclaimable slot for the miss.
+            if (s.state == .done and s.live(now_ms) and
+                (oldest_done == null or s.seq < oldest_seq))
+            {
+                oldest_done = s;
+                oldest_seq = s.seq;
+            }
         }
 
-        const slot = free_slot orelse blk: {
-            const s = &self.slots[self.next];
-            self.next = (self.next + 1) % capacity;
-            break :blk s;
-        };
+        const slot = free_slot orelse oldest_done orelse return .{ .fresh = 0 };
         self.discard(slot);
         return .{ .fresh = self.arm(slot, key, route, now_ms) };
     }
@@ -223,6 +255,8 @@ pub const Ledger = struct {
         const token = self.next_token;
         self.next_token +%= 1;
         slot.token = token;
+        slot.seq = self.next_seq;
+        self.next_seq +%= 1;
         slot.state = .in_flight;
         slot.deadline_ms = now_ms;
         slot.status_line = "";
@@ -241,6 +275,7 @@ pub const Ledger = struct {
         slot.state = .free;
         slot.key_len = 0;
         slot.route_len = 0;
+        slot.seq = 0;
         slot.status_line = "";
         slot.deadline_ms = 0;
     }
@@ -426,6 +461,46 @@ test "oversized body still records completion" {
     try testing.expect(c == .replay);
     defer c.replay.deinit(testing.allocator);
     try testing.expectEqualStrings("", c.replay.body);
+}
+
+test "a full ring never steals a live in-flight claim" {
+    var l = Ledger.init(testing.allocator);
+    defer l.deinit();
+
+    // Fill every slot with a request that has not finished yet.
+    var labels: [capacity][16]u8 = undefined;
+    var label_lens: [capacity]usize = undefined;
+    var tokens: [capacity]u64 = undefined;
+    for (0..capacity) |i| {
+        label_lens[i] = (try std.fmt.bufPrint(&labels[i], "k{d}", .{i})).len;
+        tokens[i] = try claimKey(&l, labels[i][0..label_lens[i]], 0);
+        try testing.expect(tokens[i] != 0);
+    }
+
+    // A key that needs a slot cannot take a live one, so it runs unclaimed
+    // rather than evicting a request that is still executing. Reclaiming one
+    // would let its owner's retry re-enter as fresh and run the same mutation
+    // a second time concurrently.
+    const overflow = l.claim("overflow", test_route, 1);
+    try testing.expectEqual(@as(u64, 0), overflow.fresh);
+
+    // Every in-flight label still reports the duplicate, not a fresh claim.
+    for (0..capacity) |i| {
+        try testing.expectEqual(Claim{ .duplicate = {} }, l.claim(labels[i][0..label_lens[i]], test_route, 1));
+    }
+
+    // The request the overflow was not allowed to evict can still complete,
+    // and its owner still holds its claim.
+    const first = labels[0][0..label_lens[0]];
+    l.complete(first, test_route, tokens[0], 2, "200 OK", "text/html", "first");
+    const replayed = l.claim(first, test_route, 3);
+    try testing.expect(replayed == .replay);
+    replayed.replay.deinit(testing.allocator);
+
+    // Once slots expire, the ring takes them again.
+    const reclaimed = l.claim("overflow", test_route, in_flight_ttl_ms);
+    try testing.expect(reclaimed == .fresh);
+    try testing.expect(reclaimed.fresh != 0);
 }
 
 test "slot reuse does not leak the previous body" {

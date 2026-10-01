@@ -752,6 +752,14 @@ hour, so storage is bounded and an abandoned request cannot block its own
 retries. A key that collides with an unrelated operation is the caller's
 responsibility: generate one per logical request, not per attempt.
 
+A full ledger reclaims the oldest completed key, never one still running:
+freeing a live claim would let its owner's retry run the same mutation a second
+time while the first is in flight. With all 64 keys in flight the next request
+runs without a claim, and the server logs `replay ledger full`; that request
+loses its own retry protection until a slot frees, so a retry of it is not
+deduplicated. Keep concurrent mutating requests under 64 rather than relying on
+the key alone.
+
 The bundled chat UI mints a key per send, per regenerate, and per new chat
 (`newRequestId` in `src/web/chat/api.ts`). A request that fails after the server
 persisted the turn records its response under the key and completes it, so the
