@@ -21,6 +21,9 @@ const kv_quant = @import("kv_quant.zig");
 const KvQuantType = kv_quant.KvQuantType;
 const ThreadPool = @import("../thread_pool.zig").ThreadPool;
 const sdpa_cpu = @import("../backend/backend.zig").CpuSdpa;
+/// Block layout for the tier tests below. From the leaf layout module, not the
+/// cache manager, so this file never reaches past `tiered.zig` into manager.zig.
+const CacheBlock = @import("../kvcache/view.zig").CacheBlock;
 
 /// SIMD vector width (number of f32 lanes) for merge accumulation loops.
 const simd_width: usize = 8;
@@ -372,7 +375,6 @@ test "partitionBlocksLocked matches unlocked scan" {
 
 test "partitionBlocks mixed tiers" {
     // 4 blocks: [vram, ram, vram, ram], block_size=16, seq_len=60
-    const CacheBlock = @import("../kvcache/manager.zig").CacheBlock;
     var blocks: [4]TieredBlock = undefined;
     blocks[0] = .{ .base = CacheBlock{ .keys = &[_]f32{}, .values = &[_]f32{} }, .tier = .vram };
     blocks[1] = .{ .base = CacheBlock{ .keys = &[_]f32{}, .values = &[_]f32{} }, .tier = .ram };
@@ -408,7 +410,6 @@ test "partitionBlocks mixed tiers" {
 }
 
 test "partitionBlocks all gpu" {
-    const CacheBlock = @import("../kvcache/manager.zig").CacheBlock;
     var blocks: [2]TieredBlock = undefined;
     blocks[0] = .{ .base = CacheBlock{ .keys = &[_]f32{}, .values = &[_]f32{} }, .tier = .vram };
     blocks[1] = .{ .base = CacheBlock{ .keys = &[_]f32{}, .values = &[_]f32{} }, .tier = .vram };
@@ -425,7 +426,6 @@ test "partitionBlocks all gpu" {
 }
 
 test "partitionBlocks all cpu" {
-    const CacheBlock = @import("../kvcache/manager.zig").CacheBlock;
     var blocks: [3]TieredBlock = undefined;
     blocks[0] = .{ .base = CacheBlock{ .keys = &[_]f32{}, .values = &[_]f32{} }, .tier = .ram };
     blocks[1] = .{ .base = CacheBlock{ .keys = &[_]f32{}, .values = &[_]f32{} }, .tier = .ssd };
