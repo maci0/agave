@@ -72,6 +72,18 @@ const MetaValue = union(enum) {
     bool_val: bool,
 };
 
+/// Convert a `config.json` float to a u32 dimension, or null when it is not a
+/// whole number in range. config.json is untrusted input and `parseConfigJson`
+/// stores `"num_hidden_layers": 8.5` as `.float`; `@intFromFloat` on a
+/// fractional value is UB in ReleaseFast and truncates to 8 in safe builds, so
+/// a non-integral dimension silently becomes a wrong layer count. Reject it
+/// instead, the way the `.uint` arm already range-checks.
+fn metaFloatAsU32(f: f64) ?u32 {
+    if (!std.math.isFinite(f) or f < 0 or f > std.math.maxInt(u32)) return null;
+    if (@floor(f) != f) return null;
+    return @intFromFloat(f);
+}
+
 // ── Public struct ─────────────────────────────────────────────────────────────
 
 /// Loader for a directory of .safetensors shard files plus config.json and
@@ -525,7 +537,7 @@ pub const SafeTensorsDir = struct {
             lookupMetaAllTranslations(&self.config_meta, key) orelse return null;
         return switch (v) {
             .uint => |u| if (u <= std.math.maxInt(u32)) @intCast(u) else null,
-            .float => |f| if (f >= 0 and f <= std.math.maxInt(u32)) @intFromFloat(f) else null,
+            .float => |f| metaFloatAsU32(f),
             .bool_val => |b| @as(u32, if (b) 1 else 0),
             else => null,
         };
@@ -1199,7 +1211,7 @@ fn fuseNvfp4Experts(
         if (config_meta.get("num_hidden_layers")) |v| {
             switch (v) {
                 .uint => |u| break :blk if (u <= std.math.maxInt(u32)) @intCast(u) else return,
-                .float => |f| break :blk if (f >= 0 and f <= std.math.maxInt(u32)) @intFromFloat(f) else return,
+                .float => |f| break :blk metaFloatAsU32(f) orelse return,
                 else => return,
             }
         }
@@ -1232,7 +1244,7 @@ fn fuseNvfp4Experts(
             if (config_meta.get(key)) |v| {
                 switch (v) {
                     .uint => |u| break :blk if (u <= std.math.maxInt(u32)) @intCast(u) else 0,
-                    .float => |fv| break :blk if (fv >= 0 and fv <= std.math.maxInt(u32)) @intFromFloat(fv) else 0,
+                    .float => |fv| break :blk metaFloatAsU32(fv) orelse 0,
                     else => {},
                 }
             }
@@ -1842,7 +1854,7 @@ fn fuseDs4Flash0731(
         if (config_meta.get("num_hidden_layers")) |v| {
             switch (v) {
                 .uint => |u| break :blk if (u <= std.math.maxInt(u32)) @intCast(u) else return,
-                .float => |f| break :blk if (f >= 0 and f <= std.math.maxInt(u32)) @intFromFloat(f) else return,
+                .float => |f| break :blk metaFloatAsU32(f) orelse return,
                 else => return,
             }
         }
@@ -1852,7 +1864,7 @@ fn fuseDs4Flash0731(
         if (config_meta.get("n_routed_experts")) |v| {
             switch (v) {
                 .uint => |u| break :blk if (u <= std.math.maxInt(u32)) @intCast(u) else return,
-                .float => |f| break :blk if (f >= 0 and f <= std.math.maxInt(u32)) @intFromFloat(f) else return,
+                .float => |f| break :blk metaFloatAsU32(f) orelse return,
                 else => return,
             }
         }
@@ -4555,4 +4567,41 @@ test "fuzz: all safetensors functions" {
             }
         }
     }.f, .{});
+}
+
+test "metaFloatAsU32 rejects non-integral and out-of-range config dimensions" {
+    // config.json is untrusted: parseConfigJson stores 8.5 as .float. A
+    // truncating cast would turn that into a layer count of 8 and load a
+    // silently wrong model, so a fractional dimension is rejected outright.
+    try std.testing.expectEqual(@as(?u32, 8), metaFloatAsU32(8.0));
+    try std.testing.expectEqual(@as(?u32, 0), metaFloatAsU32(0.0));
+    try std.testing.expectEqual(@as(?u32, 248070), metaFloatAsU32(248070.0));
+    try std.testing.expectEqual(@as(?u32, null), metaFloatAsU32(8.5));
+    try std.testing.expectEqual(@as(?u32, null), metaFloatAsU32(-1.0));
+    try std.testing.expectEqual(@as(?u32, null), metaFloatAsU32(std.math.nan(f64)));
+    try std.testing.expectEqual(@as(?u32, null), metaFloatAsU32(std.math.inf(f64)));
+    try std.testing.expectEqual(@as(?u32, null), metaFloatAsU32(@as(f64, std.math.maxInt(u32)) + 1.0));
+}
+
+test "parseConfigJson rejects a fractional layer count as a u32 dimension" {
+    const allocator = std.testing.allocator;
+    const json =
+        \\{"num_hidden_layers": 8.5}
+    ;
+    var meta = std.StringHashMap(MetaValue).init(allocator);
+    defer meta.deinit();
+    var owned: std.ArrayList([]u8) = .empty;
+    defer {
+        for (owned.items) |s| allocator.free(s);
+        owned.deinit(allocator);
+    }
+
+    try parseConfigJson(allocator, json, &meta, &owned);
+
+    // The raw value still parses (it is preserved for float consumers)...
+    const v = meta.get("num_hidden_layers") orelse return error.Missing;
+    try std.testing.expectApproxEqAbs(@as(f64, 8.5), v.float, 1e-12);
+    // ...but no u32 dimension can be derived from it.
+    try std.testing.expectEqual(@as(?u32, null), metaU32(&meta, "num_hidden_layers"));
+    try std.testing.expectEqual(@as(?u32, null), metaFloatAsU32(v.float));
 }

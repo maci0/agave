@@ -1581,7 +1581,12 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
                 eprint("Error: --vram-budget must be between 0 and 1024 GiB, got '{s}'\n", .{raw});
                 std.process.exit(2);
             }
-            break :blk @as(usize, @intFromFloat(gib * 1024.0 * 1024.0 * 1024.0));
+            // Floor before the int cast: `@intFromFloat` is only defined for an
+            // integral value, and gib * 2^30 is fractional for almost every
+            // input (0.3, 1.7, 7.7777). Matches the other GiB→byte
+            // conversions in this file (warnIfBudgetForcesEviction,
+            // vramBudgetBytes).
+            break :blk @as(usize, @intFromFloat(@floor(gib * 1024.0 * 1024.0 * 1024.0)));
         },
         .ssd_cache_slots = blk: {
             const v = parseU32(res.option("ssd-cache-slots"), "ssd-cache-slots") orelse 256;
