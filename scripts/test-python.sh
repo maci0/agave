@@ -19,6 +19,7 @@ fi
 suites=(
     scripts/test_check_docs.py
     scripts/test_check_third_party_notices.py
+    scripts/test_check_pins.py
     tools/mixed-quant/test_splice_mixed_experts.py
     tools/quality-testing/test_collect_continuations.py
 )

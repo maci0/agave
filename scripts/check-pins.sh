@@ -389,7 +389,25 @@ if [[ "$engines_bun" != "$bun_pin" ]]; then
     echo "check-pins: package.json engines.bun ($engines_bun) != packageManager (bun@$bun_pin)" >&2
     exit 1
 fi
-echo "Bun pin OK: $bun_pin (packageManager, engines.bun, ci.yml setup-bun)"
+# @types/bun is the type surface of one bun release, and tsconfig types every
+# file against it: the two are the same version by construction, so they are one
+# pin spelled twice. They agree today because one bump edited both. Bump
+# packageManager alone and `bun install` still succeeds, `tsc` typechecks the UI
+# against a bun API that the pinned runner no longer has, and nothing in the
+# tree reports it. Same rule as the Zig pin (three files) and the ruff pin
+# (ruff.toml and the uvx line): every spelling carries the number.
+types_bun="$(sed -n '/"devDependencies"/,/^[[:space:]]*}/p' package.json |
+    sed -n 's/^[[:space:]]*"@types\/bun": "\([^"]*\)".*/\1/p')"
+if [[ -z "$types_bun" ]]; then
+    echo "check-pins: could not parse the @types/bun pin from package.json devDependencies" >&2
+    exit 1
+fi
+if [[ "$types_bun" != "$bun_pin" ]]; then
+    echo "check-pins: package.json @types/bun ($types_bun) != the bun pin ($bun_pin)" >&2
+    echo "check-pins: tsconfig types every file against @types/bun; bump both in the same change" >&2
+    exit 1
+fi
+echo "Bun pin OK: $bun_pin (packageManager, engines.bun, @types/bun, ci.yml setup-bun)"
 
 # Vendored third-party source has to be traceable too. tools/oxlint/anti-slop is
 # a copy of dmmulroy/anti-slop, and the upstream commit it was copied from was
@@ -437,6 +455,73 @@ else
         exit 1
     fi
     echo "Vendored source OK: $vendored_dir matches $vendored_manifest"
+fi
+
+# The bun patches are the same class of input, and the only one nothing hashes.
+# `bun install` applies vendor/patches/*.patch to the resolved package on every
+# install, from the working tree, before any script runs: an edit to that file
+# rewrites node_modules/@rikalabs/oxlint-standards so the strict preset enables
+# a different rule set, and package.json, bun.lock and the vendored manifest
+# above all stay byte-identical, so nothing in the tree records the change.
+# .oxlintrc.json extends that preset, so the edit decides which rules lint-web
+# enforces against the whole src/web tree. A patch whose bytes drifted from
+# VENDORED.sha256 is either a re-vendor nobody reviewed or a turn of the lint
+# gate, and the manifest is where that shows up.
+patches_dir="vendor/patches"
+patches_manifest="$patches_dir/VENDORED.sha256"
+if [[ ${#sha_cmd[@]} -eq 0 ]]; then
+    echo "check-pins: no sha256sum or shasum on PATH, skipping the patch manifest check"
+elif [[ ! -f "$patches_manifest" ]]; then
+    echo "check-pins: $patches_manifest is missing; the patches bun install applies must stay hash-anchored" >&2
+    exit 1
+else
+    patches_fail=0
+    while read -r want rel; do
+        [[ -n "$want" && -n "$rel" ]] || continue
+        if [[ ! -f "$patches_dir/$rel" ]]; then
+            echo "check-pins: $patches_manifest lists $rel, which is no longer in the tree" >&2
+            patches_fail=1
+            continue
+        fi
+        got="$("${sha_cmd[@]}" "$patches_dir/$rel" | cut -d' ' -f1)"
+        if [[ "$got" != "$want" ]]; then
+            echo "check-pins: $rel is not the patch $patches_manifest records ($got != $want)" >&2
+            echo "check-pins: bun install applies it to node_modules before any lint runs; regenerate the manifest deliberately" >&2
+            patches_fail=1
+        fi
+    done <"$patches_manifest"
+    # The other direction: an unlisted .patch is applied, or merely present with
+    # nothing anchoring it, so a patchedDependencies entry can point at one
+    # without any manifest change.
+    while read -r rel; do
+        if ! grep -qF -- "  $rel" "$patches_manifest"; then
+            echo "check-pins: $rel is in $patches_dir but not in $patches_manifest; re-patch and regenerate it" >&2
+            patches_fail=1
+        fi
+    done < <(cd "$patches_dir" && find . -type f -name '*.patch' | sed 's|^\./||' | LC_ALL=C sort)
+    # A patchedDependencies entry whose patch is missing, or is not in the
+    # manifest, is the same hole one level up: package.json then claims a
+    # version is patched and the patch is unaccounted for. The value is the
+    # path relative to the repo root, so it is both what the file is called on
+    # disk and the name the manifest records.
+    while read -r rel; do
+        [[ -n "$rel" ]] || continue
+        if [[ "$rel" != vendor/patches/* ]]; then
+            echo "check-pins: package.json patchedDependencies points outside vendor/patches ($rel)" >&2
+            patches_fail=1
+        elif [[ ! -f "$ROOT/$rel" ]]; then
+            echo "check-pins: package.json patchedDependencies patches $rel, which is not a file" >&2
+            patches_fail=1
+        elif ! grep -qF -- "${rel#vendor/patches/}" "$patches_manifest"; then
+            echo "check-pins: package.json patchedDependencies patches $rel, which $patches_manifest does not record" >&2
+            patches_fail=1
+        fi
+    done < <(sed -n '/"patchedDependencies"/,/^[[:space:]]*}/p' package.json |
+        sed -n 's/^[[:space:]]*"[^"]*@[^"]*":[[:space:]]*"\([^"]*\)".*/\1/p')
+    if [[ "$patches_fail" -ne 0 ]]; then
+        exit 1
+    fi
+    echo "Patch source OK: $patches_dir matches $patches_manifest"
 fi
 
 # Every pyproject.toml that ships a uv.lock must have that lock agree with its
