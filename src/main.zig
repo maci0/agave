@@ -99,15 +99,13 @@ fn videoFrameBase(buf: []u8) []const u8 {
 /// generation durations). Wall-clock reads would report negative or inflated
 /// durations after an NTP step or manual clock change mid-run; same convention
 /// as server.zig's interval clock.
-fn milliTimestamp(io: Io) i64 {
-    _ = io;
+fn milliTimestamp() i64 {
     return sim_clock.monoMilli();
 }
 
 /// Nanoseconds since epoch (wall clock): PRNG seed derivation and
 /// process-unique tags where cross-process uniqueness matters.
-fn nanoTimestamp(io: Io) i96 {
-    _ = io;
+fn nanoTimestamp() i96 {
     return sim_clock.nanoNow();
 }
 
@@ -352,7 +350,7 @@ const warmup_bar_width: u32 = 30;
 
 /// Preload all mmap'd model data into RAM with progress bar.
 fn preloadModel(gguf: ?*GGUFFile, st: ?*SafeTensorsDir, quiet: bool, tty: bool, total_bytes: usize) u64 {
-    const start = milliTimestamp(g_io);
+    const start = milliTimestamp();
     if (quiet or (gguf == null and st == null)) {
         // Still preload, just don't show progress
         if (gguf) |g| preloadRegion(g.mapped_data);
@@ -1436,7 +1434,7 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
             };
         },
         .no_kv_cache = res.flag("no-kv-cache"),
-        .seed = parseU64(res.option("seed"), "seed") orelse @as(u64, @truncate(@as(u96, @bitCast(nanoTimestamp(g_io))))),
+        .seed = parseU64(res.option("seed"), "seed") orelse @as(u64, @truncate(@as(u96, @bitCast(nanoTimestamp())))),
         .seed_explicit = res.option("seed") != null,
         .kv_type_k = blk: {
             if (res.option("kv-type-k")) |s| break :blk kvTypeOrExit(s, "--kv-type-k");
@@ -2354,7 +2352,7 @@ fn printUsage() void {
 // ── Formatting helpers ───────────────────────────────────────────
 
 fn elapsedMs(start: i64) u64 {
-    return @intCast(@max(milliTimestamp(g_io) - start, 0));
+    return @intCast(@max(milliTimestamp() - start, 0));
 }
 
 const EogTokens = struct { ids: [max_eog_ids]u32, len: usize };
@@ -2408,7 +2406,7 @@ pub fn main(init: std.process.Init) !void {
     var cli = parseCli(allocator) orelse return;
 
     // ── Load model format ────────────────────────────────────────
-    const load_start = milliTimestamp(g_io);
+    const load_start = milliTimestamp();
 
     // Detect format: directory → SafeTensors, else → GGUF
     const is_dir = blk: {
@@ -3093,7 +3091,7 @@ fn initAndRun(
     const tiered_ptr: ?*TieredKvCache = if (tiered_cache_storage != null) &tiered_cache_storage.? else null;
 
     // Use ModelStorage to initialize the model without exposing concrete types.
-    const init_start = milliTimestamp(g_io);
+    const init_start = milliTimestamp();
     const eviction_budget: u32 = if (cli.kv_eviction != .none)
         (if (cli.kv_budget > 0) cli.kv_budget else kv_evict.defaultBudget(cli.ctx_size))
     else
@@ -3619,7 +3617,7 @@ fn initAndRun(
             var tmp_buf: [tmp_path_buf_size]u8 = undefined;
             // Wall nanos: the tag must stay unique across concurrent agave
             // processes; monotonic time is boot-relative and can collide.
-            const tmp_dir_slice = std.fmt.bufPrint(&tmp_buf, "{s}/agave_video_{d}", .{ tmp_base, nanoTimestamp(g_io) }) catch video_tmp_fallback;
+            const tmp_dir_slice = std.fmt.bufPrint(&tmp_buf, "{s}/agave_video_{d}", .{ tmp_base, nanoTimestamp() }) catch video_tmp_fallback;
             // The directory is pid+time unique, so createDir can only fail for
             // a real reason. Continuing would make ffmpeg fail on a missing
             // output path and report a video problem instead.
@@ -4395,12 +4393,12 @@ fn generateDiffusion(
 
     if (!g_quiet) eprint("diffusion: prompt = {d} tokens\n", .{token_ids.len});
 
-    const start_ms = milliTimestamp(g_io);
+    const start_ms = milliTimestamp();
     _ = model.prefill(token_ids) catch |e| {
         eprint("Error: prefill failed: {}\n", .{e});
         return;
     };
-    const prefill_ms = milliTimestamp(g_io) - start_ms;
+    const prefill_ms = milliTimestamp() - start_ms;
 
     const max_steps = cli.diffusion_steps;
     const canvas_len = cli.diffusion_canvas;
@@ -4411,7 +4409,7 @@ fn generateDiffusion(
     const max_blocks = (cli.max_tokens + canvas_len - 1) / canvas_len;
 
     // Track timing.
-    const gen_start_ms = milliTimestamp(g_io);
+    const gen_start_ms = milliTimestamp();
 
     while (block_count < max_blocks) : (block_count += 1) {
         // Initialize canvas with random tokens (uniform state diffusion).
@@ -4522,7 +4520,7 @@ fn generateDiffusion(
     _ = std.posix.system.write(stdout_file.handle, "\n", 1);
 
     if (show_stats) {
-        const gen_ms = milliTimestamp(g_io) - gen_start_ms;
+        const gen_ms = milliTimestamp() - gen_start_ms;
         const tok_per_s = if (gen_ms > 0) @as(f64, @floatFromInt(total_generated)) * 1000.0 / @as(f64, @floatFromInt(gen_ms)) else 0;
         eprint("\nprefill: {d}ms, generated: {d} tokens in {d}ms ({d:.1} tok/s)\n", .{ prefill_ms, total_generated, gen_ms, tok_per_s });
     }
@@ -4645,7 +4643,7 @@ fn generateSpeculative(
     };
 
     // Prefill both models with the prompt
-    const prefill_start = milliTimestamp(g_io);
+    const prefill_start = milliTimestamp();
     var first_target: u32 = 0;
 
     if (cli.spec_mode == .pflash and target.ptr != draft_model.ptr) {
@@ -4685,7 +4683,7 @@ fn generateSpeculative(
             };
         }
     }
-    const prefill_ms = milliTimestamp(g_io) - prefill_start;
+    const prefill_ms = milliTimestamp() - prefill_start;
 
     // DFlash2: ingest the prompt-tail features captured during target prefill
     // into the drafter's context cache, and keep ingestion state for the loop.
@@ -4731,7 +4729,7 @@ fn generateSpeculative(
         spec_state.token_mask = fr_spec_mask;
     }
 
-    const gen_start = milliTimestamp(g_io);
+    const gen_start = milliTimestamp();
     var last = first_target;
     var token_count: u32 = 0;
     var gen_ids_buf: [gen_ids_buf_size]u32 = undefined;
@@ -5145,7 +5143,7 @@ fn generateSpeculative(
         _ = std.posix.system.write(stdout_file.handle, "\n", 1);
     }
 
-    const gen_ms = milliTimestamp(g_io) - gen_start;
+    const gen_ms = milliTimestamp() - gen_start;
     if (emit and show_stats and token_count > 0) {
         const tok_per_sec = if (gen_ms > 0) @as(f32, @floatFromInt(token_count)) / @as(f32, @floatFromInt(gen_ms)) * ms_per_second else 0;
         eprint("\n{d} tok · {d:.1} tok/s · {d}ms prefill · spec: {d:.0}% accept ({d:.1} mean)\n", .{
@@ -5243,7 +5241,7 @@ fn generateAndPrintInner(
     } else text_token_ids;
 
     // Build prefill array: BOS (if needed) + prompt tokens
-    const prefill_start = milliTimestamp(g_io);
+    const prefill_start = milliTimestamp();
     if (!g_quiet and token_ids.len > prefill_progress_threshold) {
         display.showPrefillStart(token_ids.len);
     }
@@ -5411,7 +5409,7 @@ fn generateAndPrintInner(
     // Generate, stream tokens to stdout immediately.
     // Decode in small batches to balance responsiveness vs alloc count.
     // Stop early if the model enters a repetitive loop (same token 6+ times).
-    const gen_start = milliTimestamp(g_io);
+    const gen_start = milliTimestamp();
     var last = first_gen_token;
     var token_count: u32 = 0;
     var gen_ids_buf: [gen_ids_buf_size]u32 = undefined;
