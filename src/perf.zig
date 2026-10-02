@@ -72,7 +72,8 @@ pub const PerfCounters = struct {
     /// Inlined to eliminate per-call overhead when profiling is disabled.
     pub inline fn end(self: *PerfCounters, op: Op, t0: i128) void {
         if (!self.enabled) return;
-        const elapsed: u64 = @intCast(@divFloor(nanoTimestamp() - t0, 1000));
+        const delta = nanoTimestamp() - t0;
+        const elapsed: u64 = if (delta > 0) @intCast(@divFloor(delta, 1000)) else 0;
         const idx = @intFromEnum(op);
         self.times_us[idx] += elapsed;
         self.counts[idx] += 1;

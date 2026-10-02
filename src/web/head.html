@@ -14,4 +14,8 @@
 <!-- marked and DOMPurify are fetched on the first rendered response (app.tsx loadMarkdown),
      not here: nothing on the first paint needs them, and a CDN script in the head
      costs every visitor two cross-origin requests and a TLS handshake. -->
+<!-- ...but once the first response lands, marked/DOMPurify/hljs all come from
+     this origin, so warm the connection in parallel with the first paint
+     instead of paying TLS when the script tag is discovered. -->
+<link rel="dns-prefetch" href="https://cdn.jsdelivr.net">
 <style>

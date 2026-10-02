@@ -30,10 +30,7 @@ pub const TokenBucket = struct {
     /// Accepts a pre-fetched timestamp so callers can refill multiple buckets
     /// with a consistent `now` value under a single lock.
     fn refill(self: *TokenBucket, now: i64) void {
-        if (now <= self.last_refill) {
-            self.last_refill = now;
-            return;
-        }
+        if (now <= self.last_refill) return;
         const elapsed_sec = @as(f64, @floatFromInt(now - self.last_refill)) / ms_per_second;
         self.tokens = @min(self.capacity, self.tokens + elapsed_sec * self.refill_rate);
         self.last_refill = now;
