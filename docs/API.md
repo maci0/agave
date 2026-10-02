@@ -473,6 +473,21 @@ curl localhost:49453/v1/chat/completions -d '{
 }'
 ```
 
+### When constrained output is not produced
+
+JSON mode stops generation at the first point where the braces balance. If the
+model instead runs out of `max_tokens` with the object still open, or keeps
+opening braces past the 64-level nesting cap, the response is returned with
+`finish_reason: "length"` rather than `"stop"`. The body is still the partial
+text the model produced: **a `json_object` response is not guaranteed to parse**.
+Check `finish_reason` before decoding the content. JSON schema and GBNF
+grammar are enforced during decoding, so a schema or grammar that compiles
+cannot produce an incomplete document; use those when the caller parses the
+answer.
+
+A single turn also returns at most 32 tool calls. A model that keeps emitting
+tool-call tags has the remainder dropped, and the count is logged server-side.
+
 ---
 
 ## Vision

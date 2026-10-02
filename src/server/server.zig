@@ -55,6 +55,10 @@ const gen_ids_buf_size: usize = 4096;
 /// generation ID buffer cannot hold more tokens than this (see docs/API.md).
 const max_gen_tokens_cap: usize = gen_ids_buf_size;
 const default_max_gen_tokens: usize = 512;
+/// Max brace/bracket nesting the `json_mode` decoder will follow. A model that
+/// only emits `{` can never balance, so without a cap the request runs to the
+/// full `max_tokens` budget on output that is guaranteed to be unparseable.
+const max_json_depth: i32 = 64;
 const system_fingerprint = "agave-v" ++ engine_version;
 
 /// Clamp a max_tokens value to [1, max_gen_tokens_cap].
@@ -98,6 +102,11 @@ const error_body_buf_size: usize = 512;
 const max_log_path_len: usize = 256;
 /// Max length of an inbound `X-Request-Id` copied into access logs as `xid=`.
 const max_client_request_id_len: usize = 64;
+/// Max tool-call payloads one model turn may emit. Model output is untrusted,
+/// so a runaway generation that keeps closing and reopening tool tags would
+/// otherwise hand the client an unbounded list of calls to execute; the
+/// request-scoped tool allowlist bounds which tools, this bounds how many.
+const max_tool_calls_per_response: u32 = 32;
 const health_buf_size: usize = 768;
 const metrics_render_buf_size: usize = 65536;
 const stats_buf_size: usize = 512;
@@ -1818,6 +1827,10 @@ fn buildAnthropicToolCallResponse(buf: []u8, raw_text: []const u8, req_id: u64, 
     var call_idx: usize = 0;
 
     while (nextAllowedToolCall(raw_text, &search_pos, ctx)) |tc_json| {
+        if (call_idx >= max_tool_calls_per_response) {
+            std.log.warn("req={d} tool call count exceeded {d}; dropping the rest of the response", .{ log_request_id, max_tool_calls_per_response });
+            break;
+        }
         const name = json.extractField(tc_json, "name") orelse continue;
 
         // Resolve input as a JSON object text (see resolveAnthropicToolInput).
@@ -1862,6 +1875,10 @@ fn buildToolCallResponse(buf: []u8, raw_text: []const u8, req_id: u64, created: 
     var call_idx: usize = 0;
 
     while (nextAllowedToolCall(raw_text, &search_pos, ctx)) |tc_json| {
+        if (call_idx >= max_tool_calls_per_response) {
+            std.log.warn("req={d} tool call count exceeded {d}; dropping the rest of the response", .{ log_request_id, max_tool_calls_per_response });
+            break;
+        }
         const call = escapedToolCall(ctx.allocator, tc_json) orelse continue;
         defer call.deinit(ctx.allocator);
 
@@ -1900,6 +1917,10 @@ fn buildResponsesToolCallResponse(buf: []u8, raw_text: []const u8, req_id: u64, 
     const total = prompt_tokens + completion_tokens;
 
     while (nextAllowedToolCall(raw_text, &search_pos, ctx)) |tc_json| {
+        if (call_idx >= max_tool_calls_per_response) {
+            std.log.warn("req={d} tool call count exceeded {d}; dropping the rest of the response", .{ log_request_id, max_tool_calls_per_response });
+            break;
+        }
         const call = escapedToolCall(ctx.allocator, tc_json) orelse continue;
         defer call.deinit(ctx.allocator);
 
@@ -4492,6 +4513,10 @@ fn generateNPre(formatted: []const u8, reset: bool, max_tokens: usize, sampling:
     var prng = std.Random.Xoshiro256.init(prng_seed);
     var mirostat_mu: f32 = sampling.mirostat_tau * 2.0;
     var json_depth: i32 = 0;
+    // True once a `json_mode` response closed its outermost object. False at
+    // the end of generation means the model ran out of tokens mid-object, and
+    // the client must not read the truncated fragment as a finished answer.
+    var json_complete = false;
 
     // Grammar-constrained decoding: parse GBNF and init state
     var grammar_storage: ?grammar_mod.Grammar = null;
@@ -4577,12 +4602,7 @@ fn generateNPre(formatted: []const u8, reset: bool, max_tokens: usize, sampling:
                 break :blk null;
             };
             defer if (text) |t| g_server.allocator.free(t);
-            if (text) |t| {
-                for (t) |ch| {
-                    if (ch == '{' or ch == '[') json_depth += 1;
-                    if (ch == '}' or ch == ']') json_depth -= 1;
-                }
-            }
+            if (text) |t| json_depth = trackJsonDepth(json_depth, t);
         }
     }
 
@@ -4820,11 +4840,18 @@ fn generateNPre(formatted: []const u8, reset: bool, max_tokens: usize, sampling:
             }
             // JSON mode: stop at balanced braces
             if (sampling.json_mode) {
-                for (tok_text) |ch| {
-                    if (ch == '{' or ch == '[') json_depth += 1;
-                    if (ch == '}' or ch == ']') json_depth -= 1;
-                }
+                json_depth = trackJsonDepth(json_depth, tok_text);
                 if (json_depth <= 0) {
+                    token_count += 1;
+                    hit_eog = true;
+                    json_complete = true;
+                    break;
+                }
+                // At the cap the remaining tokens cannot make this balanced
+                // into anything a client can parse, so stop paying for them.
+                // `trackJsonDepth` clamps, so the test is `==`, not `>`.
+                if (json_depth == max_json_depth) {
+                    std.log.warn("req={d} json_mode nesting reached the {d} deep cap; stopping generation with an unterminated object", .{ log_request_id, max_json_depth });
                     token_count += 1;
                     hit_eog = true;
                     break;
@@ -4865,7 +4892,11 @@ fn generateNPre(formatted: []const u8, reset: bool, max_tokens: usize, sampling:
     const gen_end = milliTimestamp();
     const time_ms = elapsedBetween(gen_start, gen_end);
     const tokens_per_sec = tokensPerSec(token_count, time_ms);
-    const finish_reason: []const u8 = if (cancelled) "stop" else if (forward_failed) "error" else if (hit_eog) "stop" else "length";
+    // A `json_mode` request whose object never closed produced a fragment no
+    // JSON parser accepts. Reporting "stop" tells the client the answer is
+    // complete; "length" is the contract's signal that it was cut off.
+    const json_truncated = sampling.json_mode and !json_complete;
+    const finish_reason: []const u8 = if (cancelled) "stop" else if (forward_failed) "error" else if (hit_eog and !json_truncated) "stop" else "length";
     g_server.metrics.recordThroughput(token_count, time_ms);
     g_server.metrics.recordTPOT(token_count, time_ms);
     g_server.metrics.recordPromptTokens(prompt_token_count);
@@ -5530,6 +5561,10 @@ fn startAnthropicStreamWithTools(stream: http.TcpStream, formatted: []const u8, 
         var search_pos: usize = 0;
 
         while (nextAllowedToolCall(gen.raw, &search_pos, ctx)) |tc_json| {
+            if (call_idx >= max_tool_calls_per_response) {
+                std.log.warn("req={d} tool call count exceeded {d}; dropping the rest of the response", .{ log_request_id, max_tool_calls_per_response });
+                break;
+            }
             const name = json.extractField(tc_json, "name") orelse continue;
             const resolved_input = resolveAnthropicToolInput(ctx.allocator, tc_json, call_idx);
             defer if (resolved_input.owned) |p| ctx.allocator.free(p);
@@ -5646,6 +5681,24 @@ fn resolveOpenAiToolArguments(allocator: Allocator, tc_json: []const u8) Resolve
     std.log.warn("req={d} tool call arguments not a JSON object, substituting {{}}", .{log_request_id});
     allocator.free(@constCast(unescaped));
     return .{ .obj = "{}" };
+}
+
+/// Fold one decoded token's braces and brackets into the running `json_mode`
+/// nesting depth. Capped at `max_json_depth`: a model that only ever emits
+/// openers would otherwise keep the request generating to the full token
+/// budget on output no JSON parser can read. `text` is model output, so a
+/// closing brace with no matching opener clamps at zero, matching the stop
+/// condition's `depth <= 0` test.
+fn trackJsonDepth(depth: i32, text: []const u8) i32 {
+    var d = depth;
+    for (text) |ch| {
+        if (ch == '{' or ch == '[') {
+            if (d < max_json_depth) d += 1;
+        } else if (ch == '}' or ch == ']') {
+            d -= 1;
+        }
+    }
+    return @max(d, 0);
 }
 
 /// True when `s` is a single JSON object that closes on its last byte.
@@ -6700,6 +6753,10 @@ fn startStreamWithTools(stream: http.TcpStream, prompt: []const u8, max_tokens: 
         var search_pos: usize = 0;
 
         while (nextAllowedToolCall(gen.raw, &search_pos, ctx)) |tc_json| {
+            if (call_idx >= max_tool_calls_per_response) {
+                std.log.warn("req={d} tool call count exceeded {d}; dropping the rest of the response", .{ log_request_id, max_tool_calls_per_response });
+                break;
+            }
             const call = escapedToolCall(ctx.allocator, tc_json) orelse continue;
             defer call.deinit(ctx.allocator);
 
@@ -8552,6 +8609,43 @@ test "buildResponsesToolCallResponse emits function_call items for declared tool
     try std.testing.expect(std.mem.indexOf(u8, out, "\"total_tokens\":7") != null);
 }
 
+test "buildToolCallResponse stops at max_tool_calls_per_response" {
+    var srv: Server = undefined;
+    srv.tool_registry = .{};
+    srv.allocator = std.testing.allocator;
+    srv.model_name = "test-model";
+    g_server = &srv;
+    defer g_server = undefined;
+
+    var tp = json.ToolParams{};
+    const slot = &tp.tools[0];
+    slot.* = .{ .name = "f", .description = "", .parameters_json = "{}" };
+    tp.tool_count = 1;
+
+    // Assembled here rather than pasted so the payload matches the runtime tag exactly.
+    var text: [max_tool_calls_per_response * 128 + 256]u8 = undefined;
+    var w = std.Io.Writer.fixed(&text);
+    const n_calls = max_tool_calls_per_response + 20;
+    for (0..n_calls) |_| {
+        w.writeAll("<tool_call>{\"name\": \"f\", \"arguments\": {}}</tool_call>") catch unreachable;
+    }
+    const raw = text[0..w.end];
+
+    var reg = tools_mod.Registry{};
+    const ctx = testToolCallCtx(&tp, &reg);
+    var buf: [response_buf_size]u8 = undefined;
+    const out = buildToolCallResponse(&buf, raw, 1, 100, 5, 6, ctx);
+    // Exactly the cap is emitted: the trailing tags the model kept producing
+    // never become calls for the client to run.
+    var counted: usize = 0;
+    var pos: usize = 0;
+    while (std.mem.indexOfPos(u8, out, pos, "\"id\":\"call_")) |at| {
+        counted += 1;
+        pos = at + 1;
+    }
+    try std.testing.expectEqual(@as(usize, max_tool_calls_per_response), counted);
+}
+
 test "buildResponsesToolCallResponse returns empty when no declared tool is called" {
     var srv: Server = undefined;
     srv.tool_registry = .{};
@@ -8593,6 +8687,23 @@ test "nextAllowedToolCall rejects payload without name" {
     const ctx = testToolCallCtx(&tp, &reg);
     var pos: usize = 0;
     try std.testing.expect(nextAllowedToolCall(text, &pos, ctx) == null);
+}
+
+test "trackJsonDepth counts openers and clamps runaway nesting at the cap" {
+    try std.testing.expectEqual(@as(i32, 1), trackJsonDepth(0, "{"));
+    try std.testing.expectEqual(@as(i32, 0), trackJsonDepth(1, "}"));
+    try std.testing.expectEqual(@as(i32, 2), trackJsonDepth(0, "{\"a\": ["));
+    // A model that only ever emits openers stops climbing at the cap, so the
+    // caller can give up instead of paying for the whole token budget.
+    var d: i32 = 0;
+    for (0..1000) |_| d = trackJsonDepth(d, "{");
+    try std.testing.expectEqual(max_json_depth, d);
+    // An unmatched closer is model output, not structure: it clamps at zero
+    // rather than running negative past the `depth <= 0` stop condition.
+    try std.testing.expectEqual(@as(i32, 0), trackJsonDepth(0, "}"));
+    try std.testing.expectEqual(@as(i32, 0), trackJsonDepth(0, "}}}}"));
+    // Plain text leaves the depth alone.
+    try std.testing.expectEqual(@as(i32, 1), trackJsonDepth(1, "plain tokens"));
 }
 
 test "resolveAnthropicToolInput keeps a complete object and drops a truncated one" {
