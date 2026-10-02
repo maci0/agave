@@ -4,7 +4,7 @@ Claims in this file are checked against source by the threat-model pass. If one
 disagrees with the code, the code wins; see the docs-vs-code check at the end of
 [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md#4-mitigations-map).
 
-- **Last reviewed:** 2026-10-07
+- **Last reviewed:** 2026-10-08
 
 ## Supported versions
 
@@ -36,7 +36,7 @@ is specified in [docs/API.md](docs/API.md) and implemented in
 
 The API key covers the HTTP listener only (default TCP 49453). The
 tensor-parallel, pipeline-parallel, and disaggregated data ports (TCP
-49454/49455/49456, `src/main.zig:167,169,171`) and UDP peer discovery are
+49454/49455/49456, `src/main.zig:165,167,169`) and UDP peer discovery are
 separate listeners with no authentication, so a deployment that exposes
 them must rely on network-level isolation. See T1 in
 [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md#risk-ranked-summary).
@@ -65,18 +65,19 @@ image does not get that isolation.
 
 ## Operator notes
 
-Two controls an operator is likely to assume are on are not, and a third
+These are the things worth knowing before you expose a deployment. Five are
+controls an operator is likely to assume are on and are not; the last one
 writes over the binary:
 
 - **Rate limiting is off unless asked for.** `--rate-limit-rpm` and
-  `--rate-limit-tpm` both default to `0` (`src/main.zig:681,683`), which
-  substitutes the effectively unlimited values `src/server/server.zig:133-134`.
+  `--rate-limit-tpm` both default to `0` (`src/main.zig:679,681`), which
+  substitutes the effectively unlimited values `src/server/server.zig:142-143`.
   One global bucket, not per client (`src/server/rate_limiter.zig:58-61`). A
   server bound to a non-loopback address with a key and no rate-limit flags has
   no compute quota. See T5.
 - **`POST /v1/kv_cache` writes model state.** Any API-key holder can post a
   right-sized f32 blob and have it installed as the live KV cache
-  (`src/server/server.zig:3047`; per-layer length bounds in
+  (`src/server/server.zig:3068`; per-layer length bounds in
   `src/models/gemma4.zig:1654`). Lengths are checked, provenance is not, so
   injected hidden state is indistinguishable from a legitimate warm-start
   blob and every later answer on that slot is computed over it. Give
@@ -90,6 +91,23 @@ writes over the binary:
   read prompt-derived hidden state from that file, and an unclean shutdown
   leaves it in place (the delete is a teardown step, `src/kvcache/tiered.zig:344`).
   Point the tier at a private path, or leave it off. See T11.
+- **The API key does not constrain what text reaches a prompt, and text
+  becomes tool calls.** Anyone who can get a string into a prompt -- a
+  retrieved document, a shared conversation, a page someone pastes in --
+  can try to make the model emit a `<tool_call>` block, which the server
+  parses and hands back for the *caller* to execute
+  (`src/server/server.zig:1715`). No key is involved in that, and holding
+  the key does not reduce it. The server does stop the obvious versions:
+  the tags are stripped from prompt text before the model sees it
+  (`src/chat_template.zig:445-446`), only a tool the request declared
+  survives the parse (`src/server/server.zig:1725-1729`), and one turn
+  returns at most 32 calls (`src/server/server.zig:1830`). What remains is
+  the part that matters: a caller that declares a shell or file-write tool
+  and feeds untrusted text into the same prompt has given that text a
+  trigger, and nothing in this repository turns that off. Per-tool
+  authorization, argument validation, and confirmation for irreversible
+  tools belong on the caller. See T13 in
+  [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md#risk-ranked-summary).
 - **Same-host multi-rank runs share fixed shm names.** `/agave_0to1` and
   `/agave_1to0` (`src/parallel/transport.zig:333-334`) are mode 0600, so any
   other process running as the same uid can read or inject tensors. See T6.
