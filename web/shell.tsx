@@ -182,7 +182,7 @@ const ModelBar = ({ loader }: { loader: ModelLoader }) => {
       <div
         role="region"
         aria-label="Loaded model"
-        className="flex items-center gap-2 border-b border-divider bg-card px-8 py-2 max-drawer:px-4"
+        className="flex items-center gap-2 border-b border-divider bg-card px-gutter py-2 max-drawer:px-4"
       >
         <span className="min-w-0 flex-1 truncate font-mono text-sm text-faint" title={name}>{name}</span>
         <Button id={CHANGE_MODEL_ID} type="button" size="sm" onClick={function () { setEditing(true); }}>Change model</Button>
@@ -193,7 +193,7 @@ const ModelBar = ({ loader }: { loader: ModelLoader }) => {
   <div
     role="region"
     aria-label="Model loading"
-    className="flex flex-wrap items-center gap-2 border-b border-divider bg-card px-8 py-4 max-drawer:flex-col max-drawer:items-stretch max-drawer:px-4"
+    className="flex flex-wrap items-center gap-2 border-b border-divider bg-card px-gutter py-4 max-drawer:flex-col max-drawer:items-stretch max-drawer:px-4"
   >
     <label htmlFor="model-url" className="flex-none font-mono text-sm text-faint">Model URL</label>
     <Input
@@ -274,7 +274,7 @@ const ChatLog = ({ messages, sending, ready }: { messages: Array<Message>; sendi
       aria-label="Chat messages"
       aria-busy={sending}
       tabIndex={0}
-      className="agave-scroll flex-1 overflow-y-auto px-8 py-4 max-drawer:px-4"
+      className="agave-scroll flex-1 overflow-y-auto px-gutter py-4 max-drawer:px-4"
     >
       {messages.length === 0 ? <ShellEmptyState ready={ready} /> : null}
       {messages.map((message) => <ShellMessage key={message.id} message={message} />)}
@@ -292,9 +292,12 @@ const ChatLog = ({ messages, sending, ready }: { messages: Array<Message>; sendi
 
 /** The product line, and the control that clears the transcript. */
 const ShellHeader = ({ ready, busy, onClear }: { ready: boolean; busy: boolean; onClear: () => void }) => (
-  <header className="flex items-center justify-between gap-4 border-b border-divider bg-card px-8 py-4 max-drawer:flex-wrap max-drawer:px-4 max-drawer:py-3">
+  <header className="flex items-center justify-between gap-4 border-b border-divider bg-card px-gutter py-4 max-drawer:flex-wrap max-drawer:px-4 max-drawer:py-3">
     <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-      <h1 className="inline-flex items-center gap-2 font-mono text-lg font-semibold tracking-tight text-primary">
+      {/* No `tracking-tight`: the lockup's wordmark is outlined Adwaita Mono
+          Bold with the tracking inside the outlines, so squeezing the live
+          text under the mono stack does not match the mark beside it. */}
+      <h1 className="inline-flex items-center gap-2 font-mono text-lg font-semibold text-primary">
         <Mark />
         agave
       </h1>
@@ -326,7 +329,7 @@ const Composer = ({ prompt, onPrompt, onSend, ready, sending, busy, focus }: Com
       <form
         aria-label="Send message"
         onSubmit={function (event) { event.preventDefault(); onSend(); }}
-        className="border-t border-divider bg-card px-8 py-4 max-drawer:px-4"
+        className="border-t border-divider bg-card px-gutter py-4 max-drawer:px-4"
       >
         <div className="mx-auto flex w-full agave-measure gap-2">
           <Input
@@ -364,7 +367,7 @@ const Composer = ({ prompt, onPrompt, onSend, ready, sending, busy, focus }: Com
           </Button>
         </div>
       </form>
-      <p id="input-hint" hidden={!ready} className="px-8 text-center font-mono text-xs text-faint max-drawer:px-4">
+      <p id="input-hint" hidden={!ready} className="px-gutter text-center font-mono text-xs text-faint max-drawer:px-4">
         Enter to send
       </p>
     </>
@@ -447,7 +450,7 @@ const Shell = () => {
             over whatever the reader was on, then each download tick on top of
             that. A failed load is announced from the alert bubble beside the
             field, so nothing is lost here. */}
-        <p className="bg-background px-8 py-2 font-mono text-sm text-faint max-drawer:px-4">
+        <p className="bg-background px-gutter py-2 font-mono text-sm text-faint max-drawer:px-4">
           {loader.status}
         </p>
         <ChatLog messages={chat.messages} sending={chat.sending} ready={loader.ready} />

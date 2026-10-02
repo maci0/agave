@@ -1,5 +1,6 @@
 import { Dialog, DialogContent, DialogTitle } from '../../ui/dialog';
 import { Mark } from '../../ui/icons';
+import { fmtCtx } from '../format';
 import { cn } from '../../ui/cn';
 
 type AboutDialogProps = {
@@ -7,6 +8,9 @@ type AboutDialogProps = {
   onOpenChange: (open: boolean) => void;
   modelName: string;
   backendName: string;
+  /** Live context counters from `GET /v1/models`, absent while offline. */
+  ctxSize: number;
+  kvUsed: number;
 };
 
 /** Inline path or flag in the privacy note, matching `.agave-prose code`. */
@@ -29,8 +33,14 @@ const Section = ({ children }: { children: string }) => (
 );
 
 /** The About dialog. Radix owns the focus trap, Escape and the focus restore the
- *  hand-rolled modal used to reimplement. */
-export const AboutDialog = ({ open, onOpenChange, modelName, backendName }: AboutDialogProps) => (
+ *  hand-rolled modal used to reimplement.
+ *
+ *  It states the running configuration rather than a feature list. Three
+ *  capability bullets ("runs locally", "opens models", "streams responses")
+ *  read the same in every generated app and tell a reader standing at an
+ *  OpenAI-compatible endpoint nothing they cannot see; the context size, the
+ *  backend and the KV cache in use are the facts worth the space. */
+export const AboutDialog = ({ open, onOpenChange, modelName, backendName, ctxSize, kvUsed }: AboutDialogProps) => (
   <Dialog open={open} onOpenChange={onOpenChange}>
     <DialogContent>
       <DialogTitle className="mb-1">
@@ -42,12 +52,9 @@ export const AboutDialog = ({ open, onOpenChange, modelName, backendName }: Abou
         <Row label="Model" value={modelName || 'n/a'} />
         <Row label="Backend" value={backendName || 'n/a'} />
         <Row label="API" value="OpenAI-compatible" />
-        <Section>Features</Section>
-        <ul className="list-disc ps-5 marker:text-success">
-          <li className="my-1">Runs locally on CPU or GPU</li>
-          <li className="my-1">Opens GGUF and SafeTensors models</li>
-          <li className="my-1">Streams responses token by token</li>
-        </ul>
+        <Section>Context</Section>
+        <Row label="Window" value={ctxSize > 0 ? fmtCtx(ctxSize) : 'unknown'} />
+        <Row label="In use" value={kvUsed > 0 ? fmtCtx(kvUsed) : '0'} />
         <Section>Privacy</Section>
         <p>
           Prompts and chats stay on this machine. Conversations are saved to{' '}

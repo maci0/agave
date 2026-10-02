@@ -9,8 +9,9 @@ const twMerge = extendTailwindMerge({
   extend: {
     theme: {
       text: ['2xs', 'touch'],
+      spacing: ['gutter', 'sidebar'],
       radius: ['pill'],
-      shadow: ['focus', 'halo', 'halo-focus', 'overlay'],
+      shadow: ['focus', 'overlay'],
     },
   },
 });

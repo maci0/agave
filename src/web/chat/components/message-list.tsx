@@ -212,7 +212,7 @@ return (
       props.onScroll?.(nearBottom.current);
     }}
     className={cn(
-      'agave-scroll flex flex-1 flex-col gap-6 overflow-y-auto px-6 pt-6 focus-visible:-outline-offset-2 focus-visible:outline-2 focus-visible:outline-primary max-drawer:px-4 max-drawer:pt-4',
+      'agave-scroll flex flex-1 flex-col gap-6 overflow-y-auto px-gutter pt-6 focus-visible:-outline-offset-2 focus-visible:outline-2 focus-visible:outline-primary max-drawer:px-4 max-drawer:pt-4',
       // Room for the toast overlay, so it never covers the newest turn.
       props.toasts.length > 0 ? 'pb-28' : 'pb-2',
     )}

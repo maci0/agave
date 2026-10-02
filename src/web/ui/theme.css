@@ -8,8 +8,9 @@
  *
  *  Values are the reviewed ones from the pre-Tailwind stylesheet: the WCAG
  *  contrast notes travel with them. Borders meet 1.4.11 (>=3:1) against every
- *  surface; text, text-2 and text-3 clear 4.5:1 on --elevated (11.5:1, 5.9:1,
- *  4.8:1) and stay in that order, so the hierarchy cannot invert.
+ *  surface; the three text steps (foreground 11.5:1, muted-foreground 5.9:1,
+ *  faint 4.8:1) clear 4.5:1 on the raised surfaces and stay in that order, so
+ *  the hierarchy cannot invert.
  */
 @import "tailwindcss" source(none);
 
@@ -92,15 +93,20 @@
   --container-prose: 68ch;
   --spacing-sidebar: 260px;
   --breakpoint-drawer: 700px;
+  /* The page gutter both surfaces indent their full-bleed bands by (header,
+     transcript, composer, model bar, status line). It was `px-6` in the serve
+     UI and `px-8` in the shell, an 8px drift between two surfaces built to
+     read as one product. One token, and `px-gutter` follows it. */
+  --spacing-gutter: 24px;
 
   --animate-pulse-soft: pulse-soft 1.2s ease-in-out infinite;
 
-  /* Focus and hover washes: the one soft ring every control wears, in the
-     three strengths it uses. Written once here so a text field, a slider and
-     the composer cannot drift apart on it. */
+  /* The one soft ring a control wears, on the fields that take focus without
+     an outline of their own (Input, Textarea, the composer): written here so a
+     text field and the composer cannot drift apart on it. Every other control
+     takes the base-layer `outline`, which is the stronger of the two, so this
+     is the resting treatment and not a second, weaker idea. */
   --shadow-focus: 0 0 0 3px color-mix(in oklab, var(--color-primary) 10%, transparent);
-  --shadow-halo: 0 0 0 4px color-mix(in oklab, var(--color-primary) 15%, transparent);
-  --shadow-halo-focus: 0 0 0 4px color-mix(in oklab, var(--color-primary) 25%, transparent);
   /* Anything that floats over the page: dialogs, toasts, the jump key. */
   --shadow-overlay: 0 8px 20px var(--color-shadow);
 
@@ -220,11 +226,14 @@
     height: 12px;
   }
 
+  /* The large rosette (empty state). Inline-start aligned with the copy under
+     it, so the empty state sits on the transcript's edge rather than centering
+     a logo over a headline. */
   .mark-lg {
     display: block;
     width: 56px;
     height: 47px;
-    margin: 0 auto 16px;
+    margin: 0 0 16px;
   }
 
   /* Assistant responses are sanitized HTML (marked + DOMPurify), so their

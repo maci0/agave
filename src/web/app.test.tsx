@@ -77,6 +77,18 @@ const waitFor = async (condition: () => boolean): Promise<boolean> => {
   return condition();
 };
 
+/** `waitFor` for a node that may mount late: Radix renders dialog content
+ *  through a Portal from an effect, so the element is absent on the first poll
+ *  even when the tree is already mounted. Returns the node, not a boolean. */
+const waitForNode = async <T,>(condition: () => T | null, what: string): Promise<T> => {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const found = condition();
+    if (found !== null) { return found; }
+    await settle(10);
+  }
+  throw new Error(`${what} never appeared`);
+};
+
 afterAll(async () => {
   /* Preact's scheduler drains through `window`, so let the pending work from
      the mounted trees land before the registrator takes the DOM globals away. */
@@ -426,6 +438,30 @@ test('the served stylesheet gives a think block label a fill token, not an edge 
   expect(present(matches, 'think-block hover rule')[0]).not.toContain('--color-border');
 });
 
+test('the served sheet insets both surfaces by one gutter token, not two literals', () => {
+  /* The header, transcript and composer were `px-6` in the serve UI and
+     `px-8` in the shell, so two surfaces meant to read as one product
+     indented by different amounts. Both resolve through one token now; a
+     literal step back in either sheet fails here. */
+  const steps = SERVED_STYLESHEET.match(/\.px-gutter\{padding-inline:var\(--spacing-gutter\)\}/gu);
+  expect(steps).toHaveLength(1);
+  /* The token ships, or `px-gutter` silently drops the inset. */
+  expect(SERVED_STYLESHEET).toContain('--spacing-gutter:24px');
+});
+
+test('the empty state sits on the transcript edge instead of centering the mark', () => {
+  /* A centered rosette over a centered headline over a centered chip row is
+     the shape every generated app opens on. This reads the served rule, so
+     editing theme.css without rebuilding fails here the way
+     `scripts/check-web-artifacts.sh` reports it. */
+  const matches = SERVED_STYLESHEET.match(/\.mark-lg\{[^}]*\}/gu);
+  /* Exactly one such rule in the served sheet, or a later one silently wins. */
+  expect(matches).toHaveLength(1);
+  /* `margin: 0 0 16px`, not `0 auto`: auto is what centers the block. */
+  expect(present(matches, 'mark-lg rule')[0]).toContain('margin:0 0 16px');
+  expect(present(matches, 'mark-lg rule')[0]).not.toContain('auto');
+});
+
 test("a percentage carries the locale's mark, not a pasted one", () => {
   /* German writes the mark tight, French puts a narrow no-break space before
      it, and Arabic-Indic digits carry their own sign: `fmtNum(x * 100) + "%"`
@@ -455,6 +491,54 @@ test("megabytes keep the locale's unit label and spacing", () => {
 test('the tok/s readout rounds like the rest of the stats', () => {
   expect(fmtNum(1234.56, 1, 'en-US')).toBe('1,234.6');
   expect(fmtNum(12.34, 2, 'de-DE')).toBe('12,34');
+});
+
+test('the About dialog reports the running configuration, not a feature list', async () => {
+  /* Three capability bullets ('runs locally', 'opens models', 'streams
+     responses') read the same in every generated app and told a reader
+     standing at an OpenAI-compatible endpoint nothing they could not see.
+     The context window and the KV cache in use are the facts the dialog
+     has and the generic list did not. */
+  const { createRoot } = await import('react-dom/client');
+  const { AboutDialog } = await import('./chat/components/about-dialog');
+  const host = mountHost();
+  const root = createRoot(host);
+  root.render(
+    <AboutDialog
+      open
+      onOpenChange={VOID}
+      modelName="qwen2.5-1.5b-instruct-q4k.gguf"
+      backendName="metal"
+      ctxSize={32_768}
+      kvUsed={4096}
+    />,
+  );
+  /* Radix renders the content through a Portal onto document.body, not into
+     the host, so the assertion reads the dialog itself. */
+  const dialog = await waitForNode(() => document.querySelector('[role="dialog"]'), 'about dialog');
+  expect(dialog.textContent).toContain('metal');
+  /* 32768 through fmtCtx is '32K', and 4096 is '4K', in the reader's own
+     digit script rather than a hardcoded group separator. */
+  expect(dialog.textContent).toContain('32K');
+  expect(dialog.textContent).toContain('4K');
+  expect(dialog.textContent).not.toContain('Runs locally on CPU or GPU');
+  root.unmount();
+  host.remove();
+});
+
+test('the About dialog says what it does not know rather than showing a bare zero', async () => {
+  /* An offline server has no `ctx_size`. Rendering '0' next to Window read
+     as a real, wrong number, so the row names the missing value instead. */
+  const { createRoot } = await import('react-dom/client');
+  const { AboutDialog } = await import('./chat/components/about-dialog');
+  const host = mountHost();
+  const root = createRoot(host);
+  root.render(<AboutDialog open onOpenChange={VOID} modelName="" backendName="" ctxSize={0} kvUsed={0} />);
+  const dialog = await waitForNode(() => document.querySelector('[role="dialog"]'), 'about dialog');
+  expect(dialog.textContent).toContain('unknown');
+  expect(dialog.textContent).toContain('n/a');
+  root.unmount();
+  host.remove();
 });
 
 /** The props a `MessageList` renders the toasts with, for the live-region test. */

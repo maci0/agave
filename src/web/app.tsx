@@ -349,7 +349,14 @@ const ChatApp = () => {
       log={<ChatLogPanel log={log} toasts={toasts} settings={settings} model={model} turn={turn} convs={convs} commands={commands} dismissToast={dismissToast} />}
       composer={<Composer settings={settings} turn={turn} model={model} image={image} submit={commands.submitMessage} focusToken={focusToken} reject={pushToast} />}
       announcement={announcement}
-      about={<AboutDialog open={chrome.aboutOpen} onOpenChange={chrome.setAboutOpen} modelName={model.modelName} backendName={model.backendName} />}
+      about={<AboutDialog
+        open={chrome.aboutOpen}
+        onOpenChange={chrome.setAboutOpen}
+        modelName={model.modelName}
+        backendName={model.backendName}
+        ctxSize={model.context?.max ?? 0}
+        kvUsed={model.context?.used ?? 0}
+      />}
     />
   );
 };
