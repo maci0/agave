@@ -10,7 +10,7 @@
  * Run: bun test src/web (also wired into scripts/lint-web.sh).
  */
 
-import { beforeEach, expect, test } from 'bun:test';
+import { afterAll, beforeEach, expect, test } from 'bun:test';
 import { GlobalRegistrator } from '@happy-dom/global-registrator';
 
 import {
@@ -21,6 +21,10 @@ import {
   readSampling,
 } from './storage';
 
+/* Registered once per file and released in `afterAll` below, like every other
+   DOM-backed suite under src/web. bun runs the files in one process, so a suite
+   that registered without releasing made the next registration throw and the
+   next file's tests never ran. */
 GlobalRegistrator.register({ url: 'http://127.0.0.1:49453' });
 
 /** Arabic-Indic, Extended Arabic (Persian), fullwidth and Thai digits, all
@@ -31,6 +35,10 @@ const SAME_NUMBER = ['512', '٥١٢', '۵۱۲', '５１２', '๕๑๒'];
 beforeEach(() => {
   localStorage.clear();
   sessionStorage.clear();
+});
+
+afterAll(async () => {
+  await GlobalRegistrator.unregister();
 });
 
 test('a token budget typed in any digit script is accepted, not clamped to the minimum', () => {

@@ -24,6 +24,9 @@ import { writingDirection } from '../src/web/chat/format';
 
 const MAX_TOKENS = 200;
 const ANNOUNCE_DELAY_MS = 100;
+/** The one control the collapsed model bar keeps, and where focus lands when
+ *  the panel that had focus collapses. */
+const CHANGE_MODEL_ID = 'change-model';
 
 /* There is no `assistant` role: the wasm32 forward pass is blocked (see the
    note in src/wasm_entry.zig), so `generate()` resolves with the engine's
@@ -55,6 +58,14 @@ const announceLater = (setter: (text: string) => void, text: string): void => {
 
 const ShellMessage = ({ message }: { message: Message }) => (
   <div
+    /* The error bubble is the log's alert: it is a new node inside a region
+     * mounted with the page, which is the one live-region case assistive tech
+     * does announce. It announces itself, so `sr-announce` is left for the
+     * states with no bubble of their own (a prompt cleared, a stop, a clear).
+     * An `aria-live="off"` log would have kept a static alert from firing at
+     * all, which is why the log drops its live semantics here instead of on
+     * the region: on the log every later turn, error or not, would talk over
+     * the announcement. */
     role={message.role === 'error' ? 'alert' : 'group'}
     aria-labelledby={message.role === 'error' ? undefined : `msg-role-${String(message.id)}`}
     className={cn(
@@ -133,11 +144,38 @@ const UrlError = ({ message }: { message: string | null }) => (
   </div>
 );
 
+/** Collapsing the panel returns focus to the control that reopens it, so the
+ *  focused Done does not vanish with the branch it lives in.
+ *
+ *  Its own hook because the bar is already at this file's
+ *  max-lines-per-function budget. */
+const useFocusOnPanelClose = (editing: boolean, setEditing: (next: boolean) => void): (() => void) => {
+  const [returning, setReturning] = useState(false);
+  useEffect(() => {
+    if (!returning || editing) { return; }
+    /* By id, not through a ref: the button is mounted by the collapsed branch,
+       which is the commit this effect runs in. */
+    document.querySelector<HTMLButtonElement>(`#${CHANGE_MODEL_ID}`)?.focus();
+    setReturning(false);
+  }, [editing, returning]);
+  return function () {
+    setEditing(false);
+    setReturning(true);
+  };
+};
+
 /** The model bar. A loaded model needs only its name here: the URL field, the
  *  load button and the drop zone stay three rows tall on a phone, so they fold
- *  away behind "Change model" once there is a model to prompt. */
+ *  away behind "Change model" once there is a model to prompt.
+ *
+ *  The fold is a focus move as well as a layout change: Done collapses the
+ *  whole panel, taking the focused control with it, so a keyboard or screen
+ *  reader user landed on the body and had to Tab back through the whole bar.
+ *  Both ways out of the panel end at the one control the collapsed bar keeps,
+ *  so focus follows the reader. */
 const ModelBar = ({ loader }: { loader: ModelLoader }) => {
   const [editing, setEditing] = useState(false);
+  const closePanel = useFocusOnPanelClose(editing, setEditing);
   const name = loader.modelName ?? 'Model loaded';
   if (loader.ready && !editing) {
     return (
@@ -147,7 +185,7 @@ const ModelBar = ({ loader }: { loader: ModelLoader }) => {
         className="flex items-center gap-2 border-b border-divider bg-card px-8 py-2 max-drawer:px-4"
       >
         <span className="min-w-0 flex-1 truncate font-mono text-sm text-faint" title={name}>{name}</span>
-        <Button type="button" size="sm" onClick={function () { setEditing(true); }}>Change model</Button>
+        <Button id={CHANGE_MODEL_ID} type="button" size="sm" onClick={function () { setEditing(true); }}>Change model</Button>
       </div>
     );
   }
@@ -187,7 +225,7 @@ const ModelBar = ({ loader }: { loader: ModelLoader }) => {
     </Button>
     <ModelDropZone loader={loader} />
     {loader.ready ? (
-      <Button type="button" size="lg" onClick={function () { setEditing(false); }}>Done</Button>
+      <Button type="button" size="lg" onClick={closePanel}>Done</Button>
     ) : null}
     <UrlError message={loader.urlError} />
   </div>
@@ -218,7 +256,10 @@ const ShellEmptyState = ({ ready }: { ready: boolean }) => (
   />
 );
 
-/** The log: the transcript, the empty hint, and the pending bubble. */
+/** The log: the transcript, the empty hint, and the pending bubble. `role="log"`
+ *  with no live semantics: the reader is told a turn ended through
+ *  `sr-announce`, and the log itself stays silent so a new bubble, or the
+ *  download status rewriting the log's surroundings, never talks over it. */
 const ChatLog = ({ messages, sending, ready }: { messages: Array<Message>; sending: boolean; ready: boolean }) => {
   const logRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -231,7 +272,6 @@ const ChatLog = ({ messages, sending, ready }: { messages: Array<Message>; sendi
       ref={logRef}
       role="log"
       aria-label="Chat messages"
-      aria-live="off"
       aria-busy={sending}
       tabIndex={0}
       className="agave-scroll flex-1 overflow-y-auto px-8 py-4 max-drawer:px-4"
@@ -344,7 +384,9 @@ const useShellChat = (engine: AgaveEngine) => {
     const id = nextId.current;
     nextId.current += 1;
     setMessages((previous) => [...previous, { id, role, text }]);
-    if (role === 'error' || role === 'engine') { announce(text); }
+    /* An error bubble is `role="alert"`, so the region reads it when it lands;
+     * announcing the same sentence here as well said it twice. */
+    if (role === 'engine') { announce(text); }
   }, [announce]);
 
   const send = useCallback((ready: boolean, focus: () => void) => {
@@ -400,16 +442,12 @@ const Shell = () => {
       <ShellHeader ready={loader.ready} busy={busy} onClear={function () { chat.clearChat(loader.focusPrompt); }} />
       <ModelBar loader={loader} />
       <main aria-label="Chat" className="flex min-h-0 flex-1 flex-col">
-        {/* A live region rather than `role="status"`: this element is mounted
-            with the page and its first text ("Load a GGUF model to begin")
-            lands in the same commit, which is exactly the case a live region
-            introduced together with its content is not announced for. */}
-        <p
-          id="status"
-          aria-live="polite"
-          aria-atomic="true"
-          className="bg-background px-8 py-2 font-mono text-sm text-faint max-drawer:px-4"
-        >
+        {/* Plain text, no live region. This line names a state on every
+            render, and a live region on it read "Load a GGUF model to begin"
+            over whatever the reader was on, then each download tick on top of
+            that. A failed load is announced from the alert bubble beside the
+            field, so nothing is lost here. */}
+        <p className="bg-background px-8 py-2 font-mono text-sm text-faint max-drawer:px-4">
           {loader.status}
         </p>
         <ChatLog messages={chat.messages} sending={chat.sending} ready={loader.ready} />

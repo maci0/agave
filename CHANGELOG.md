@@ -95,6 +95,17 @@ must still appear under **Changed** or **Breaking** below. See
   to disk. A client that fetched a conversation and posted it back lost the
   pairing between a tool result and the assistant tool call it answers. The
   field is emitted when present, matching the shape `conv_store` serialises.
+- The browser WASM shell's model bar lost focus when it folded away. `Done`
+  collapsed the panel that held the focused control, so focus fell to the
+  document and a keyboard or screen reader user had to Tab back through the
+  whole bar; focus now returns to the `Change model` key that reopens it. Its
+  status line is also no longer a live region: it repaints on every download
+  tick and read "Load a GGUF model to begin" over whatever the reader was on.
+  A failed load is announced once, from the alert beside the field, instead of
+  twice (that region and `sr-announce` both spoke).
+- The mobile conversation drawer on the serve UI was announced as an unnamed
+  dialog. The Radix sheet wrapped the sidebar with no title of its own; it now
+  points `aria-labelledby` at the drawer's own "Chats" heading (WCAG 4.1.2).
 
 ### Tooling
 - `GITHUB_TOKEN`, read by `agave update` since 0.8.0, is now documented in the

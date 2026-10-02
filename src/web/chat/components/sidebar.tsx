@@ -108,11 +108,17 @@ const ConversationList = ({ conversations, loadError, streaming, onSelect, onDel
 };
 
 /** The conversation drawer body, shared by the desktop column and the mobile
- *  sheet so both surfaces stay identical. */
+ *  sheet so both surfaces stay identical.
+ *
+ *  The heading carries a fixed id so the mobile sheet can point
+ *  `aria-labelledby` at it: inside the drawer this whole panel is the dialog's
+ *  content, and the Radix dialog carried no title of its own, so a screen
+ *  reader announced the sheet as an unnamed dialog. On the desktop column the
+ *  dialog is not involved and `aside`'s `aria-label` names the landmark. */
 export const Sidebar = (props: SidebarProps) => (
   <div className="flex h-full w-full flex-col bg-card">
     <div className="flex shrink-0 items-center justify-between gap-2 border-b border-divider px-3 py-3">
-      <h2 className="font-mono text-xs font-medium text-faint">Chats</h2>
+      <h2 id="sidebar-heading" className="font-mono text-xs font-medium text-faint">Chats</h2>
       <div className="flex shrink-0 items-center gap-1.5">
         <Button type="button" variant="primaryOutline" size="sm" onClick={props.onNew} disabled={props.streaming} aria-label="New conversation">
           <NewIcon className="size-4" aria-hidden="true" />

@@ -105,6 +105,16 @@ const settle = (ms = 10): Promise<void> =>
   // oxlint-disable-next-line promise/avoid-new -- a timer is the only clock the test needs
   new Promise((resolve) => { setTimeout(resolve, ms); });
 
+/** Poll for a condition. Preact commits on its own scheduler, so a fixed
+ *  number of ticks is a guess a loaded machine can lose. */
+const waitFor = async (condition: () => boolean): Promise<boolean> => {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    if (condition()) { return true; }
+    await settle(10);
+  }
+  return condition();
+};
+
 /* The framework installs its own value setter on the node, so the native
    descriptor is the only way to write a value the controlled input observes. */
 const typeInto = (input: HTMLInputElement, text: string): void => {
@@ -235,6 +245,59 @@ test('the file picker is reachable by keyboard and carries a name', async () => 
   const label = present(document.querySelector<HTMLLabelElement>('label[for="file-input"]'), 'file label');
   expect(label.textContent).toContain('GGUF');
 });
+
+test('the model bar is quiet until a load fails, and a failure is announced once', async () => {
+  /* The bar names a state on every render, so a live region on it read
+     "Load a GGUF model to begin" over whatever the reader was on, and every
+     download tick on top of it. It stays plain text. */
+  engines.length = 0;
+  await mountShell();
+  const status = present([...document.querySelectorAll('p')].find((node) => node.textContent.includes('Load a GGUF')), 'status line');
+  expect(status.getAttribute('aria-live')).toBeNull();
+  expect(status.textContent).toContain('Load a GGUF model to begin');
+
+  /* A dead URL leaves the failure in three places by design: the status line,
+     the field's description, and the bubble a model-load report is recorded
+     in. All three carry it, so none of them is live as well. */
+  typeInto(present(document.querySelector<HTMLInputElement>('#model-url'), 'model url field'), 'not a url');
+  await settle();
+  clickButtonLabelled('Load model');
+  const error = present(document.querySelector('#url-error'), 'url error region');
+  expect(await waitFor(() => error.textContent.includes('Enter a valid'))).toBe(true);
+
+  /* One live region carries it: the alert beside the field, which also
+     describes the field. The status line above it and `sr-announce` repeat the
+     sentence on screen and in the log region, so neither announces as well. */
+  expect(document.querySelectorAll('[role="alert"]')).toHaveLength(1);
+  expect(status.textContent).toContain('Enter a valid');
+  expect(document.querySelector('#sr-announce')?.textContent).not.toContain('Enter a valid');
+  expect(document.querySelector('#model-url')?.getAttribute('aria-describedby')).toBe('url-error');
+}, 30_000);
+
+/** The collapsed bar's only control, which is where focus belongs once the
+ *  panel that had it is gone. */
+const changeModelHasFocus = (): boolean => {
+  const key = document.querySelector<HTMLButtonElement>('#change-model');
+  return key === document.activeElement;
+};
+
+test('closing the model panel puts focus back on the key that reopens it', async () => {
+  /* Done collapses the panel it lives in, taking the focused control with it:
+     focus fell to the body and a keyboard user had to Tab back through the
+     whole bar. The collapsed bar keeps one control, so focus goes there. */
+  stubEngineHost();
+  await mountShell();
+  typeInto(present(document.querySelector<HTMLInputElement>('#model-url'), 'model url field'), MODEL_URL);
+  await settle();
+  clickButtonLabelled('Load model');
+  expect(await transcriptHolds('Loaded: stub-model')).toBe(true);
+
+  clickButtonLabelled('Change model');
+  expect(await waitFor(() => document.querySelector('#model-url') !== null)).toBe(true);
+  clickButtonLabelled('Done');
+
+  expect(await waitFor(changeModelHasFocus)).toBe(true);
+}, 30_000);
 
 test('a failed model load is announced from a region that was already there', async () => {
   /* A `role="alert"` element that appears already holding its text is the case

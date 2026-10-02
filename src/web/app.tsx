@@ -94,7 +94,7 @@ const ConversationPanel = ({
   // Radix supplies the scrim, the focus trap and the inert backdrop.
   return (
     <Dialog open={drawerOpen} onOpenChange={onDrawerChange}>
-      <DialogContent side="left" hideClose>
+      <DialogContent side="left" hideClose aria-labelledby="sidebar-heading">
         <Sidebar {...sidebarProps} onClose={function () { onDrawerChange(false); }} />
       </DialogContent>
     </Dialog>
