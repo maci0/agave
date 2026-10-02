@@ -204,6 +204,7 @@ def check_version_consistency() -> list[str]:
             errors.append(f"CHANGELOG.md: 'bumps `{bump}`' is stale (product version is {product})")
 
     errors.extend(_check_release_tags(changelog, product))
+    errors.extend(_check_release_section_matches_manifest(changelog, product))
     errors.extend(_check_bump_matches_breaking(changelog))
     return errors
 
@@ -224,6 +225,34 @@ def _released_sections(changelog: str) -> list[tuple[str, str]]:
         out.append((version, changelog[m.end() : end]))
     out.sort(key=lambda pair: [int(p) for p in pair[0].split(".")])
     return out
+
+
+def _check_release_section_matches_manifest(changelog: str, product: str) -> list[str]:
+    """`build.zig.zon` `.version` must name a section the changelog actually has.
+
+    Every other guard compares a string against the manifest, and a link
+    definition against a heading, so a version with no section at all slips
+    between them: bump `.version` to 0.11.0, repoint `[unreleased]` at
+    `v0.11.0...HEAD`, and every check passes with the notes still sitting under
+    `## [Unreleased]`. The release then ships a version whose entry describes no
+    release, and a `### Breaking` heading under `[Unreleased]` never reaches
+    `_check_bump_matches_breaking`, which reads only dated sections.
+    """
+    errors: list[str] = []
+    sections = {version for version, _ in _released_sections(changelog)}
+    if product not in sections:
+        errors.append(
+            f"CHANGELOG.md: build.zig.zon .version is {product} but no `## [{product}] - YYYY-MM-DD` "
+            f"section exists; move the Unreleased notes into one in the same commit that bumps the version"
+        )
+    product_parts = [int(p) for p in product.split(".")]
+    ahead = sorted(v for v in sections if [int(p) for p in v.split(".")] > product_parts)
+    if ahead:
+        errors.append(
+            f"CHANGELOG.md: {', '.join('[' + v + ']' for v in ahead)} is dated above the product version "
+            f"{product}; those notes belong under [Unreleased] until the version is cut"
+        )
+    return errors
 
 
 def _check_bump_matches_breaking(changelog: str) -> list[str]:

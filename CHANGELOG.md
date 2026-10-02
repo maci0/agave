@@ -40,6 +40,24 @@ must still appear under **Changed** or **Breaking** below. See
   `Error: failed to init vision encoder: error.InvalidMetadata` and the server
   does not start. Published checkpoints that divide evenly are unaffected; a
   mismatched one was already returning wrong pixels, so the fix fails closed.
+- A `json_object` response whose object never closed now reports
+  `finish_reason: "length"` instead of `"stop"`. Before: a model that ran out
+  of `max_tokens` mid-object returned `finish_reason: "stop"` with a body no
+  JSON parser can read, so a client that branched on `finish_reason` to decide
+  the answer was complete tried to parse a fragment. After: the same request
+  reports `length` and carries the same partial text, so check `finish_reason`
+  before decoding. `json_schema` and GBNF grammars are enforced during
+  decoding and still report `stop`; only `{"type": "json_object"}` is
+  affected. See [When constrained output is not
+  produced](docs/API.md#when-constrained-output-is-not-produced).
+- A `--pp` rank whose peers are unreachable, or one started with no `--peers`
+  where UDP discovery found none, now exits non-zero with the reason. Before:
+  the rank kept `pp_degree=1` and ran every layer itself, so each rank
+  duplicated the whole model and the pipeline never formed — a multi-node run
+  answered from N copies of the model with no error anywhere. After: the rank
+  logs the port, the errno or the missing peer, and exits. The same was already
+  true for `--tp`; this closes the `--pp` side. `docs/PARALLELISM.md` records
+  the rule.
 
 ### Changed
 - **Readiness measures the error rate over a window, not the process lifetime.**
@@ -72,6 +90,17 @@ must still appear under **Changed** or **Breaking** below. See
   N tokens" hint. The reply bubble is now an "Engine" card, the header and the
   empty state name the limit, the composer button says "Tokenizing...", and
   the hint reads "Forward pass pending a Zig wasm32 fix".
+- A no-key `--serve` now rejects a request carrying
+  `Sec-Fetch-Site: cross-site` with 403, checked before the `Host` and
+  `Origin` checks. Before: a hostile page could drive the mutating routes with
+  the victim's ambient access, because a cross-site HTML form POST omits
+  `Origin` in some browsers and a cross-site form GET never sends one — the
+  two headers the check compared could not see those requests. After: they are
+  rejected and logged as `cross-origin/cross-site request rejected (no API
+  key)`. Clients that send neither header (curl, SDKs, health probes) are
+  unaffected, and the check is skipped entirely once `--api-key` is set. A
+  client behind a reverse proxy that strips `Sec-Fetch-Site` is unaffected too,
+  since a missing header is treated as a non-browser client.
 
 ### Fixed
 - CI could silently stop requiring a job. The `ci-pass` gate reads its results
@@ -125,12 +154,130 @@ must still appear under **Changed** or **Breaking** below. See
 - The mobile conversation drawer on the serve UI was announced as an unnamed
   dialog. The Radix sheet wrapped the sidebar with no title of its own; it now
   points `aria-labelledby` at the drawer's own "Chats" heading (WCAG 4.1.2).
+- `xtc_probability` was silently ignored on every path that applies `min_p`:
+  the chat-stream fallback, `POST /v1/messages` and `POST /v1/responses` filtered
+  logits by `min_p` alone and sampled, so a client asking for XTC exclusion
+  got `min_p` semantics and no exclusion at all. The filter is applied on each
+  of those paths, and the scheduler's sampling branch no longer registers
+  `min_p`/`xtc` a second time (which mutated the logits twice and drew the
+  request PRNG twice per token). A test counts the two call sites, so a path
+  added later cannot reintroduce the gap.
+- The `X-Request-Id` replay ledger no longer evicts a claim that is still in
+  flight. Before: a full 64-key ring reclaimed the oldest slot by index, which
+  could be a running request, so a retry of that request re-entered as a fresh
+  key and ran the same mutation a second time while the first was still
+  running. After: a full ring reclaims the oldest *completed* key; with all 64
+  keys in flight the next request runs unclaimed and the server logs
+  `replay ledger full`, so that one request loses its retry window rather than
+  double-executing. Keep concurrent mutating requests under 64. Deadline ties
+  in the ring are also broken by arm order now, so a burst completing in the
+  same millisecond no longer evicts the same slot over and over.
+- A retry of `POST /v1/chat` whose message starts with `/` is outside the
+  ledger by design: `/clear` and `/reset` return before the key is claimed, so
+  a retry runs the command again. Both are idempotent, so this is safe;
+  `docs/API.md` now says so and requires a later mutating command to move
+  behind the claim before it ships.
+- Vulkan norm, GEMV and SDPA kernels dropped subgroup partials: the reduction
+  folded only the first `gl_SubgroupSize` of up to 32 partial maxima and sums,
+  so the softmax shift and the denominator were wrong on a workgroup with more
+  subgroups than lanes. Every partial is folded now, over a tree reduction with
+  a barrier per step, and the committed SPIR-V is regenerated with its `.comp`
+  sources.
+- A failed LoRA apply left the override map holding a freed pointer, and every
+  tensor it had already merged still applied. The rollback record is appended
+  before the new override is published, and a failed append restores the
+  previous override (or removes the fresh entry) and unmerges what was merged,
+  so a failed apply leaves `base_gguf` exactly as it was. A test fails each
+  allocation in turn and asserts nothing is published.
+- `agave pull` and `agave update` bounded their read stalls. Before: both
+  issued the request with no per-read timeout, so a server or proxy that
+  accepted the connection and then went quiet left the command blocked forever
+  with no output and no retry. After: a 60-second per-read bound fails the
+  request (it never fires while bytes keep arriving) and `pull` reports
+  `HTTP request failed after 60s without completing`.
+- A steering file whose expected size overflows a `usize` (both factors come
+  from model metadata) is reported as `SteeringFileSizeMismatch` instead of
+  wrapping to a short allocation that `apply()` then indexes past.
+- A fractional model dimension in a SafeTensors `config.json`
+  (`"num_hidden_layers": 8.5`) truncated to 8 and loaded a silently wrong
+  model, and the same cast is undefined behaviour in ReleaseFast. A
+  non-integral, negative, NaN, infinite or out-of-range float is rejected
+  instead. The unchecked `GiB`-to-byte cast in the CLI budget parser is
+  floored before the integer cast, which is likewise undefined for a
+  fractional value.
+- A chat template with more control tokens than the fixed table holds left
+  the tool-call tags unstripped, so a user message could forge a tool call the
+  server then parsed out of the model's answer. The tags are registered first,
+  before anything a template can use to overflow the fixed table, and stay
+  stripped when the table is full.
+- Model output the server trusts is bounded. A `json_object` generation stops
+  at 64 levels of brace nesting instead of running to the full `max_tokens`
+  budget on output no parser can read, and a turn emits at most 32 tool calls
+  (the rest are dropped with a `tool call count exceeded 32` log line) rather
+  than handing the client an unbounded list to execute. Documented in
+  `docs/API.md` under "When constrained output is not produced".
+- The conversation store keeps a pre-deletion snapshot. `POST /v1/conversations`
+  with `action=delete`, and `/clear` and `/reset`, copy the store to
+  `<store>.deleted` before overwriting it, so a deleted conversation is not one
+  scheduled backup away from gone. The copy is best-effort and never blocks the
+  delete, so a logged failure is the signal that the recovery window is the
+  backup tier alone. `conv-store-backup.sh backup` carries it with the other
+  sidecars and `restore` takes it as an ordinary source. `docs/DURABILITY.md`
+  and `docs/PRIVACY.md` record that a deleted conversation deliberately stays
+  on disk until the snapshot tier rotates it out (`AGAVE_KEEP_SNAPSHOT`,
+  default 5).
+- The chat UI clipped and streamed text on code-point boundaries, so a ZWJ
+  family emoji, a skin-tone modifier or a regional-indicator flag was cut
+  mid-cluster and announced as noise. Clipping and SSE streaming go through
+  `Intl.Segmenter` grapheme clusters, and a conversation title is clipped with
+  the same helper the store uses on load, so the two agree.
+- The chat UI kept showing the previous conversation's content while a switch
+  was in flight, and re-announced every toast: a live region added to the page
+  together with the text it carries is the one case assistive technology stays
+  silent about, so the region is mounted empty and the swap is announced
+  through the log.
+- Percentages and megabyte sizes in the chat UI and the browser shell are
+  formatted through `Intl` instead of string concatenation, so they follow the
+  reader's locale, and both surfaces mirror for right-to-left locales (the
+  shell carries `dir` and uses the logical CSS properties the stylesheet is
+  written in). Settings parse digits in any script with the locale's grouping
+  marks rather than falling back to the minimum.
+- The backup script records every snapshot-tier rotation before the deletion
+  (`pruned snapshot` lines in the same log the dated tier writes, carrying the
+  kind, size and envelope version and no conversation text). A quarantined,
+  overflow or pre-deletion copy is the only copy of state the live path does
+  not hold, and rotation was deleting them with nothing left naming what they
+  held.
 
 ### Tooling
 - `GITHUB_TOKEN`, read by `agave update` since 0.8.0, is now documented in the
   environment-variable table in [docs/API.md](docs/API.md), and `agave pull`
   prints `HF_ENDPOINT` in its help. Both variables treat empty and
   whitespace-only values as unset, as the rest of the environment does.
+- `zig build test -Dsanitize-c=full` runs the unit tests under ASan and UBSan
+  (off by default, so the release binaries are unchanged) and CI runs the
+  untrusted-input parsers and durable-write paths under it. `zig build
+  test -Dsanitize-c=trap` is UBSan with a trap instead of a report, for a
+  target whose sanitizer runtime is unavailable. ReleaseSafe bounds and
+  overflow checks do not see a wild pointer into a mapped region, a
+  use-after-free, an unaligned load or an out-of-range shift, and the engine
+  reads all four out of a downloaded GGUF. The cost is about 3x wall clock,
+  which is why CI filters the set rather than running everything.
+- The Docker image's OCI `org.opencontainers.image.version` label and
+  `/usr/share/agave/version` are now checked against `build.zig.zon` in
+  `scripts/check-docker-image.sh`, and CI passes the product version through
+  `AGAVE_VERSION` from `scripts/product-version.sh`. `LABEL` cannot read a
+  file, so an image built without the build arg shipped `dev` in the label
+  while the file carried the real version, and a consumer that trusted the
+  label could not tell which build it had. A mismatch now fails the job
+  instead.
+- `zig build check-pins` fails when an `-Denable-*` model or backend flag in
+  `build.zig` has no matching `ARG` in the `Dockerfile`, when a release tag at
+  HEAD disagrees with `build.zig.zon` `.version`, and when a `### Breaking`
+  section rides a patch bump. `scripts/check-ci-pass.sh` compares the
+  `ci-pass` payload against the jobs `.github/workflows/ci.yml` defines, so
+  dropping a job from the `needs:` list can no longer leave the gate green
+  while a required job stops being required.
 
 ## [0.10.2] - 2026-09-29
 

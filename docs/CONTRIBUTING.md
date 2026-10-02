@@ -720,6 +720,9 @@ maintainers (avoid commit hashes as the only description).
    `README.md`, `SECURITY.md`, and `docs/DOCUMENTATION.md`;
    every released `[X.Y.Z]` section must have a link definition and
    `[unreleased]` must compare against the current tag;
+   `.version` must name a dated `[X.Y.Z]` section, so the notes move out of
+   `[Unreleased]` in the same commit that bumps the version, and no section
+   may be dated above it;
    a `### Breaking` section must not ride a patch bump (cut it as a minor);
    a HEAD tag matching `v[0-9]+.[0-9]+.[0-9]+` must equal `.version`
    (a milestone name like `v1.0` is exempt);
