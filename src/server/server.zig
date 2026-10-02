@@ -8273,6 +8273,18 @@ test "isLoopbackHttpHost accepts loopback Host values" {
     try std.testing.expect(http.isLoopbackHttpHost("localhost."));
     try std.testing.expect(http.isLoopbackHttpHost("[::1]"));
     try std.testing.expect(http.isLoopbackHttpHost("[::1]:49453"));
+    // 127.0.0.0/8 boundaries: the whole range is loopback, including the
+    // network and broadcast-looking octets. The octet parser rejects anything
+    // above 255, so 127.255.255.255 must stay accepted and 127.256.0.1 must not.
+    try std.testing.expect(http.isLoopbackHttpHost("127.0.0.0"));
+    try std.testing.expect(http.isLoopbackHttpHost("127.255.255.255"));
+    try std.testing.expect(http.isLoopbackHttpHost("127.0.0.255:49453"));
+    // A non-numeric port leaves the whole Host value in hostnameFromHost, so
+    // the ':' must fail the octet parse rather than silently allow it.
+    try std.testing.expect(!http.isLoopbackHttpHost("127.0.0.1:abc"));
+    // Trailing dot after the port: "localhost." is accepted, so "127.0.0.1.:p"
+    // strips to the same host and stays loopback.
+    try std.testing.expect(http.isLoopbackHttpHost("127.0.0.1.:49453"));
 }
 
 test "isLoopbackHttpHost rejects DNS-rebind and LAN Host values" {
@@ -8285,6 +8297,11 @@ test "isLoopbackHttpHost rejects DNS-rebind and LAN Host values" {
     try std.testing.expect(!http.isLoopbackHttpHost(""));
     try std.testing.expect(!http.isLoopbackHttpHost("127.1"));
     try std.testing.expect(!http.isLoopbackHttpHost("127.0.0.1.2"));
+    // An octet above 255 is not a loopback address and must not pass the
+    // rebinding guard, whether the overflow is caught mid-octet or at the
+    // next separator.
+    try std.testing.expect(!http.isLoopbackHttpHost("127.256.0.1"));
+    try std.testing.expect(!http.isLoopbackHttpHost("127.999.999.999:49453"));
 }
 
 test "getHeaderValue trims and rejects duplicates" {

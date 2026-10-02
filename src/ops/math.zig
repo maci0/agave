@@ -983,6 +983,32 @@ test "sampleToken falls back to argmax when the distribution collapses" {
     try std.testing.expectEqual(@as(u32, 1), sampleToken(&l2, 0.7, 2, 1.0, prng2.random()));
 }
 
+test "sampleToken top_k at the vocab-size and k=1 boundaries" {
+    // top_k == 1 keeps a single candidate, so every seed must return it.
+    // top_k >= n (including top_k == n exactly) is the whole-vocab softmax
+    // path: no token is filtered, so every index stays reachable.
+    const n: u32 = 4;
+    for (0..200) |seed| {
+        var l1 = [_]f32{ 0.1, 3.0, 0.2, 2.5 };
+        var p1 = std.Random.DefaultPrng.init(seed);
+        try std.testing.expectEqual(@as(u32, 1), sampleToken(&l1, 1.0, 1, 1.0, p1.random()));
+
+        var l_at_n = [_]f32{ 0.1, 3.0, 0.2, 2.5 };
+        var p_at_n = std.Random.DefaultPrng.init(seed);
+        try std.testing.expect(sampleToken(&l_at_n, 1.0, n, 1.0, p_at_n.random()) < n);
+
+        var l_over_n = [_]f32{ 0.1, 3.0, 0.2, 2.5 };
+        var p_over_n = std.Random.DefaultPrng.init(seed);
+        try std.testing.expect(sampleToken(&l_over_n, 1.0, n + 8, 1.0, p_over_n.random()) < n);
+    }
+
+    // k=1 must return the largest logit itself, not index 0: the kept
+    // candidate here is index 1 and must win over the whole-vocab path.
+    var l = [_]f32{ 0.0, 9.0, 0.0, 0.0 };
+    var p = std.Random.DefaultPrng.init(11);
+    try std.testing.expectEqual(@as(u32, 1), sampleToken(&l, 1.0, 1, 1.0, p.random()));
+}
+
 test "argmax matches maxWithIndex on ties and NaN" {
     try std.testing.expectEqual(@as(u32, 0), argmax(&[_]f32{}));
     const tied = [_]f32{ 2.0, 2.0, 1.0, 2.0 };

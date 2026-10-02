@@ -1494,6 +1494,8 @@ test "milliTimestamp returns positive value" {
 
 test "sleepNs does not crash" {
     // Zero-duration and short sleep must complete; clock must not go backwards.
+    // The exact virtual-time behaviour is pinned by the override test below,
+    // which is the only place a sleep's duration is asserted exactly.
     const before = milliTimestamp();
     sleepNs(0);
     sleepNs(1_000); // 1 microsecond
@@ -1504,8 +1506,20 @@ test "sleepNs does not crash" {
 test "sleepNs advances under sim_clock override" {
     defer sim_clock.setOverrideMs(null);
     sim_clock.setOverrideMs(50_000);
+    // A zero-duration poll must not burn virtual time: the scheduler's
+    // shutdown check calls sleepNs(0) on every already-idle iteration, and a
+    // virtual clock that jumped there would expire request timeouts that had
+    // not actually elapsed.
+    sleepNs(0);
+    try std.testing.expectEqual(@as(i64, 50_000), milliTimestamp());
+
     sleepNs(scheduler_poll_ns); // 1ms poll
     try std.testing.expectEqual(@as(i64, 50_001), milliTimestamp());
+
+    // Two more polls compose: the sleep is applied per call, not idempotent.
+    sleepNs(scheduler_poll_ns);
+    sleepNs(scheduler_poll_ns);
+    try std.testing.expectEqual(@as(i64, 50_003), milliTimestamp());
 }
 
 test "sampleNextToken applies logit bias at temperature 0" {

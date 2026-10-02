@@ -239,10 +239,27 @@ test "discovery, an occupied port fails instead of scanning for peers" {
 }
 
 test "discovery, beacon message format" {
-    // Verify the beacon message format matches the protocol spec.
+    // Built by formatBeacon, the same call rank 0 makes: a hand-written format
+    // string here would keep passing after the wire format changed.
     var beacon: [max_msg_len]u8 = undefined;
-    const msg = std.fmt.bufPrint(&beacon, "{s}{d}:{d}", .{ beacon_prefix, @as(u16, 8080), @as(u32, 2) }) catch "";
-    try @import("std").testing.expectEqualStrings("AGAVE-DISCOVER:8080:2", msg);
+    const msg = formatBeacon(&beacon, 8080, 2) orelse return error.TestFailed;
+    try std.testing.expectEqualStrings("AGAVE-DISCOVER:8080:2", msg);
+}
+
+test "discovery, a beacon rank 0 sends is one a worker accepts" {
+    // Round trip the two ends of the wire format: formatBeacon -> strip the
+    // prefix the way discoverAsWorker does -> beaconMatchesThisGroup. A
+    // separator or field-order change on either side makes every worker miss
+    // every beacon and silently time out, and neither side is checked alone.
+    var beacon: [max_msg_len]u8 = undefined;
+    const sent = formatBeacon(&beacon, 49454, 2) orelse return error.TestFailed;
+    try std.testing.expect(std.mem.startsWith(u8, sent, beacon_prefix));
+    try std.testing.expect(beaconMatchesThisGroup(sent[beacon_prefix.len..], 49454, 2));
+
+    // The pair is matched on both fields, so a worker in a different-sized
+    // group on the same host must not adopt this rank 0.
+    try std.testing.expect(!beaconMatchesThisGroup(sent[beacon_prefix.len..], 49454, 3));
+    try std.testing.expect(!beaconMatchesThisGroup(sent[beacon_prefix.len..], 49455, 2));
 }
 
 test "discovery, join message format" {
