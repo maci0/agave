@@ -108,6 +108,9 @@ fn sampleNextToken(req: *Request, model: *Model, greedy: u32) u32 {
     if (req.mirostat >= 2) {
         return math_ops.sampleMirostat(logits, req.mirostat_tau, req.mirostat_eta, &req.mirostat_mu, req.temperature, req.prng.random());
     }
+    // min_p and xtc are applied here, not through `req.sampler`:
+    // `rebuildSampler` does not register them, so this is their only
+    // application on this path.
     if (req.min_p > 0) math_ops.applyMinP(logits, req.min_p);
     if (req.xtc_probability > 0) math_ops.applyXtc(logits, req.xtc_probability, req.xtc_threshold, req.prng.random());
     return math_ops.sampleToken(logits, req.temperature, req.top_k, req.top_p, req.prng.random());
@@ -189,6 +192,12 @@ pub const Request = struct {
 
     /// Fill `sampler` from current sampling fields. Call after configuring
     /// temperature/bias/penalties, not on the token loop.
+    ///
+    /// The stack carries the logit-mutating processors. `min_p` and `xtc` are
+    /// deliberately not registered: the mirostat branch in `sampleNextToken`
+    /// is mutually exclusive with them there, and both are applied explicitly on
+    /// the sampling branch, so a registered copy would mutate the logits twice
+    /// and draw a second number from the request's PRNG. See `sampleNextToken`.
     pub fn rebuildSampler(self: *Request) void {
         self.sampler.dispose();
         if (self.logit_bias_count > 0) self.sampler.push(.bias);
@@ -1542,6 +1551,48 @@ test "sampleNextToken applies logit bias at temperature 0" {
     // forward()'s greedy would be 1 (score 5); bias makes 0 win (1+10=11)
     const next = sampleNextToken(&req, &model, 1);
     try std.testing.expectEqual(@as(u32, 0), next);
+}
+
+test "rebuildSampler registers only the processors sampleNextToken does not apply itself" {
+    // min_p and xtc are applied by the explicit calls at the end of
+    // sampleNextToken, so the stack must not carry them: a registered copy
+    // would mutate the logits a second time and draw the PRNG twice per token.
+    var req = testRequest(.empty, std.testing.allocator);
+    defer req.deinit();
+    req.min_p = 0.1;
+    req.xtc_probability = 0.5;
+    req.rebuildSampler();
+    try std.testing.expectEqual(@as(u8, 0), req.sampler.len);
+
+    // The processors sampleNextToken leaves to the stack are registered, in
+    // the order Stack.apply runs them.
+    req.logit_bias_count = 1;
+    req.repetition_penalty = 1.1;
+    req.dry_multiplier = 0.5;
+    req.frequency_penalty = 0.1;
+    req.rebuildSampler();
+    try std.testing.expectEqual(@as(u8, 4), req.sampler.len);
+    try std.testing.expectEqual(sampler_stack.Kind.bias, req.sampler.kinds[0]);
+    try std.testing.expectEqual(sampler_stack.Kind.repeat, req.sampler.kinds[1]);
+    try std.testing.expectEqual(sampler_stack.Kind.dry, req.sampler.kinds[2]);
+    try std.testing.expectEqual(sampler_stack.Kind.penalties, req.sampler.kinds[3]);
+}
+
+test "sampleNextToken applies min_p on the sampling branch" {
+    const allocator = std.testing.allocator;
+    var logits = [_]f32{ 10.0, 0.0, -5.0 };
+    var mock = MockModel{ .logits_buf = &logits };
+    var model = Model.from(MockModel, &mock);
+
+    var tokens: std.ArrayList(u32) = .empty;
+    try tokens.ensureTotalCapacity(allocator, 8);
+    defer tokens.deinit(allocator);
+
+    var req = testRequest(tokens, allocator);
+    req.temperature = 1.0;
+    req.min_p = 0.5; // keeps logit 10, masks 0 and -5
+    req.rebuildSampler();
+    try std.testing.expectEqual(@as(u32, 0), sampleNextToken(&req, &model, 1));
 }
 
 // Mock model for testing

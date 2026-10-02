@@ -4556,6 +4556,7 @@ fn generateNPre(formatted: []const u8, reset: bool, max_tokens: usize, sampling:
         }
         if (use_sampling) {
             if (sampling.min_p > 0) math_ops.applyMinP(first_logits, sampling.min_p);
+            if (sampling.xtc_probability > 0) math_ops.applyXtc(first_logits, sampling.xtc_probability, sampling.xtc_threshold, prng.random());
             first_gen_token = math_ops.sampleToken(first_logits, sampling.temperature, sampling.top_k, sampling.top_p, prng.random());
         } else if (sampling.json_mode or use_grammar) {
             first_gen_token = math_ops.argmax(first_logits);
@@ -5115,6 +5116,7 @@ fn chatStreamGeneratePre(stream: http.TcpStream, formatted: []const u8, reset: b
     if (use_sampling and token_ids.len > 0) {
         const cs_logits = model.getLogits();
         if (sampling.min_p > 0) math_ops.applyMinP(cs_logits, sampling.min_p);
+        if (sampling.xtc_probability > 0) math_ops.applyXtc(cs_logits, sampling.xtc_probability, sampling.xtc_threshold, prng_cs.random());
         first_gen_token = math_ops.sampleToken(cs_logits, sampling.temperature, sampling.top_k, sampling.top_p, prng_cs.random());
     }
 
@@ -5149,6 +5151,7 @@ fn chatStreamGeneratePre(stream: http.TcpStream, formatted: []const u8, reset: b
         if (use_sampling) {
             const cs_next_logits = model.getLogits();
             if (sampling.min_p > 0) math_ops.applyMinP(cs_next_logits, sampling.min_p);
+            if (sampling.xtc_probability > 0) math_ops.applyXtc(cs_next_logits, sampling.xtc_probability, sampling.xtc_threshold, prng_cs.random());
             next = math_ops.sampleToken(cs_next_logits, sampling.temperature, sampling.top_k, sampling.top_p, prng_cs.random());
         }
         if (g_server.isEog(next)) break;
@@ -5893,6 +5896,7 @@ fn generateAnthropicStream(stream: http.TcpStream, formatted: []const u8, max_to
     if (use_sampling_a and token_ids.len > 0) {
         const a_logits = model.getLogits();
         if (sampling_a.min_p > 0) math_ops.applyMinP(a_logits, sampling_a.min_p);
+        if (sampling_a.xtc_probability > 0) math_ops.applyXtc(a_logits, sampling_a.xtc_probability, sampling_a.xtc_threshold, prng_a.random());
         first_gen_token = math_ops.sampleToken(a_logits, sampling_a.temperature, sampling_a.top_k, sampling_a.top_p, prng_a.random());
     }
 
@@ -6010,6 +6014,7 @@ fn generateAnthropicStream(stream: http.TcpStream, formatted: []const u8, max_to
             if (use_sampling_a) {
                 const a_next_logits = model.getLogits();
                 if (sampling_a.min_p > 0) math_ops.applyMinP(a_next_logits, sampling_a.min_p);
+                if (sampling_a.xtc_probability > 0) math_ops.applyXtc(a_next_logits, sampling_a.xtc_probability, sampling_a.xtc_threshold, prng_a.random());
                 next = math_ops.sampleToken(a_next_logits, sampling_a.temperature, sampling_a.top_k, sampling_a.top_p, prng_a.random());
             }
             if (g_server.isEog(next)) break;
@@ -6412,6 +6417,7 @@ fn generateResponsesStream(stream: http.TcpStream, prompt: []const u8, max_token
     if (use_sampling_r and token_ids.len > 0) {
         const r_logits = model.getLogits();
         if (sampling_r.min_p > 0) math_ops.applyMinP(r_logits, sampling_r.min_p);
+        if (sampling_r.xtc_probability > 0) math_ops.applyXtc(r_logits, sampling_r.xtc_probability, sampling_r.xtc_threshold, prng_r.random());
         first_gen_token = math_ops.sampleToken(r_logits, sampling_r.temperature, sampling_r.top_k, sampling_r.top_p, prng_r.random());
     }
 
@@ -6517,6 +6523,7 @@ fn generateResponsesStream(stream: http.TcpStream, prompt: []const u8, max_token
             if (use_sampling_r) {
                 const r_next_logits = model.getLogits();
                 if (sampling_r.min_p > 0) math_ops.applyMinP(r_next_logits, sampling_r.min_p);
+                if (sampling_r.xtc_probability > 0) math_ops.applyXtc(r_next_logits, sampling_r.xtc_probability, sampling_r.xtc_threshold, prng_r.random());
                 next = math_ops.sampleToken(r_next_logits, sampling_r.temperature, sampling_r.top_k, sampling_r.top_p, prng_r.random());
             }
             if (g_server.isEog(next)) break;
@@ -9765,4 +9772,27 @@ test "deleting a conversation keeps the store as it was before the delete" {
     defer kept.deinit();
     try std.testing.expectEqual(@as(usize, 1), kept.conversations.len);
     try std.testing.expectEqualStrings("why", kept.conversations[0].messages[0].content);
+}
+
+test "every sampling site that filters by min_p also applies xtc" {
+    // min_p and xtc are both stateless logit filters driven only by the
+    // sampling params and one PRNG draw, so each generation path applies them
+    // as a pair before sampleToken. The chat-stream fallback, Anthropic and
+    // Responses paths filtered by min_p alone and dropped xtc, so a request
+    // asking for xtc_probability kept the top tokens those paths should have
+    // excluded. Counting the two call sites keeps the next path added to this
+    // file from reintroducing the gap.
+    const source = @embedFile("server.zig");
+    try std.testing.expectEqual(countCalls(source, "math_ops.applyMinP("), countCalls(source, "math_ops.applyXtc("));
+}
+
+/// Occurrences of `needle` in `source`.
+fn countCalls(source: []const u8, needle: []const u8) usize {
+    var n: usize = 0;
+    var i: usize = 0;
+    while (std.mem.indexOfPos(u8, source, i, needle)) |at| {
+        n += 1;
+        i = at + needle.len;
+    }
+    return n;
 }
