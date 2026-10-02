@@ -11,6 +11,25 @@ must still appear under **Changed** or **Breaking** below. See
 
 ## [Unreleased]
 
+### Added
+- `scripts/test-file.sh src/<file>.zig` runs every test in one source file.
+  `zig test src/<file>.zig`, the obvious way to test the file you just edited,
+  fails for most of `src/` with `import of file outside module path`: a Zig
+  module reaches only the files under its root source file's directory, and
+  `src/` is written as a tree of relative `@import("../sibling.zig")` calls.
+  The only narrow loop that existed was `zig build test -Dtest-filter=<name>`,
+  which needs a test name you have to grep for first and compiles the whole
+  suite on every run. This writes a throwaway bridge root into `src/` (the same
+  trick `src/test_exports.zig` uses for `tests/`), runs the file's tests and the
+  tests of what it imports, and removes the bridge on every exit. A trailing
+  substring is an assertion rather than a filter and fails the run when it
+  matches nothing, because Zig 0.16's `zig test --test-filter` cannot see an
+  imported file's tests and reports `All 0 tests passed.` with exit 0. Covered by
+  `scripts/test_test_file.py`, in `zig build test-python`.
+- `docs/CONTRIBUTING.md` now carries the CI `sanitize` job's two commands
+  verbatim instead of a two-filter example, so a local ASan+UBSan run covers
+  exactly the filters the blocking job covers.
+
 ### Breaking
 - A vision `mmproj` whose header dimensions do not form exact patch grids is now
   refused at startup instead of loaded. Before: a checkpoint with

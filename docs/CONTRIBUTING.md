@@ -325,7 +325,7 @@ each other, so the offline copy of such a diagram is untitled per group.
 1. Add a `Preset` entry to the `presets` array in `src/recipe.zig`
 2. Set match criteria: `arch_prefix`, `backend`, `quant` (empty string = "any")
 3. Only set fields that differ from CLI defaults (null = don't override)
-4. Run `zig test src/recipe.zig` to verify matching
+4. Run `scripts/test-file.sh src/recipe.zig` to verify matching
 
 **Key principle**: User CLI flags always override recipe defaults.
 
@@ -464,6 +464,19 @@ zig build test -Dtest-filter=wht32
 # passed." and exit 0, so a typo would read as a green run that tested nothing.
 # Candidates: rg -n '^test "' src/ tests/
 
+# Run every test in ONE file: the edit-test loop, much narrower than the suite.
+# Needs `zig build` to have run once, so the build_options module exists under
+# .zig-cache.
+scripts/test-file.sh src/ops/kv_quant.zig
+# Trailing substrings are an assertion, not a filter: the run fails if no test
+# in that file matches, because `zig test --test-filter` cannot see an imported
+# file's tests and would report "All 0 tests passed." and exit 0.
+scripts/test-file.sh src/ops/kv_quant.zig wht32
+# It writes a throwaway bridge root into src/ (Zig 0.16 modules reach only files
+# under their root's directory, so `zig test src/ops/kv_quant.zig` alone dies
+# with "import of file outside module path") and removes it on every exit.
+# Files outside src/ are already their own root: see the golden tests below.
+
 # Run with a specific backend (tests that need GPU use target guards)
 zig build test -Denable-webgpu=false    # skip WebGPU tests
 
@@ -477,7 +490,15 @@ zig build test --fuzz=1000 --summary all
 # 3x the wall clock, so CI filters it to the untrusted-input parsers and the
 # durable-write paths; drop the filters to sanitize everything.
 zig build test -Dsanitize-c=full
-zig build test -Dsanitize-c=full -Dtest-filter=gguf -Dtest-filter=tokenizer
+# The two commands CI's sanitize job runs, verbatim, so a local run covers
+# exactly what the blocking job covers. build.zig rejects a filter that matches
+# no test name, so a renamed test turns both the job and these red.
+zig build test -Dsanitize-c=full --summary all \
+  -Dtest-filter=gguf -Dtest-filter=tokenizer -Dtest-filter=dequant \
+  -Dtest-filter=json -Dtest-filter=grammar -Dtest-filter=chat
+zig build test -Dsanitize-c=full --summary all \
+  -Dtest-filter=injected -Dtest-filter=torn -Dtest-filter=quarantin \
+  -Dtest-filter=store
 # -Dsanitize-c=trap is UBSan with a trap instead of a report, for a target
 # whose sanitizer runtime is unavailable. Off by default, so the release
 # binaries are unchanged.
@@ -493,7 +514,7 @@ for f in tests/models/test_*.zig; do zig test "$f" --test-filter CPU; done
 `found another zig file ... after root source file`, so sweep a backend across models with a loop.
 
 **Test categories:**
-- **Unit tests**: `test` blocks at the bottom of each source file (run via `zig build test`)
+- **Unit tests**: `test` blocks at the bottom of each source file (run via `zig build test`; one file at a time via `scripts/test-file.sh`)
 - **Leak detection**: All tests use `std.testing.allocator`, any unfreed allocation fails the test
 - **Golden tests**: `zig test tests/models/test_*.zig` is a loop, not one command (see above); skipped without weights under `./models`
 - **Model × Backend matrix**: See [TEST_MATRIX.md](TEST_MATRIX.md)
