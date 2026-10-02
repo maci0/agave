@@ -131,6 +131,23 @@ class VersionConsistencyTest(unittest.TestCase):
         errors = self._errors({"CHANGELOG.md": self._changelog("### Fixed\n- A crash.\n", prev="9.9.8")})
         self.assertEqual(errors, [])
 
+    def test_bumped_version_without_a_changelog_section_is_reported(self) -> None:
+        # The gap the release checklist calls step 1: `.version` moved to
+        # 9.9.9 but the notes are still under [Unreleased]. Every string
+        # comparison still agrees, so nothing else reports it.
+        changelog = FILES["CHANGELOG.md"].replace(f"## [{PRODUCT}] - 2026-01-01\n\n", "")
+        errors = self._errors({"CHANGELOG.md": changelog})
+        self.assertTrue(any(f".version is {PRODUCT}" in e and "no `##" in e for e in errors), errors)
+
+    def test_notes_dated_above_the_product_version_are_reported(self) -> None:
+        changelog = self._changelog("### Fixed\n- A crash.\n", prev="9.9.10")
+        errors = self._errors({"CHANGELOG.md": changelog})
+        self.assertTrue(any("dated above the product version" in e for e in errors), errors)
+
+    def test_matching_section_is_accepted(self) -> None:
+        errors = self._errors({"CHANGELOG.md": self._changelog("### Breaking\n- A flag was removed.\n", prev="9.8.0")})
+        self.assertEqual(errors, [])
+
     @staticmethod
     def _changelog(section: str, prev: str) -> str:
         """A two-release changelog: `prev`, then PRODUCT carrying `section`."""
