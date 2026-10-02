@@ -140,11 +140,17 @@ fi
 # itself compiles against, so reuse it rather than inventing a second copy that
 # could disagree with build.zig. A fresh clone with no build yet has none; say
 # so instead of failing on a name the contributor did not write.
+expected_ver=""
+if [[ -f "$ROOT/build.zig.zon" ]]; then
+    expected_ver="$(sed -n 's/^[[:space:]]*\.version[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$ROOT/build.zig.zon" | head -n1)"
+fi
 options_module=""
 for candidate in .zig-cache/c/*/options.zig; do
     [[ -f "$candidate" ]] || continue
     options_module="$candidate"
-    break
+    if [[ -n "$expected_ver" ]] && grep -q "version: \[\]const u8 = \"$expected_ver\"" "$candidate" 2>/dev/null; then
+        break
+    fi
 done
 if [[ -z "$options_module" ]]; then
     echo "test-file: this file needs the build_options module, and .zig-cache has none yet." >&2
