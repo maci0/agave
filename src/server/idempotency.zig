@@ -7,12 +7,16 @@
 //! collapse onto the first execution instead of redoing it.
 //!
 //! Callers key on the sanitized `X-Request-Id` header, scoped to the route that
-//! claimed it: the id alone is client-chosen and says nothing about which
-//! operation it names, so a client that reuses one id across two routes (or two
-//! clients that pick the same id) would otherwise replay the first route's
-//! response to the second. A route longer than `max_route_len` is not
-//! claimable, so a truncated route can never alias another one. A request
-//! without an id has nothing to deduplicate against and runs normally.
+//! claimed it *and* to the principal that claimed it: the id alone is
+//! client-chosen and says nothing about which operation it names or who sent
+//! it, so a client that reuses one id across two routes (or two clients that
+//! pick the same id) would otherwise replay the first route's response to the
+//! second, and a second principal could read the first one's stored reply or
+//! suppress its retry by presenting the same key. `owner` is a tag the caller
+//! derives from whatever it already authenticated with, never a credential. A
+//! route longer than `max_route_len` is not claimable, so a truncated route
+//! can never alias another one. A request without an id has nothing to
+//! deduplicate against and runs normally.
 //!
 //! Storage is a fixed ring of slots, so memory is bounded by construction, and
 //! every slot expires on a monotonic deadline. A claim left behind by a
@@ -60,6 +64,17 @@ pub const in_flight_ttl_ms: i64 = 5 * 60 * 1000;
 /// retry budget. A key older than this is treated as a fresh operation.
 pub const retention_ms: i64 = 60 * 60 * 1000;
 
+/// A claim is only ever visible to the principal that took it. Zero is the
+/// anonymous scope, which a caller with no credential of its own uses; every
+/// such caller shares it, so it must compare equal to itself. A caller that
+/// can distinguish principals passes a tag derived from what it already
+/// authenticated with, never the credential itself.
+pub const anonymous_owner: Owner = 0;
+
+/// 128-bit principal tag. Wide enough that a digest collision is not a
+/// practical concern; the value is a hash, never a secret.
+pub const Owner = u128;
+
 const State = enum { free, in_flight, done };
 
 const Slot = struct {
@@ -80,6 +95,9 @@ const Slot = struct {
     /// the oldest-by-index slot is evicted over and over and the ring stops
     /// holding the most recent `capacity` keys.
     seq: u64 = 0,
+    /// Principal that took the claim. Part of `matches`, so one key is only
+    /// ever replayed back to the requester that created it.
+    owner: Owner = anonymous_owner,
     /// In-flight claim start, or completion time, depending on `state`.
     deadline_ms: i64 = 0,
     status_line: []const u8 = "",
@@ -87,10 +105,11 @@ const Slot = struct {
     /// Owned, or empty when the response was too large to cache.
     body: []u8 = &.{},
 
-    fn matches(self: *const Slot, key: []const u8, route: []const u8) bool {
+    fn matches(self: *const Slot, key: []const u8, route: []const u8, owner: Owner) bool {
         if (self.state == .free) return false;
         if (self.key_len != key.len) return false;
         if (self.route_len != route.len) return false;
+        if (self.owner != owner) return false;
         if (!std.mem.eql(u8, self.key[0..key.len], key)) return false;
         return std.mem.eql(u8, self.route[0..route.len], route);
     }
@@ -148,7 +167,7 @@ pub const Ledger = struct {
 
     /// Take ownership of `key` for the calling request, or report that another
     /// request already owns it. `now_ms` is monotonic milliseconds. The claim
-    /// is scoped to `route`, so the same id on a different route is a different
+    /// is scoped to `route` and `owner`, so either difference makes a different
     /// key. A fresh claim carries a token that scopes its `complete` and
     /// `release`.
     ///
@@ -158,7 +177,7 @@ pub const Ledger = struct {
     /// mutation twice at once, so instead the new key runs unclaimed: it has
     /// no duplicate yet, and an unclaimed run repeats no side effect. Only
     /// the deduplication window is lost, not the run.
-    pub fn claim(self: *Ledger, key: []const u8, route: []const u8, now_ms: i64) Claim {
+    pub fn claim(self: *Ledger, key: []const u8, route: []const u8, owner: Owner, now_ms: i64) Claim {
         if (key.len == 0 or key.len > max_key_len) return .{ .fresh = 0 };
         if (route.len == 0 or route.len > max_route_len) return .{ .fresh = 0 };
 
@@ -174,7 +193,7 @@ pub const Ledger = struct {
                 if (free_slot == null) free_slot = s;
                 continue;
             }
-            if (s.matches(key, route)) {
+            if (s.matches(key, route, owner)) {
                 if (s.live(now_ms)) {
                     if (s.state == .in_flight) return .duplicate;
                     return .{
@@ -192,7 +211,7 @@ pub const Ledger = struct {
                 }
                 // Expired: reuse this slot rather than leaving its body resident.
                 self.discard(s);
-                return .{ .fresh = self.arm(s, key, route, now_ms) };
+                return .{ .fresh = self.arm(s, key, route, owner, now_ms) };
             }
             // Not this key. Track the cheapest reclaimable slot for the miss.
             if (s.state == .done and s.live(now_ms) and
@@ -205,7 +224,7 @@ pub const Ledger = struct {
 
         const slot = free_slot orelse oldest_done orelse return .{ .fresh = 0 };
         self.discard(slot);
-        return .{ .fresh = self.arm(slot, key, route, now_ms) };
+        return .{ .fresh = self.arm(slot, key, route, owner, now_ms) };
     }
 
     /// Record the outcome of a claimed key so a retry replays it.
@@ -213,10 +232,10 @@ pub const Ledger = struct {
     /// ledger. No-op when the key is absent, or when the slot has moved on to a
     /// later claim, so a request that ran past the in-flight TTL cannot
     /// complete the claim that replaced it.
-    pub fn complete(self: *Ledger, key: []const u8, route: []const u8, token: u64, now_ms: i64, status_line: []const u8, content_type: []const u8, body: []const u8) void {
+    pub fn complete(self: *Ledger, key: []const u8, route: []const u8, owner: Owner, token: u64, now_ms: i64, status_line: []const u8, content_type: []const u8, body: []const u8) void {
         if (token == 0 or key.len == 0 or key.len > max_key_len) return;
         for (&self.slots) |*s| {
-            if (!s.matches(key, route) or s.token != token) continue;
+            if (!s.matches(key, route, owner) or s.token != token) continue;
             self.freeBody(s);
             s.status_line = status_line;
             s.content_type = content_type;
@@ -237,17 +256,17 @@ pub const Ledger = struct {
     /// Drop a claim without recording a result, so a failed request does not
     /// block its own retries for the in-flight window. A stale `token` is a
     /// no-op: the key now belongs to a later claim.
-    pub fn release(self: *Ledger, key: []const u8, route: []const u8, token: u64) void {
+    pub fn release(self: *Ledger, key: []const u8, route: []const u8, owner: Owner, token: u64) void {
         if (token == 0 or key.len == 0 or key.len > max_key_len) return;
         for (&self.slots) |*s| {
-            if (s.matches(key, route) and s.state == .in_flight and s.token == token) {
+            if (s.matches(key, route, owner) and s.state == .in_flight and s.token == token) {
                 self.discard(s);
                 return;
             }
         }
     }
 
-    fn arm(self: *Ledger, slot: *Slot, key: []const u8, route: []const u8, now_ms: i64) u64 {
+    fn arm(self: *Ledger, slot: *Slot, key: []const u8, route: []const u8, owner: Owner, now_ms: i64) u64 {
         @memcpy(slot.key[0..key.len], key);
         slot.key_len = @intCast(key.len);
         @memcpy(slot.route[0..route.len], route);
@@ -257,6 +276,7 @@ pub const Ledger = struct {
         slot.token = token;
         slot.seq = self.next_seq;
         self.next_seq +%= 1;
+        slot.owner = owner;
         slot.state = .in_flight;
         slot.deadline_ms = now_ms;
         slot.status_line = "";
@@ -276,6 +296,7 @@ pub const Ledger = struct {
         slot.key_len = 0;
         slot.route_len = 0;
         slot.seq = 0;
+        slot.owner = anonymous_owner;
         slot.status_line = "";
         slot.deadline_ms = 0;
     }
@@ -284,10 +305,14 @@ pub const Ledger = struct {
 const testing = std.testing;
 /// Route every test claims on, unless it is exercising route scoping.
 const test_route = "/v1/chat/regenerate";
+/// Principal every test claims as, unless it is exercising owner scoping.
+const test_owner: Owner = anonymous_owner;
+/// A second principal, distinct from `test_owner`.
+const other_owner: Owner = 0x9e37_79b9_7f4a_7c15_f39c_c060_5ced_c835;
 
 /// Claim `key` and return its token, failing the test if the claim was refused.
 fn claimKey(l: *Ledger, key: []const u8, now_ms: i64) !u64 {
-    const c = l.claim(key, test_route, now_ms);
+    const c = l.claim(key, test_route, test_owner, now_ms);
     try testing.expect(c == .fresh);
     return c.fresh;
 }
@@ -297,8 +322,8 @@ test "claim then complete then claim replays" {
     defer l.deinit();
 
     const t = try claimKey(&l, "a", 0);
-    l.complete("a", test_route, t, 10, "200 OK", "text/html", "hello");
-    const second = l.claim("a", test_route, 20);
+    l.complete("a", test_route, test_owner, t, 10, "200 OK", "text/html", "hello");
+    const second = l.claim("a", test_route, test_owner, 20);
     try testing.expect(second == .replay);
     defer second.replay.deinit(testing.allocator);
     try testing.expectEqualStrings("200 OK", second.replay.status_line);
@@ -310,7 +335,7 @@ test "duplicate key while in flight is rejected" {
     defer l.deinit();
 
     _ = try claimKey(&l, "a", 0);
-    try testing.expectEqual(Claim{ .duplicate = {} }, l.claim("a", test_route, 1));
+    try testing.expectEqual(Claim{ .duplicate = {} }, l.claim("a", test_route, test_owner, 1));
 }
 
 test "abandoned claim expires and frees the key" {
@@ -318,7 +343,7 @@ test "abandoned claim expires and frees the key" {
     defer l.deinit();
 
     _ = try claimKey(&l, "a", 0);
-    try testing.expect(l.claim("a", test_route, in_flight_ttl_ms) == .fresh);
+    try testing.expect(l.claim("a", test_route, test_owner, in_flight_ttl_ms) == .fresh);
 }
 
 test "completed key expires past the retention window" {
@@ -326,8 +351,8 @@ test "completed key expires past the retention window" {
     defer l.deinit();
 
     const t = try claimKey(&l, "a", 0);
-    l.complete("a", test_route, t, 0, "200 OK", "text/html", "hello");
-    try testing.expect(l.claim("a", test_route, retention_ms) == .fresh);
+    l.complete("a", test_route, test_owner, t, 0, "200 OK", "text/html", "hello");
+    try testing.expect(l.claim("a", test_route, test_owner, retention_ms) == .fresh);
 }
 
 test "release frees a claim without a result" {
@@ -335,8 +360,8 @@ test "release frees a claim without a result" {
     defer l.deinit();
 
     const t = try claimKey(&l, "a", 0);
-    l.release("a", test_route, t);
-    try testing.expect(l.claim("a", test_route, 1) == .fresh);
+    l.release("a", test_route, test_owner, t);
+    try testing.expect(l.claim("a", test_route, test_owner, 1) == .fresh);
 }
 
 test "release leaves a completed key alone" {
@@ -344,9 +369,9 @@ test "release leaves a completed key alone" {
     defer l.deinit();
 
     const t = try claimKey(&l, "a", 0);
-    l.complete("a", test_route, t, 0, "200 OK", "text/html", "hello");
-    l.release("a", test_route, t);
-    const c = l.claim("a", test_route, 1);
+    l.complete("a", test_route, test_owner, t, 0, "200 OK", "text/html", "hello");
+    l.release("a", test_route, test_owner, t);
+    const c = l.claim("a", test_route, test_owner, 1);
     try testing.expect(c == .replay);
     c.replay.deinit(testing.allocator);
 }
@@ -361,8 +386,8 @@ test "a stale claim cannot complete the request that replaced it" {
     const current = try claimKey(&l, "a", in_flight_ttl_ms);
     try testing.expect(current != stale);
 
-    l.complete("a", test_route, stale, in_flight_ttl_ms, "200 OK", "text/html", "first");
-    const c = l.claim("a", test_route, in_flight_ttl_ms);
+    l.complete("a", test_route, test_owner, stale, in_flight_ttl_ms, "200 OK", "text/html", "first");
+    const c = l.claim("a", test_route, test_owner, in_flight_ttl_ms);
     try testing.expectEqual(Claim{ .duplicate = {} }, c);
 }
 
@@ -372,18 +397,18 @@ test "a stale claim cannot release the request that replaced it" {
 
     const stale = try claimKey(&l, "a", 0);
     _ = try claimKey(&l, "a", in_flight_ttl_ms);
-    l.release("a", test_route, stale);
-    try testing.expectEqual(Claim{ .duplicate = {} }, l.claim("a", test_route, in_flight_ttl_ms));
+    l.release("a", test_route, test_owner, stale);
+    try testing.expectEqual(Claim{ .duplicate = {} }, l.claim("a", test_route, test_owner, in_flight_ttl_ms));
 }
 
 test "empty and oversized keys are always fresh" {
     var l = Ledger.init(testing.allocator);
     defer l.deinit();
 
-    const empty = l.claim("", test_route, 0);
+    const empty = l.claim("", test_route, test_owner, 0);
     try testing.expectEqual(@as(u64, 0), empty.fresh);
     const long = "x" ** (max_key_len + 1);
-    try testing.expectEqual(@as(u64, 0), l.claim(long, test_route, 0).fresh);
+    try testing.expectEqual(@as(u64, 0), l.claim(long, test_route, test_owner, 0).fresh);
 }
 
 test "the same key on another route is a different operation" {
@@ -391,15 +416,15 @@ test "the same key on another route is a different operation" {
     defer l.deinit();
 
     const t = try claimKey(&l, "a", 0);
-    l.complete("a", test_route, t, 1, "200 OK", "text/html", "chat reply");
+    l.complete("a", test_route, test_owner, t, 1, "200 OK", "text/html", "chat reply");
 
     // A second client reusing the id on another route must run, not replay.
-    const other = l.claim("a", "/v1/conversations", 2);
+    const other = l.claim("a", "/v1/conversations", test_owner, 2);
     try testing.expect(other == .fresh);
     try testing.expect(other.fresh != 0);
 
     // The original route still replays.
-    const c = l.claim("a", test_route, 3);
+    const c = l.claim("a", test_route, test_owner, 3);
     try testing.expect(c == .replay);
     defer c.replay.deinit(testing.allocator);
     try testing.expectEqualStrings("chat reply", c.replay.body);
@@ -410,17 +435,17 @@ test "an in-flight claim does not block the same id on another route" {
     defer l.deinit();
 
     _ = try claimKey(&l, "a", 0);
-    try testing.expectEqual(Claim{ .duplicate = {} }, l.claim("a", test_route, 1));
-    try testing.expect(l.claim("a", "/v1/chat", 1) == .fresh);
+    try testing.expectEqual(Claim{ .duplicate = {} }, l.claim("a", test_route, test_owner, 1));
+    try testing.expect(l.claim("a", "/v1/chat", test_owner, 1) == .fresh);
 }
 
 test "empty and oversized routes are never claimed" {
     var l = Ledger.init(testing.allocator);
     defer l.deinit();
 
-    try testing.expectEqual(@as(u64, 0), l.claim("a", "", 0).fresh);
+    try testing.expectEqual(@as(u64, 0), l.claim("a", "", test_owner, 0).fresh);
     const long = "r" ** (max_route_len + 1);
-    try testing.expectEqual(@as(u64, 0), l.claim("a", long, 0).fresh);
+    try testing.expectEqual(@as(u64, 0), l.claim("a", long, test_owner, 0).fresh);
 }
 
 test "ring eviction keeps a bounded replay set" {
@@ -431,7 +456,7 @@ test "ring eviction keeps a bounded replay set" {
         var buf: [16]u8 = undefined;
         const k = try std.fmt.bufPrint(&buf, "k{d}", .{i});
         const t = try claimKey(&l, k, 0);
-        l.complete(k, test_route, t, 1, "200 OK", "text/html", "body");
+        l.complete(k, test_route, test_owner, t, 1, "200 OK", "text/html", "body");
     }
     // The first `capacity` keys are gone; the newest `capacity` replay.
     // Claiming a live key leaves the ring untouched, so the replays are
@@ -439,14 +464,14 @@ test "ring eviction keeps a bounded replay set" {
     for (capacity..capacity * 2) |i| {
         var buf: [16]u8 = undefined;
         const k = try std.fmt.bufPrint(&buf, "k{d}", .{i});
-        const c = l.claim(k, test_route, 2);
+        const c = l.claim(k, test_route, test_owner, 2);
         try testing.expect(c == .replay);
         c.replay.deinit(testing.allocator);
     }
     for (0..capacity) |i| {
         var buf: [16]u8 = undefined;
         const k = try std.fmt.bufPrint(&buf, "k{d}", .{i});
-        try testing.expect(l.claim(k, test_route, 2) == .fresh);
+        try testing.expect(l.claim(k, test_route, test_owner, 2) == .fresh);
     }
 }
 
@@ -456,8 +481,8 @@ test "oversized body still records completion" {
 
     const big = "y" ** (max_body_len + 1);
     const t = try claimKey(&l, "a", 0);
-    l.complete("a", test_route, t, 0, "200 OK", "text/html", big);
-    const c = l.claim("a", test_route, 1);
+    l.complete("a", test_route, test_owner, t, 0, "200 OK", "text/html", big);
+    const c = l.claim("a", test_route, test_owner, 1);
     try testing.expect(c == .replay);
     defer c.replay.deinit(testing.allocator);
     try testing.expectEqualStrings("", c.replay.body);
@@ -481,24 +506,24 @@ test "a full ring never steals a live in-flight claim" {
     // rather than evicting a request that is still executing. Reclaiming one
     // would let its owner's retry re-enter as fresh and run the same mutation
     // a second time concurrently.
-    const overflow = l.claim("overflow", test_route, 1);
+    const overflow = l.claim("overflow", test_route, test_owner, 1);
     try testing.expectEqual(@as(u64, 0), overflow.fresh);
 
     // Every in-flight label still reports the duplicate, not a fresh claim.
     for (0..capacity) |i| {
-        try testing.expectEqual(Claim{ .duplicate = {} }, l.claim(labels[i][0..label_lens[i]], test_route, 1));
+        try testing.expectEqual(Claim{ .duplicate = {} }, l.claim(labels[i][0..label_lens[i]], test_route, test_owner, 1));
     }
 
     // The request the overflow was not allowed to evict can still complete,
     // and its owner still holds its claim.
     const first = labels[0][0..label_lens[0]];
-    l.complete(first, test_route, tokens[0], 2, "200 OK", "text/html", "first");
-    const replayed = l.claim(first, test_route, 3);
+    l.complete(first, test_route, test_owner, tokens[0], 2, "200 OK", "text/html", "first");
+    const replayed = l.claim(first, test_route, test_owner, 3);
     try testing.expect(replayed == .replay);
     replayed.replay.deinit(testing.allocator);
 
     // Once slots expire, the ring takes them again.
-    const reclaimed = l.claim("overflow", test_route, in_flight_ttl_ms);
+    const reclaimed = l.claim("overflow", test_route, test_owner, in_flight_ttl_ms);
     try testing.expect(reclaimed == .fresh);
     try testing.expect(reclaimed.fresh != 0);
 }
@@ -511,7 +536,7 @@ test "slot reuse does not leak the previous body" {
         var buf: [16]u8 = undefined;
         const k = try std.fmt.bufPrint(&buf, "k{d}", .{i});
         const t = try claimKey(&l, k, 0);
-        l.complete(k, test_route, t, 0, "200 OK", "text/html", "secret-body");
+        l.complete(k, test_route, test_owner, t, 0, "200 OK", "text/html", "secret-body");
     }
     // One body per live slot, never one per completed operation.
     try testing.expectEqual(capacity, countStoredBodies(&l));
@@ -523,4 +548,68 @@ fn countStoredBodies(l: *const Ledger) usize {
         if (s.body.len != 0) n += 1;
     }
     return n;
+}
+
+test "the same key from another principal does not replay this one's response" {
+    var l = Ledger.init(testing.allocator);
+    defer l.deinit();
+
+    const t = try claimKey(&l, "a", 0);
+    l.complete("a", test_route, test_owner, t, 1, "200 OK", "text/html", "secret reply");
+
+    // A second holder presenting the same id must run its own operation and
+    // must never be handed the first one's stored body.
+    const other = l.claim("a", test_route, other_owner, 2);
+    try testing.expect(other == .fresh);
+    try testing.expect(other.fresh != 0);
+
+    // The original principal still replays its own response.
+    const c = l.claim("a", test_route, test_owner, 3);
+    try testing.expect(c == .replay);
+    defer c.replay.deinit(testing.allocator);
+    try testing.expectEqualStrings("secret reply", c.replay.body);
+}
+
+test "another principal cannot suppress an in-flight claim or drop it" {
+    var l = Ledger.init(testing.allocator);
+    defer l.deinit();
+
+    const t = try claimKey(&l, "a", 0);
+
+    // Present the same key from a second principal while the first is running:
+    // it gets its own fresh claim rather than a `duplicate` refusal, and its
+    // token differs, so neither can complete or release the other's slot.
+    const other = l.claim("a", test_route, other_owner, 1);
+    try testing.expect(other == .fresh);
+    try testing.expect(other.fresh != t);
+
+    // Releasing the other principal's claim leaves the first one in flight.
+    l.release("a", test_route, other_owner, other.fresh);
+    l.release("a", test_route, other_owner, t);
+    try testing.expectEqual(Claim{ .duplicate = {} }, l.claim("a", test_route, test_owner, 1));
+
+    // Completing under the wrong owner stores nothing: the first principal's
+    // slot keeps its own in-flight state and is still released by its own token.
+    l.complete("a", test_route, other_owner, t, 1, "500 Internal Server Error", "text/html", "poisoned");
+    l.release("a", test_route, test_owner, t);
+    try testing.expect(l.claim("a", test_route, test_owner, 1) == .fresh);
+}
+
+test "a recycled slot stamps the new owner, not the stale one" {
+    var l = Ledger.init(testing.allocator);
+    defer l.deinit();
+
+    const t = try claimKey(&l, "a", 0);
+    l.complete("a", test_route, test_owner, t, 0, "200 OK", "text/html", "body");
+    l.release("a", test_route, test_owner, t);
+
+    // The slot is free again; reusing the same id under a different principal
+    // takes the slot with the new owner stamped in, not the stale one.
+    const other = l.claim("a", test_route, other_owner, 1);
+    try testing.expect(other == .fresh);
+    l.complete("a", test_route, other_owner, other.fresh, 1, "200 OK", "text/html", "second body");
+    const c = l.claim("a", test_route, other_owner, 2);
+    try testing.expect(c == .replay);
+    defer c.replay.deinit(testing.allocator);
+    try testing.expectEqualStrings("second body", c.replay.body);
 }

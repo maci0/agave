@@ -209,6 +209,20 @@ test "refill after 1 second" {
     try std.testing.expect(limiter.tryConsumeRequest(10));
 }
 
+test "stale refill timestamps do not grant tokens twice" {
+    defer sim_clock.setOverrideMs(null);
+    sim_clock.setOverrideMs(1_000_000);
+    var limiter = RateLimiter.init(60, 600, testIo());
+    try std.testing.expect(limiter.tryConsumeRequest(10));
+
+    limiter.refillBuckets(999_000);
+    try std.testing.expectEqual(@as(i64, 1_000_000), limiter.request_bucket.last_refill);
+    try std.testing.expectEqual(@as(i64, 1_000_000), limiter.token_bucket.last_refill);
+    limiter.refillBuckets(1_000_000);
+    try std.testing.expectEqual(@as(f64, 59), limiter.request_bucket.tokens);
+    try std.testing.expectEqual(@as(f64, 590), limiter.token_bucket.tokens);
+}
+
 test "long idle clamps to capacity" {
     defer sim_clock.setOverrideMs(null);
     sim_clock.setOverrideMs(1_000_000);

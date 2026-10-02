@@ -11,6 +11,22 @@ must still appear under **Changed** or **Breaking** below. See
 
 ## [Unreleased]
 
+### Fixed
+- `POST /v1/chat` and `POST /v1/chat/regenerate` recorded their idempotency key
+  with `200 OK` even when generation failed, and answered that failure as a
+  200. A client retrying after a lost response on a transient forward, enqueue,
+  or grammar failure was replayed a success that never happened and could not
+  regenerate. Both non-streaming routes now answer `500` for a failed generation and record
+  that `500` under the key. The turn is already stored at that point, so the
+  claim is not released: releasing it would let the retry append or roll back a
+  second time.
+- A replayed idempotent response is now logged under the status it was recorded
+  with rather than always under `200`.
+- The idempotency ledger API now scopes claims to an owner tag as well as
+  their route. The server still passes one shared owner for every authorized
+  caller, so this does not isolate users or key holders; see T4 and T9 in
+  `docs/THREAT_MODEL.md`.
+
 ## [0.11.0] - 2026-10-02
 
 ### Added

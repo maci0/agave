@@ -5879,6 +5879,10 @@ comptime {
     _ = @import("parallel/peer_link.zig");
     _ = @import("models/tp.zig");
     _ = @import("kvcache/prefetch.zig");
+    // The replay ledger is only imported from the server dispatcher, which is
+    // itself runtime-imported, so its dedup and retention tests are
+    // undiscoverable without this reference.
+    _ = @import("server/idempotency.zig");
 }
 
 test "emitGeneratedTokens only rank 0 prints in a pair" {

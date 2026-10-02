@@ -266,6 +266,13 @@ A tokenizer failure while preparing the turn rolls the user message back and
 answers `500` (`type: server_error`), so the request never ends without a
 response.
 
+A non-streaming generation that fails after the turn was persisted (a forward error, an
+enqueue error, a grammar failure) answers `500` rather than `200`, and the key
+records that `500`. The turn is already stored, so the claim cannot be released:
+a retry would append the user turn a second time. Collapsing the retry onto the
+recorded `500` is what keeps it from doing either that or replaying a success
+the first attempt never produced.
+
 ### POST /v1/chat/regenerate
 
 Regenerate the last assistant response in the active conversation. Rolls back the last assistant message, resets the KV cache, and generates a new response. Supports streaming via `stream=1`.
@@ -275,6 +282,12 @@ curl -X POST http://localhost:49453/v1/chat/regenerate -d 'stream=1&max_tokens=2
 ```
 
 Uses form-encoded body. Accepts `max_tokens`, `temperature`, `top_k`, `top_p`, `stream`, and `system` fields. Always operates on the currently active conversation. Every call rolls back one assistant message, so it honors `X-Request-Id` as an idempotency key: see [Idempotency](#idempotency) below. A tokenizer failure puts the popped assistant message back and answers `500` (`type: server_error`).
+
+A non-streaming generation that fails after the assistant message was popped answers `500`
+rather than `200`, and the key records that `500`. The popped message is already
+replaced in the conversation, so the claim cannot be released: a retry would
+roll back a second reply. Collapsing the retry onto the recorded `500` is what
+keeps it from doing either that or replaying a false success.
 
 ### GET|POST /v1/conversations
 
@@ -758,13 +771,18 @@ idempotency key: one key per logical operation, reused across retries.
 | First request with a key | Runs normally, response recorded under the key |
 | Same key while the first is still running | `409`, `code` `duplicate_request` |
 | Same key within the replay window, non-streaming | Original response re-sent, `Idempotent-Replay: true` |
+| Same key, first non-streaming attempt stored a failed generation | Replayed with the recorded `500`, `Idempotent-Replay: true` (the turn is already stored, so the retry must not re-run or re-append) |
 | Same key within the replay window, `stream=1` | `409`, `code` `duplicate_request` (streamed bytes are not buffered) |
 | Same key after the replay window | Runs again as a new operation |
 | No `X-Request-Id` header | Runs normally, nothing is recorded |
 
 The ledger keeps the 64 most recent keys and holds a replayed response for one
 hour, so storage is bounded and an abandoned request cannot block its own
-retries. A key that collides with an unrelated operation is the caller's
+retries. The ledger API also scopes claims to an owner tag, but the server
+passes the same owner for every authorized caller. With no `--api-key` all
+callers share that scope; with one configured there is a single accepted
+credential. The tag adds no separation between server users or key holders.
+A key that collides with an unrelated operation is the caller's
 responsibility: generate one per logical request, not per attempt.
 
 A full ledger reclaims the oldest completed key, never one still running:

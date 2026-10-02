@@ -187,6 +187,11 @@ test "PerfCounters follows sim_clock override" {
     sim_clock.advanceMs(3);
     pc.end(.sdpa, t1);
     try std.testing.expectEqual(@as(u64, 3_000), pc.times_us[@intFromEnum(Op.sdpa)]);
+    const t2 = pc.start();
+    sim_clock.setOverrideMs(999_000);
+    pc.end(.sdpa, t2);
+    try std.testing.expectEqual(@as(u64, 2), pc.counts[@intFromEnum(Op.sdpa)]);
+    try std.testing.expectEqual(@as(u64, 3_000), pc.times_us[@intFromEnum(Op.sdpa)]);
 }
 
 test "PerfCounters Op enum has expected fields" {

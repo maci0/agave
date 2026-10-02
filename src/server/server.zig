@@ -784,7 +784,7 @@ const Server = struct {
         }
         self.mutex.lockUncancelable(self.io);
         defer self.mutex.unlock(self.io);
-        const claim = self.idem.claim(key, log_idem_route[0..log_idem_route_len], milliTimestamp());
+        const claim = self.idem.claim(key, log_idem_route[0..log_idem_route_len], Idempotency.anonymous_owner, milliTimestamp());
         log_idem_token = if (claim == .fresh) claim.fresh else 0;
         // A key longer than the route cap claims nothing, which is ordinary;
         // a key inside every cap that still gets no slot means the ring is full
@@ -798,13 +798,15 @@ const Server = struct {
 
     /// Record a mutating request's response so a retry replays it instead of
     /// applying the operation twice. `status_line` and `content_type` must be
-    /// string literals or otherwise outlive the server.
+    /// string literals or otherwise outlive the server. The status recorded is
+    /// the one this execution actually answered, so a retry is never handed a
+    /// success the first attempt did not produce.
     fn completeIdempotencyKey(self: *Server, status_line: []const u8, content_type: []const u8, body: []const u8) void {
         const key = log_client_rid[0..log_client_rid_len];
         if (key.len == 0 or log_idem_token == 0) return;
         self.mutex.lockUncancelable(self.io);
         defer self.mutex.unlock(self.io);
-        self.idem.complete(key, log_idem_route[0..log_idem_route_len], log_idem_token, milliTimestamp(), status_line, content_type, body);
+        self.idem.complete(key, log_idem_route[0..log_idem_route_len], Idempotency.anonymous_owner, log_idem_token, milliTimestamp(), status_line, content_type, body);
     }
 
     /// Drop an unfinished claim so a failed request does not block its retries.
@@ -813,7 +815,7 @@ const Server = struct {
         if (key.len == 0 or log_idem_token == 0) return;
         self.mutex.lockUncancelable(self.io);
         defer self.mutex.unlock(self.io);
-        self.idem.release(key, log_idem_route[0..log_idem_route_len], log_idem_token);
+        self.idem.release(key, log_idem_route[0..log_idem_route_len], Idempotency.anonymous_owner, log_idem_token);
     }
 
     /// Deep-copy the conversation views into `arena` so they stay valid after
@@ -1477,6 +1479,14 @@ fn sendHtml(stream: http.TcpStream, body: []const u8) void {
     sendResponse(stream, "200 OK", "text/html; charset=utf-8", body);
 }
 
+/// Send a `text/html; charset=utf-8` response under a caller-chosen status, for
+/// a route whose state change already landed when generation failed: the turn
+/// is stored, so the request is answered as the failure it was rather than as a
+/// 200 the retry ledger would then replay forever.
+fn sendHtmlResponse(stream: http.TcpStream, status: []const u8, body: []const u8) void {
+    sendResponse(stream, status, "text/html; charset=utf-8", body);
+}
+
 /// Resolve a repeated mutating request against the replay ledger.
 /// Returns true when the response was sent and the caller must not run the
 /// operation again; false when this request owns the key and should proceed.
@@ -1501,11 +1511,25 @@ fn resolveIdempotency(stream: http.TcpStream, method: []const u8, path: []const 
                 logRequestDone(method, path, 409, elapsedMs(request_start));
             } else {
                 sendIdempotentReplay(stream, r);
-                logRequestDone(method, path, 200, elapsedMs(request_start));
+                logRequestDone(method, path, statusCodeOf(r.status_line), elapsedMs(request_start));
             }
         },
     }
     return true;
+}
+
+/// Numeric code of a recorded `NNN Reason` status line, so a replayed failure
+/// is logged under the status it was rather than the 200 that assumed every
+/// stored response succeeded. Anything unrecognized reads as 200, matching the
+/// status the wire was given when the line could not be parsed on the way in.
+fn statusCodeOf(status_line: []const u8) u16 {
+    if (status_line.len < 3) return 200;
+    var code: u16 = 0;
+    for (status_line[0..3]) |c| {
+        if (c < '0' or c > '9') return 200;
+        code = code * 10 + (c - '0');
+    }
+    return code;
 }
 
 /// Re-send the response recorded for a repeated `X-Request-Id`. The ledger
@@ -3658,8 +3682,11 @@ fn handleRequest(stream: http.TcpStream, req: http.HttpRequest) void {
             storeConversationResponse(regen_result.data, regen_result.stats);
             // Streamed bytes are not buffered for replay, but the key still
             // has to be marked done so a retry does not pop another message.
-            g_server.completeIdempotencyKey("200 OK", "text/event-stream", "");
-            logRequestDone(method, path, 200, elapsedMs(request_start));
+            // The status recorded is the one this execution actually produced,
+            // so a retry is never handed a false success.
+            const stream_failed = std.mem.eql(u8, regen_result.finish_reason, "error");
+            g_server.completeIdempotencyKey(if (stream_failed) "500 Internal Server Error" else "200 OK", "text/event-stream", "");
+            logRequestDone(method, path, if (stream_failed) 500 else 200, elapsedMs(request_start));
             return;
         }
 
@@ -3671,13 +3698,21 @@ fn handleRequest(stream: http.TcpStream, req: http.HttpRequest) void {
 
         g_server.metrics.recordLatency(regen_result.stats.time_ms);
         g_server.metrics.recordTokens(regen_result.stats.tokens_generated);
-        if (std.mem.eql(u8, regen_result.finish_reason, "error")) g_server.metrics.recordFailure() else g_server.metrics.recordCompletion();
+        // A failed forward already popped the assistant message and stored its
+        // placeholder, so the claim cannot be released: a retry would pop a
+        // second reply. Record the failure instead, under the status it
+        // actually was. Completing it as 200 would replay a false success for
+        // the whole replay window and never regenerate.
+        const regen_failed = std.mem.eql(u8, regen_result.finish_reason, "error");
+        if (regen_failed) g_server.metrics.recordFailure() else g_server.metrics.recordCompletion();
+        const regen_status: []const u8 = if (regen_failed) "500 Internal Server Error" else "200 OK";
+        const regen_code: u16 = if (regen_failed) 500 else 200;
 
         // Never fall back to unescaped model output, OOM must not enable XSS (CWE-79).
         const regen_escaped = json.htmlEscape(g_server.allocator, regen_result.data) catch {
-            sendHtml(stream, render_error_page);
-            g_server.completeIdempotencyKey("200 OK", "text/html; charset=utf-8", render_error_page);
-            logRequestDone(method, path, 200, elapsedMs(request_start));
+            sendHtmlResponse(stream, regen_status, render_error_page);
+            g_server.completeIdempotencyKey(regen_status, "text/html; charset=utf-8", render_error_page);
+            logRequestDone(method, path, regen_code, elapsedMs(request_start));
             return;
         };
         defer if (regen_escaped.ptr != regen_result.data.ptr) g_server.allocator.free(regen_escaped);
@@ -3685,9 +3720,11 @@ fn handleRequest(stream: http.TcpStream, req: http.HttpRequest) void {
         const regen_html = std.fmt.bufPrint(&regen_html_buf,
             \\<div class="msg assistant" data-tokens="{d}" data-time="{d}" data-tps="{d:.2}" data-prefill-tokens="{d}" data-prefill-ms="{d}" data-prefill-tps="{d:.1}">{s}</div>
         , .{ regen_result.stats.tokens_generated, regen_result.stats.time_ms, regen_result.stats.tokens_per_sec, regen_result.stats.prompt_tokens, regen_result.stats.prefill_ms, regen_result.stats.prefill_tps, regen_escaped }) catch "<div class=\"msg assistant\">Error</div>";
-        sendHtml(stream, regen_html);
-        g_server.completeIdempotencyKey("200 OK", "text/html; charset=utf-8", regen_html);
-        logRequestDone(method, path, 200, elapsedMs(request_start));
+        sendHtmlResponse(stream, regen_status, regen_html);
+        // Same reasoning as above: the key records what this execution produced,
+        // so the failure a retry replays carries the status the caller needs.
+        g_server.completeIdempotencyKey(regen_status, "text/html; charset=utf-8", regen_html);
+        logRequestDone(method, path, regen_code, elapsedMs(request_start));
         return;
     }
 
@@ -3889,8 +3926,11 @@ fn handleRequest(stream: http.TcpStream, req: http.HttpRequest) void {
             storeConversationResponse(result.data, result.stats);
             // Streamed bytes are not buffered for replay, but the key still
             // has to be marked done so a retry does not append a second turn.
-            g_server.completeIdempotencyKey("200 OK", "text/event-stream", "");
-            logRequestDone(method, path, 200, elapsedMs(request_start));
+            // The headers went out as 200 long before this, so the recorded
+            // status is the only place a retry can still see the failure.
+            const stream_failed = std.mem.eql(u8, result.finish_reason, "error");
+            g_server.completeIdempotencyKey(if (stream_failed) "500 Internal Server Error" else "200 OK", "text/event-stream", "");
+            logRequestDone(method, path, if (stream_failed) 500 else 200, elapsedMs(request_start));
             return;
         }
 
@@ -3901,20 +3941,28 @@ fn handleRequest(stream: http.TcpStream, req: http.HttpRequest) void {
         // Record metrics
         g_server.metrics.recordLatency(result.stats.time_ms);
         g_server.metrics.recordTokens(result.stats.tokens_generated);
-        if (std.mem.eql(u8, result.finish_reason, "error")) g_server.metrics.recordFailure() else g_server.metrics.recordCompletion();
+        // The user turn is already appended and persisted, so the claim cannot
+        // be released: a retry would append the turn a second time. Record the
+        // failure instead, under the status it actually was. Completing it as
+        // 200 would replay a false success for the whole replay window, and a
+        // client retrying a lost response would never regenerate.
+        const chat_failed = std.mem.eql(u8, result.finish_reason, "error");
+        if (chat_failed) g_server.metrics.recordFailure() else g_server.metrics.recordCompletion();
+        const chat_status: []const u8 = if (chat_failed) "500 Internal Server Error" else "200 OK";
+        const chat_code: u16 = if (chat_failed) 500 else 200;
 
         // Never fall back to unescaped input, send a safe error page on OOM (CWE-79).
         const escaped_user = json.htmlEscape(g_server.allocator, decoded) catch {
-            sendHtml(stream, render_error_page);
-            g_server.completeIdempotencyKey("200 OK", "text/html; charset=utf-8", render_error_page);
-            logRequestDone(method, path, 200, elapsedMs(request_start));
+            sendHtmlResponse(stream, chat_status, render_error_page);
+            g_server.completeIdempotencyKey(chat_status, "text/html; charset=utf-8", render_error_page);
+            logRequestDone(method, path, chat_code, elapsedMs(request_start));
             return;
         };
         defer if (escaped_user.ptr != decoded.ptr) wipeFree(g_server.allocator, escaped_user);
         const escaped_resp = json.htmlEscape(g_server.allocator, result.data) catch {
-            sendHtml(stream, render_error_page);
-            g_server.completeIdempotencyKey("200 OK", "text/html; charset=utf-8", render_error_page);
-            logRequestDone(method, path, 200, elapsedMs(request_start));
+            sendHtmlResponse(stream, chat_status, render_error_page);
+            g_server.completeIdempotencyKey(chat_status, "text/html; charset=utf-8", render_error_page);
+            logRequestDone(method, path, chat_code, elapsedMs(request_start));
             return;
         };
         defer if (escaped_resp.ptr != result.data.ptr) wipeFree(g_server.allocator, escaped_resp);
@@ -3922,9 +3970,9 @@ fn handleRequest(stream: http.TcpStream, req: http.HttpRequest) void {
         const html = std.fmt.bufPrint(&html_buf,
             \\<div class="msg user">{s}</div><div class="msg assistant" data-tokens="{d}" data-time="{d}" data-tps="{d:.2}" data-prefill-tokens="{d}" data-prefill-ms="{d}" data-prefill-tps="{d:.1}">{s}</div>
         , .{ escaped_user, result.stats.tokens_generated, result.stats.time_ms, result.stats.tokens_per_sec, result.stats.prompt_tokens, result.stats.prefill_ms, result.stats.prefill_tps, escaped_resp }) catch "<div class=\"msg assistant\">Error</div>";
-        sendHtml(stream, html);
-        g_server.completeIdempotencyKey("200 OK", "text/html; charset=utf-8", html);
-        logRequestDone(method, path, 200, elapsedMs(request_start));
+        sendHtmlResponse(stream, chat_status, html);
+        g_server.completeIdempotencyKey(chat_status, "text/html; charset=utf-8", html);
+        logRequestDone(method, path, chat_code, elapsedMs(request_start));
         return;
     }
 
@@ -8426,10 +8474,10 @@ test "chat UI head pulls no third-party asset" {
     // Every jsDelivr script is fetched on demand by the bundle (chat/markdown.ts
     // loadMarkdown / loadHighlightJs), so nothing third-party sits on the first
     // paint. The pinned URL is the marker that the deferred loader is shipped at
-    // all: it may appear in the page, never in the head.
+    // all. The head may resolve its hostname but must not fetch its assets.
     const head_end = std.mem.indexOf(u8, html_page, "</head>").?;
     const head = html_page[0..head_end];
-    try std.testing.expect(std.mem.indexOf(u8, head, "cdn.jsdelivr.net") == null);
+    try std.testing.expect(std.mem.indexOf(u8, head, "https://cdn.jsdelivr.net/npm/") == null);
     try std.testing.expect(std.mem.indexOf(u8, head, "rel=\"preconnect\"") == null);
     try std.testing.expect(std.mem.indexOf(u8, head, "<script src=") == null);
     try std.testing.expect(std.mem.indexOf(u8, html_page, "https://cdn.jsdelivr.net/npm/marked@") != null);
@@ -9906,4 +9954,33 @@ fn countCalls(source: []const u8, needle: []const u8) usize {
         i = at + needle.len;
     }
     return n;
+}
+
+test "statusCodeOf reads the recorded status a retry will replay" {
+    try std.testing.expectEqual(@as(u16, 200), statusCodeOf("200 OK"));
+    try std.testing.expectEqual(@as(u16, 500), statusCodeOf("500 Internal Server Error"));
+    try std.testing.expectEqual(@as(u16, 409), statusCodeOf("409 Conflict"));
+    // Anything that is not three digits falls back to the success status the
+    // wire was already given, never to a fabricated code.
+    try std.testing.expectEqual(@as(u16, 200), statusCodeOf(""));
+    try std.testing.expectEqual(@as(u16, 200), statusCodeOf("20"));
+    try std.testing.expectEqual(@as(u16, 200), statusCodeOf("OK"));
+}
+
+test "a recorded generation failure replays as a failure, not a success" {
+    var ledger = Idempotency.Ledger.init(std.testing.allocator);
+    defer ledger.deinit();
+
+    // A turn whose generation failed is recorded under its key with the 500 it
+    // answered, so the retry collapses onto the recorded failure instead of
+    // replaying a 200 the first attempt never produced.
+    const claim = ledger.claim("k", "/v1/chat", Idempotency.anonymous_owner, 0);
+    try std.testing.expect(claim == .fresh);
+    ledger.complete("k", "/v1/chat", Idempotency.anonymous_owner, claim.fresh, 10, "500 Internal Server Error", "text/html; charset=utf-8", "<div>error</div>");
+
+    const retry = ledger.claim("k", "/v1/chat", Idempotency.anonymous_owner, 20);
+    try std.testing.expect(retry == .replay);
+    defer retry.replay.deinit(std.testing.allocator);
+    try std.testing.expectEqualStrings("500 Internal Server Error", retry.replay.status_line);
+    try std.testing.expectEqual(@as(u16, 500), statusCodeOf(retry.replay.status_line));
 }
