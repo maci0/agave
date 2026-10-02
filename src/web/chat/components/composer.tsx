@@ -272,7 +272,7 @@ export const Composer = (props: ComposerProps) => {
         props.onImageFile(dropped, 'Image dropped');
       }}
       className={cn(
-        'relative z-10 border-t border-divider bg-card px-6 pt-4 pb-5 transition-colors max-drawer:p-4',
+        'relative z-10 border-t border-divider bg-card px-gutter pt-4 pb-5 transition-colors max-drawer:p-4',
         form.dragOver && 'border-primary bg-primary/10',
       )}
     >

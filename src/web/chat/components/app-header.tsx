@@ -81,7 +81,7 @@ const HeaderActions = (props: AppHeaderProps) => (
 export const AppHeader = (props: AppHeaderProps) => {
   const { model, modelResolved } = props;
   return (
-    <header className="z-10 flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-divider bg-card px-6 py-3 max-drawer:px-4">
+    <header className="z-10 flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-divider bg-card px-gutter py-3 max-drawer:px-4">
       <div className="flex items-center gap-2.5">
         <Button
           type="button"
@@ -96,7 +96,11 @@ export const AppHeader = (props: AppHeaderProps) => {
         >
           <MenuIcon className="size-5" aria-hidden="true" />
         </Button>
-        <h1 className="inline-flex items-center gap-2 font-mono text-lg font-semibold tracking-tight text-primary">
+        {/* No `tracking-tight`: the lockup's wordmark is outlined Adwaita Mono
+            Bold, and the tracking is baked into those outlines, so squeezing
+            the live text under a mono face does not match the mark beside it.
+            The mono stack at this step is the whole identity. */}
+        <h1 className="inline-flex items-center gap-2 font-mono text-lg font-semibold text-primary">
           <Mark />
           agave
         </h1>

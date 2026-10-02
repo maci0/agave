@@ -10,7 +10,7 @@
  * Run: bun test src/web (also wired into scripts/lint-web.sh).
  */
 
-import { beforeEach, expect, test } from 'bun:test';
+import { afterAll, beforeEach, expect, test } from 'bun:test';
 import { GlobalRegistrator } from '@happy-dom/global-registrator';
 
 import {
@@ -32,6 +32,14 @@ beforeEach(() => {
   localStorage.clear();
   sessionStorage.clear();
 });
+
+/* `bun test src/web` loads every file into one process, so a registration that
+   is never released makes the next file's own `register()` throw. The other
+   three DOM suites unregister in `afterAll`; without this one, storage.test.ts
+   loaded before turn.test.tsx (alphabetical) and the whole gate failed on
+   "Happy DOM has already been globally registered" before running a single
+   turn test. */
+afterAll(async () => { await GlobalRegistrator.unregister(); });
 
 test('a token budget typed in any digit script is accepted, not clamped to the minimum', () => {
   for (const raw of SAME_NUMBER) {
