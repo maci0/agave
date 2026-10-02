@@ -395,7 +395,9 @@ export fn megakernel_gemma_q4k_kernel(
         gridSyncReset(&sync_ctrs[sync_idx % n_sync_slots]);
         sync_idx += 1;
 
-        // ── 4. SDPA placeholder (Phase 2) ────────────────────────
+        // ── 4. SDPA: not implemented, output projection reads q_buf, so this
+        //    kernel is a scaffold rather than a correct Gemma forward pass.
+        //    Nothing dispatches it; see docs/MEGAKERNEL.md "Known limitations".
 
         // ── 5. Output projection ─────────────────────────────────
         const out_off = readLayerOffset(layer_offsets, li, off_attn_output);

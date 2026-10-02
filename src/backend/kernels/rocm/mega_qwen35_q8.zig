@@ -363,7 +363,7 @@ export fn megakernel_qwen35_q8_kernel(
     seq_pos: u32,
     n_blocks: u32,
 ) callconv(.kernel) void {
-    // Suppress unused parameter warnings for KV cache (Phase 2)
+    // KV cache is never written (attention is not implemented); silence the unused params.
     _ = kv_keys;
     _ = kv_values;
     _ = max_seq_len;
@@ -448,8 +448,11 @@ export fn megakernel_qwen35_q8_kernel(
             gridSyncReset(&sync_ctrs[sync_idx % n_sync_slots]);
             sync_idx += 1;
 
-            // NOTE: SDPA (attention scores + softmax + V accumulation) is Phase 2.
-            // For now, output projection uses q_buf as placeholder input.
+            // SCAFFOLD, NOT AN IMPLEMENTATION: SDPA (scores + softmax + V
+            // accumulation) is missing, so the output projection below reads q_buf
+            // and the KV cache above is never written. The result is not a correct
+            // Qwen 3.5 forward pass. Nothing dispatches this kernel; see
+            // docs/MEGAKERNEL.md "Known limitations".
 
             // Output projection
             const out_off = readLayerOffset(layer_offsets, li, off_attn_output);
@@ -458,8 +461,8 @@ export fn megakernel_qwen35_q8_kernel(
             gridSyncReset(&sync_ctrs[sync_idx % n_sync_slots]);
             sync_idx += 1;
         } else {
-            // DeltaNet SSM layer, too complex for GPU megakernel (Phase 2).
-            // Sequential recurrence has data dependencies that don't parallelize.
+            // DeltaNet SSM layer is not implemented: the sequential recurrence has
+            // data dependencies that do not parallelize across workgroups.
         }
 
         // ── 3. Post-attention norm (FFN pre-norm) ────────────────

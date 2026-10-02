@@ -44,7 +44,7 @@ examples below are the output of `agave --help`.
        --top-k <K>           Top-k sampling, 0 = disabled [default: 0]
        --repeat-penalty <R>  Repetition penalty [default: 1.0]
        --min-p <P>           Min-p sampling: keep tokens with prob >= P * max_prob [default: 0]
-       --dry-multiplier <M>  DRY n-gram repetition penalty [default: 0 = disabled]
+       --dry-multiplier <M>  DRY n-gram repetition penalty multiplier [default: 0 = disabled]
        --dry-length <N>      DRY minimum n-gram length [default: 2]
        --xtc-probability <P> XTC exclude-top-choices probability [default: 0]
        --xtc-threshold <T>   XTC probability threshold [default: 0.1]
@@ -83,7 +83,7 @@ examples below are the output of `agave --help`.
        --kv-ram-budget <GB>  RAM tier budget, integer GB (requires --kv-tiers) [default: 50% of free RAM]
        --kv-ssd-path <PATH>  SSD tier file path (requires --kv-tiers with ssd)
        --kv-ssd-budget <GB>  SSD tier budget, integer GB (requires --kv-tiers with ssd) [default: 10]
-       --kv-eviction <POL>   KV eviction policy: none, norm, tri [default: none]
+       --kv-eviction <POL>   KV eviction policy: none, norm, tri [default: none] (Gemma 4 only)
        --kv-budget <N>       Max KV positions to keep during eviction [default: 80% of ctx-size]
        --no-kv-cache         Disable KV cache (prefill-only / embedding; no decode)
  
@@ -97,6 +97,8 @@ examples below are the output of `agave --help`.
                           When both are set, AGAVE_API_KEY wins
        --sleep-after <N>  Enter sleep mode after N seconds idle (0 = disabled)
        --max-batch-size <N>  Max concurrent batched requests [default: 8]
+                            (admission is one-at-a-time until per-request
+                            paged KV is wired)
        --rate-limit-rpm <N>  Max requests/min (0 = unlimited; enables rate limiting)
        --rate-limit-tpm <N>  Max prompt tokens/min (0 = unlimited; enables rate limiting)
        --conv-store <PATH> Persist web-UI conversations to JSON [default: $XDG_CACHE_HOME/agave/conversations.json]
@@ -117,7 +119,8 @@ examples below are the output of `agave --help`.
    -K, --spec-tokens <N>     Draft tokens per speculation round [default: 5]
        --tree-budget <N>     DDTree node budget [default: 64]
        --draft-layers <N>    Layers for self-speculative draft [default: auto]
-       --spec-token-map <F>  FR-Spec token frequency map for vocab truncation
+       --spec-token-map <F>  FR-Spec token frequency map (one token ID per line);
+                            restricts drafting to those tokens
        --pflash-alpha <F>    PFlash block selection threshold (0.0-2.0) [default: 0.85]
        --pflash-block-size <N>  PFlash scoring block size in tokens [default: 64]
        --pflash-scorer <PATH>  Separate model for PFlash block scoring (defaults to --draft-model)

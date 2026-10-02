@@ -35,10 +35,12 @@ agave/
 │   ├── cli.zig            # Self-contained CLI argument parser (zero deps)
 │   ├── arch.zig           # Architecture enum, detection, chat template mapping
 │   ├── pull.zig           # Model download from HuggingFace Hub (agave pull <org/repo>)
+│   ├── update.zig         # Release check + SHA-256-verified binary replacement (agave update)
 │   ├── durable_file.zig   # Atomic tmp+fsync+rename for operator-facing artifacts
 │   ├── server/
 │   │   ├── server.zig     # HTTP server (OpenAI + Anthropic API + chat UI)
 │   │   ├── conv_store.zig # Web-UI conversation JSON persist/restore
+│   │   ├── http.zig      # HTTP/1.1 wire format: socket, request parsing, Host/Origin checks
 │   │   ├── scheduler.zig  # Continuous batching request scheduler
 │   │   ├── tools.zig      # Process-level tool registry (register / dispose)
 │   │   ├── metrics.zig    # Prometheus metrics collector
@@ -151,6 +153,7 @@ agave/
 │   ├── web/
 │   │   ├── app.tsx        # Chat UI entry (Preact; SSE streaming, conversation management)
 │   │   ├── app.test.tsx   # Chat UI tests (bun test)
+│   │   ├── shell.test.tsx # WASM shell tests (bun test)
 │   │   ├── chat/          # Chat UI state (hooks) and components
 │   │   ├── ui/            # shadcn primitives, the shared Tailwind 4 theme, the icon set (icons.tsx) and the motifs both chat surfaces draw (empty state, hint chips); see docs/brand/README.md
 │   │   ├── globals.d.ts   # Ambient declarations for the embedded script/style assets
@@ -580,7 +583,7 @@ Split-attention SDPA is only fully implemented for Gemma 3; other architectures 
 
 ### KV Cache Eviction
 
-When context grows beyond `--kv-budget`, eviction compresses the cache in-place to stay within budget. Two policies are available:
+Implemented for Gemma 4 only (`gemma4.zig` holds the `kv_eviction_budget` field; other architectures have no such field, so `ModelStorage.initFromArch` drops the budget and the flags are inert there). When context grows beyond `--kv-budget`, eviction compresses the cache in-place to stay within budget. Two policies are available:
 
 | Policy | Flag | Calibration | Description |
 |--------|------|:-----------:|-------------|
@@ -592,7 +595,7 @@ When context grows beyond `--kv-budget`, eviction compresses the cache in-place 
 - **Recent window**: the most recent positions are always retained regardless of score.
 - **Periodic compression**: eviction runs every 128 tokens once the cache exceeds `--kv-budget`.
 
-**Calibration (`agave calibrate`):** The `tri` policy requires per-head Q/K frequency statistics stored in a `.cal` file alongside the model. Run `agave calibrate model.gguf` to generate this data. The calibration pass processes a representative prompt and records the dominant frequency components per attention head.
+**Calibration (`agave calibrate`):** The `tri` policy requires per-head Q/K frequency statistics stored in a `.cal` file alongside the model. Run `agave calibrate model.gguf` to generate this data. The pass projects pseudo-random vectors (fixed seed, `--tokens N` vectors per layer) through each layer's Q weights and records per-head center norm, center phase, expected norm, and concentration. No prompt is tokenized.
 
 **Stacking with TurboQuant:** Eviction reduces the *number* of KV entries while TurboQuant reduces the *bits per entry*. Combined, they can achieve ~40x KV memory reduction vs f16 baseline.
 

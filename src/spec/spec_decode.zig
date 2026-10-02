@@ -467,10 +467,10 @@ fn saveDraftStep(state: *SpecState, draft_model: Model, n: u32) u32 {
     return tok;
 }
 
-/// Generate K draft tokens, saving logit distributions at each step.
-/// FR-Spec mask (correct implementation): restrict logits to token_mask.
-/// MUST be called right after @memcpy(dst, model_logits) while dst has original values.
-/// Sets all positions where token_mask[i]=false to -inf. O(vocab_size) per call.
+/// Restrict logits to the FR-Spec token set: positions where
+/// `token_mask[i] == false` (and every position past `token_mask.len`) become
+/// `-inf`, so the following argmax cannot pick a low-frequency token.
+/// `O(vocab_size)` per call, applied to the draft step's saved logits.
 fn applyFrSpecMask(dst: []f32, token_mask: []const bool) void {
     const n = @min(dst.len, token_mask.len);
     for (dst[0..n], token_mask[0..n]) |*v, in_map| {

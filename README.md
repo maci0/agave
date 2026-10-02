@@ -111,7 +111,7 @@ zig build
 # TurboQuant KV cache (2/3/4-bit quantization for longer contexts)
 ./zig-out/bin/agave model.gguf --kv-type turbo4
 
-# KV cache eviction (extend context past --ctx-size limit)
+# KV cache eviction (Gemma 4 only: extend context past --ctx-size)
 ./zig-out/bin/agave model.gguf --kv-eviction norm --kv-budget 2048
 ./zig-out/bin/agave model.gguf --kv-eviction tri   # requires .cal file
 
@@ -235,7 +235,7 @@ Generate TriAttention calibration data for frequency-domain KV eviction:
 ./zig-out/bin/agave calibrate model.gguf
 ```
 
-The calibration pass records per-head Q/K frequency statistics used by the `--kv-eviction tri` policy. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for details.
+The calibration pass projects pseudo-random vectors through each layer's Q weights and records per-head frequency statistics (center norm, center phase, expected norm, concentration) used by the `--kv-eviction tri` policy; it tokenizes no prompt. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for details.
 
 ## Updating
 
@@ -337,7 +337,7 @@ light or dark setting.
 | `/ready` | GET | Readiness check |
 | `/metrics` | GET | Prometheus metrics |
 
-Server features: up to 64 concurrent connections, request scheduler (batch up to 8, 120s timeout), 30s connection read timeout, Bearer token auth, CORS support.
+Server features: up to 64 concurrent connections, request scheduler (120s timeout), 30s connection read timeout, Bearer token auth, CORS support. The scheduler admits one request at a time while the model layer exposes a single shared KV sequence; `--max-batch-size` takes effect once per-request paged KV lands.
 
 ## Interactive REPL
 
@@ -435,7 +435,7 @@ agave [OPTIONS] <model> [prompt]
       --top-k <K>          Top-k sampling, 0 = disabled [default: 0]
       --min-p <P>          Min-p sampling threshold [default: 0]
       --repeat-penalty <R> Repetition penalty [default: 1.0]
-      --dry-multiplier <M> DRY n-gram repetition penalty [default: 0]
+      --dry-multiplier <M> DRY n-gram repetition penalty multiplier [default: 0]
       --dry-length <N>     DRY minimum n-gram length [default: 2]
       --xtc-probability <P> XTC diversity sampling [default: 0]
       --xtc-threshold <T>  XTC probability threshold [default: 0.1]
@@ -451,7 +451,8 @@ agave [OPTIONS] <model> [prompt]
                            virtual time); pair with --seed [default: real clock]
       --grammar <FILE>     GBNF grammar file for constrained decoding
       --grammar-string <G> Inline GBNF grammar string
-      --json-schema <S>    JSON schema for structured output
+      --json-schema <S>    Inline JSON schema string (not a file) for constrained
+                           decoding (converts to a GBNF grammar)
       --json-output        Constrain generation to valid JSON via grammar (not output format; see --json)
       --kv-type <TYPE>     KV cache quantization: f32, f16, q8_0/q8, int8/i8, fp8/fp8_e4m3, nvfp4/fp4, nvfp4_ds_mla, turbo2/tq2, turbo3/tq3, turbo4/tq4, planar2/pq2 through planar4/pq4, iso2/iq2 through iso4/iq4, rotor2/rq2 through rotor4/rq4, turbo (preset: K=q8_0, V=turbo4) [default: f16]
       --kv-tiers <TIERS>   Enable tiered KV cache: vram+ram, vram+ram+ssd, unified-memory backends only [default: off]
@@ -478,9 +479,9 @@ agave [OPTIONS] <model> [prompt]
       --frontier-ctx <LIST> Comma-separated context lengths [default: 512,2048,8192]
       --mmproj <PATH>      Path to vision projector GGUF (mmproj file)
       --image <PATH>       Path to image file for multimodal inference (PNG or PPM)
-      --kv-eviction <MODE> KV cache eviction policy: none, norm, tri [default: none]
+      --kv-eviction <MODE> KV cache eviction policy: none, norm, tri [default: none] (Gemma 4 only)
       --kv-budget <N>      Max KV entries to retain after eviction [default: 80% of ctx-size]
-      --mmap               Use lazy mmap instead of preloading weights into RAM
+      --mmap               Skip the eager page-in warmup (weights stay mmap'd either way)
       --megakernel         Enable fused FFN megakernels (3→1 dispatch per layer)
       --power <N>          Target GPU utilisation percent 1-100 [default: 100]
       --draft-model <PATH> Draft model GGUF for speculative decoding
@@ -490,7 +491,8 @@ agave [OPTIONS] <model> [prompt]
   -K, --spec-tokens <N>    Draft tokens per speculation round [default: 5]
       --tree-budget <N>    DDTree node budget [default: 64]
       --draft-layers <N>   Layers for self-speculative draft [default: auto]
-      --spec-token-map <F> FR-Spec token frequency map for vocab truncation
+      --spec-token-map <F> FR-Spec token frequency map (one token ID per line);
+                           restricts drafting to those tokens
       --pflash-alpha <F>   PFlash block selection threshold [default: 0.85]
       --pflash-block-size <N>  PFlash scoring block size [default: 64]
       --pflash-scorer <P>  Separate model for PFlash scoring

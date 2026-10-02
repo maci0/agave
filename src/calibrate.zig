@@ -1,11 +1,12 @@
 //! TriAttention calibration, generates per-head, per-frequency-band Q statistics
 //! for the trigonometric KV eviction policy.
 //!
-//! Usage: agave calibrate <model.gguf> [--tokens N] [--output path.cal]
+//! Usage: agave calibrate [--tokens N] [--output path.cal] <model.gguf|model-dir/>
 //!
-//! Loads a model's Q weight matrices, projects N random vectors through each
-//! layer's Q projection, and computes per-head statistics: center norm, center
-//! phase, expected norm, and concentration.
+//! Loads a model's Q weight matrices, projects N pseudo-random vectors (fixed
+//! `calibration_seed`, no prompt is tokenized) through each layer's Q
+//! projection, and computes per-head statistics: center norm, center phase,
+//! expected norm, and concentration.
 //! Saves results to a binary .cal file consumed by TriAttention scoring.
 
 const std = @import("std");

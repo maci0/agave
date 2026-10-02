@@ -5,7 +5,7 @@
 
 Fused GPU kernels that eliminate per-layer dispatch overhead. Three-tier system:
 1. **Fused FFN** (active): 3→1 dispatch per FFN layer. Up to +93% short decode.
-2. **True Megakernel** (hand-written): single dispatch for ALL layers. 5 Metal + 3 CUDA + 1 ROCm. Dispatch functions exist; not wired through `--megakernel`.
+2. **True Megakernel** (hand-written): single dispatch for ALL layers. 5 Metal + 3 CUDA + 1 ROCm. Only the 5 Metal ones implement attention; the CUDA and ROCm ones are scaffolds. Dispatch functions exist; not wired through `--megakernel`.
 3. **Composed Megakernel** (auto-generated): `mega_compose.zig` generates MSL from model metadata at runtime. Not selected by `--megakernel`.
 
 Enable fused FFN with `--megakernel`.
@@ -114,6 +114,10 @@ Known limitations of hand-written megakernels:
 - Qwen 3.5: Q+gate deinterleave, per-head QK norms, sigmoid gate not yet in megakernel
 - Gemma 3/4: Sliding-window vs global attention layers have different head dims
 - Paged KV cache incompatible with flat KV arrays in megakernel (needs flat allocation mode)
+- CUDA/ROCm `mega_qwen35_q8.zig` and `mega_gemma_{q8,q4k}.zig`: attention is a
+  scaffold, not an implementation. The kernels feed `q_buf` straight into the output
+  projection and never touch the KV cache, so they are not correct forward passes and
+  must not be dispatched.
 - DeltaNet SSM: sequential recurrence dependencies don't parallelize across TGs
 
 ## Tier 3: Composed Megakernels (Auto-Generated)
@@ -247,8 +251,8 @@ Helper constructors simplify common patterns:
 | Backend | Pipelines/Kernels | Megakernel Files | Composed |
 |---------|:-----------------:|:----------------:|:--------:|
 | Metal | 104 | 7 (5 true + megakernel.metal + mega_common.metal) | Yes (runtime MSL) |
-| CUDA | 61 | 7 (3 true + 4 fused FFN) | No |
-| ROCm | 49 | 1 (true Qwen Q8_0) | No |
+| CUDA | 61 | 7 (3 scaffolds + 4 fused FFN) | No |
+| ROCm | 49 | 1 (Qwen 3.5 Q8_0 scaffold) | No |
 
 The composed megakernel (`mega_compose.zig`) generates an additional Metal pipeline at runtime via `compileComposedMegakernel()`. This pipeline is not counted in the static file totals above.
 
@@ -256,7 +260,7 @@ The composed megakernel (`mega_compose.zig`) generates an additional Metal pipel
 
 | File | Lines | Purpose |
 |------|-------|---------|
-| `src/backend/mega_compose.zig` | ~1,049 | Composable megakernel generator (ModelDesc, composeMSL) |
+| `src/backend/mega_compose.zig` | ~1,054 | Composable megakernel generator (ModelDesc, composeMSL) |
 | `src/backend/megakernel.zig` | n/a | Weight offset computation for fused FFN megakernels |
 | `src/backend/kernels/metal/mega_common.metal` | 752 | 18 composable building blocks |
 | `src/backend/kernels/metal/megakernel.metal` | n/a | 13 fused FFN kernels (Tier 1) |

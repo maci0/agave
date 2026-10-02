@@ -527,15 +527,15 @@ const cli_specs = [_]cli_mod.ArgSpec{
     .{ .long = "kv-ram-budget", .kind = .option, .help = "RAM tier budget, integer GB, requires --kv-tiers [default: 50% of free RAM]." },
     .{ .long = "kv-ssd-path", .kind = .option, .help = "SSD tier file path, requires --kv-tiers with ssd." },
     .{ .long = "kv-ssd-budget", .kind = .option, .help = "SSD tier budget, integer GB, requires --kv-tiers with ssd [default: 10]." },
-    .{ .long = "kv-eviction", .kind = .option, .help = "KV eviction policy: none, norm, tri [default: none]." },
-    .{ .long = "kv-budget", .kind = .option, .help = "Max KV positions to keep during eviction [default: 80% of ctx-size]." },
+    .{ .long = "kv-eviction", .kind = .option, .help = "KV eviction policy: none, norm, tri [default: none]. Only Gemma 4 implements eviction; other architectures ignore it." },
+    .{ .long = "kv-budget", .kind = .option, .help = "Max KV positions to keep during eviction [default: 80% of ctx-size]. Requires --kv-eviction on a Gemma 4 model." },
     // Server
     .{ .long = "serve", .short = 's', .help = "Start HTTP server (OpenAI + Anthropic API)." },
     .{ .long = "port", .short = 'p', .kind = .option, .help = "Server port [default: 49453]. Falls back to AGAVE_PORT." },
     .{ .long = "host", .kind = .option, .help = "Server bind address: IPv4, localhost, 0.0.0.0, or 0 [default: 127.0.0.1]. Falls back to AGAVE_HOST." },
     .{ .long = "api-key", .kind = .option, .help = "API key for server auth. Prefer AGAVE_API_KEY (avoids process-list exposure; env wins if both set)." },
     .{ .long = "sleep-after", .kind = .option, .help = "Enter sleep mode after N seconds of server inactivity (0 = disabled). Signals /health sleeping:true; wakes on next request." },
-    .{ .long = "max-batch-size", .kind = .option, .help = "Max concurrent requests to batch per scheduler cycle [default: 8]. Higher values increase throughput at the cost of latency per request." },
+    .{ .long = "max-batch-size", .kind = .option, .help = "Max concurrent requests to batch per scheduler cycle [default: 8]. Admission currently runs one request at a time (single shared KV sequence), so values above 1 change nothing until per-request paged KV lands." },
     .{ .long = "rate-limit-rpm", .kind = .option, .help = "Server max requests per minute (0 = unlimited). Enables token-bucket rate limiting when set with or without --rate-limit-tpm." },
     .{ .long = "rate-limit-tpm", .kind = .option, .help = "Server max prompt tokens per minute (0 = unlimited). Enables token-bucket rate limiting when set with or without --rate-limit-rpm." },
     .{ .long = "conv-store", .kind = .option, .help = "Path to persist web-UI conversations as JSON [default: $XDG_CACHE_HOME/agave/conversations.json, else ~/.cache/agave/conversations.json]." },
@@ -2171,7 +2171,7 @@ const usage_text =
     \\      --top-k <K>           Top-k sampling, 0 = disabled [default: 0]
     \\      --repeat-penalty <R>  Repetition penalty [default: 1.0]
     \\      --min-p <P>           Min-p sampling: keep tokens with prob >= P * max_prob [default: 0]
-    \\      --dry-multiplier <M>  DRY n-gram repetition penalty [default: 0 = disabled]
+    \\      --dry-multiplier <M>  DRY n-gram repetition penalty multiplier [default: 0 = disabled]
     \\      --dry-length <N>      DRY minimum n-gram length [default: 2]
     \\      --xtc-probability <P> XTC exclude-top-choices probability [default: 0]
     \\      --xtc-threshold <T>   XTC probability threshold [default: 0.1]
@@ -2210,7 +2210,7 @@ const usage_text =
     \\      --kv-ram-budget <GB>  RAM tier budget, integer GB (requires --kv-tiers) [default: 50% of free RAM]
     \\      --kv-ssd-path <PATH>  SSD tier file path (requires --kv-tiers with ssd)
     \\      --kv-ssd-budget <GB>  SSD tier budget, integer GB (requires --kv-tiers with ssd) [default: 10]
-    \\      --kv-eviction <POL>   KV eviction policy: none, norm, tri [default: none]
+    \\      --kv-eviction <POL>   KV eviction policy: none, norm, tri [default: none] (Gemma 4 only)
     \\      --kv-budget <N>       Max KV positions to keep during eviction [default: 80% of ctx-size]
     \\      --no-kv-cache         Disable KV cache (prefill-only / embedding; no decode)
     \\
@@ -2224,6 +2224,8 @@ const usage_text =
     \\                         When both are set, AGAVE_API_KEY wins
     \\      --sleep-after <N>  Enter sleep mode after N seconds idle (0 = disabled)
     \\      --max-batch-size <N>  Max concurrent batched requests [default: 8]
+    \\                           (admission is one-at-a-time until per-request
+    \\                           paged KV is wired)
     \\      --rate-limit-rpm <N>  Max requests/min (0 = unlimited; enables rate limiting)
     \\      --rate-limit-tpm <N>  Max prompt tokens/min (0 = unlimited; enables rate limiting)
     \\      --conv-store <PATH> Persist web-UI conversations to JSON [default: $XDG_CACHE_HOME/agave/conversations.json]
@@ -2244,7 +2246,8 @@ const usage_text =
     \\  -K, --spec-tokens <N>     Draft tokens per speculation round [default: 5]
     \\      --tree-budget <N>     DDTree node budget [default: 64]
     \\      --draft-layers <N>    Layers for self-speculative draft [default: auto]
-    \\      --spec-token-map <F>  FR-Spec token frequency map for vocab truncation
+    \\      --spec-token-map <F>  FR-Spec token frequency map (one token ID per line);
+    \\                           restricts drafting to those tokens
     \\      --pflash-alpha <F>    PFlash block selection threshold (0.0-2.0) [default: 0.85]
     \\      --pflash-block-size <N>  PFlash scoring block size in tokens [default: 64]
     \\      --pflash-scorer <PATH>  Separate model for PFlash block scoring (defaults to --draft-model)
