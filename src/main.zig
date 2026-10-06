@@ -2124,8 +2124,7 @@ fn runFrontierBench(model: *Model, tok_state: anytype, allocator: std.mem.Alloca
 /// Target architectures listed in `--help`. DFlash2 is a drafter (`--draft-model`), not a target.
 const supported_arch_help = blk: {
     const order = [_]Arch{
-        .gemma3,  .gemma4,     .diffusion_gemma, .qwen35, .qwen4exp,  .qwen4_exp,
-        .gpt_oss, .nemotron_h, .nemotron_nano,   .glm4,   .deepseek4, .llama4,
+        .gemma4, .diffusion_gemma, .qwen35, .qwen4exp, .qwen4_exp, .deepseek4, .llama4,
     };
     var acc: []const u8 = "";
     for (order) |a| {
@@ -2316,7 +2315,7 @@ const usage_text =
     \\  agave model.gguf --serve --host 0          HTTP server on all interfaces
     \\  agave model.gguf -t 0.7 --top-p 0.9 "Tell me a joke"
     \\  agave model.gguf --backend cpu "Hello"    Force CPU backend
-    \\  agave ./glm-4-9b/ "Hello"                 Load SafeTensors directory
+    \\  agave ./gemma-4-e4b/ "Hello"              Load SafeTensors directory
     \\  echo "Explain TCP" | agave model.gguf     Pipe prompt from stdin
     \\  agave model.gguf --json "Hello"           JSON output with stats
     \\  agave model.gguf --json --model-info      Model metadata as JSON
@@ -2484,16 +2483,11 @@ pub fn main(init: std.process.Init) !void {
         fmt.getMetaStr("model_type") orelse "agave";
     const quant = Format.getQuantName(fmt);
 
-    var arch = Arch.detect(arch_str) orelse {
+    const arch = Arch.detect(arch_str) orelse {
         eprint("Error: unsupported architecture '{s}'\n", .{arch_str});
-        eprint("  Supported: gemma3, gemma4, diffusion-gemma, qwen35, qwen4exp, qwen4_exp, gpt-oss, nemotron-h, nemotron-nano, glm4, deepseek4, llama4\n", .{});
+        eprint("  Supported: {s}\n", .{supported_arch_help});
         std.process.exit(1);
     };
-
-    // SafeTensors Nemotron Nano variant: detected by backbone.embeddings.weight tensor
-    if (arch == .nemotron_h and fmt.getTensor("backbone.embeddings.weight") != null) {
-        arch = .nemotron_nano;
-    }
 
     if (!arch.isEnabled()) {
         eprint("Error: {s} model support disabled at compile time\n", .{arch.displayName()});
@@ -2735,7 +2729,7 @@ pub fn main(init: std.process.Init) !void {
     const vocab = fmt.getVocab();
     const merges = fmt.getMerges();
     // Gemma uses SentencePiece tokenization even when merges are present in tokenizer.json
-    const tok_kind: TokenizerKind = if (arch == .gemma3 or arch == .gemma4 or arch == .diffusion_gemma) .spm_no_dummy else if (merges != null) .bpe else .spm;
+    const tok_kind: TokenizerKind = if (arch == .gemma4 or arch == .diffusion_gemma) .spm_no_dummy else if (merges != null) .bpe else .spm;
     dbg("tokenizer: vocab={s}, merges={s}, kind={s}", .{
         if (vocab != null) @as([]const u8, "yes") else @as([]const u8, "null"),
         if (merges != null) @as([]const u8, "yes") else @as([]const u8, "null"),
@@ -2745,7 +2739,7 @@ pub fn main(init: std.process.Init) !void {
         fmt.getMetaU32("eos_token_id") orelse
         arch.defaultEos();
     const bos_id: u32 = blk: {
-        // Chat template already emits BOS (GLM-4 `[gMASK]<sop>`, DeepSeek V4
+        // Chat template already emits BOS (DeepSeek V4
         // `<｜begin▁of▁sentence｜>`). Don't also prepend a numeric BOS.
         if (arch.templateIncludesBos()) break :blk 0;
         if (fmt.getMetaU32("tokenizer.ggml.bos_token_id")) |id| break :blk id;
@@ -3017,12 +3011,10 @@ fn initAndRun(
     defer if (tiered_cache_storage) |*tc| tc.deinit();
 
     if (cli.kv_tiers) |tiers_str| {
-        // Warn: split-attention tiered SDPA is only fully implemented for Gemma 3.
-        // Other architectures store KV in tiered blocks but compute SDPA against the
-        // first block only, giving wrong results for long sequences.
-        if (arch != .gemma3) {
-            eprint("Warning: --kv-tiers is only fully implemented for Gemma 3. Other models may produce incorrect output.\n", .{});
-        }
+        // Split-attention tiered SDPA has no complete implementation on any
+        // supported architecture: KV goes into tiered blocks, but SDPA runs
+        // against the first block only, so long sequences come out wrong.
+        eprint("Warning: --kv-tiers has no fully implemented architecture and may produce incorrect output.\n", .{});
         // The RAM and VRAM tiers are a residency budget over one shared address
         // space, so a demoted block's slices still point at device memory on a
         // discrete GPU. Refuse rather than mislabel it.
@@ -3258,7 +3250,7 @@ fn initAndRun(
     if (cli.megakernel) {
         const supported = switch (be) {
             .metal => switch (arch) {
-                .qwen35, .gemma4, .gemma3, .glm4 => true,
+                .qwen35, .gemma4 => true,
                 else => false,
             },
             .cuda => switch (arch) {
@@ -3269,7 +3261,7 @@ fn initAndRun(
         };
         if (!supported) {
             eprint("Error: --megakernel not supported for {s} on this backend\n", .{@tagName(arch)});
-            eprint("  Supported: qwen35/gemma4/gemma3/glm4 on Metal, qwen35 on CUDA.\n", .{});
+            eprint("  Supported: qwen35/gemma4 on Metal, qwen35 on CUDA.\n", .{});
             eprint("  See docs/MEGAKERNEL.md for details.\n", .{});
             return false;
         }
@@ -3819,8 +3811,6 @@ fn initAndRun(
         if (draft_arch == .qwen35 and draft_fmt.getTensor("candidate_selector.predecessor_codebook") != null) {
             draft_arch = .dflash2;
         }
-        if (draft_arch == .nemotron_h and draft_fmt.getTensor("backbone.embeddings.weight") != null)
-            draft_arch = .nemotron_nano;
         if (!draft_arch.isEnabled()) {
             eprint("Error: draft model arch {s} disabled at compile time\n", .{draft_arch.displayName()});
             return false;
@@ -5690,19 +5680,13 @@ test {
     _ = @import("kvcache/manager.zig");
     _ = @import("kvcache/tiered.zig");
     _ = @import("models/model.zig");
-    _ = @import("models/gemma3.zig");
     _ = @import("models/gemma4.zig");
     _ = @import("models/diffusion_gemma.zig");
     _ = @import("models/qwen35.zig");
     _ = @import("models/qwen4exp.zig");
-    _ = @import("models/qwen4_exp.zig");
     _ = @import("ngram_cache.zig");
-    _ = @import("models/gpt_oss.zig");
-    _ = @import("models/glm4.zig");
     _ = @import("models/deepseek4.zig");
     _ = @import("models/llama4.zig");
-    _ = @import("models/nemotron_nano.zig");
-    _ = @import("models/nemotron_h.zig");
     _ = @import("models/vision.zig");
     _ = @import("backend/cpu.zig");
     // Metal links Apple frameworks; importing it off-macOS breaks the test link.
@@ -6025,7 +6009,7 @@ test "usage_text documents every cli_spec" {
 
 test "usage_text lists qwen4-exp" {
     try std.testing.expect(std.mem.indexOf(u8, usage_text, "qwen4-exp") != null);
-    try std.testing.expectEqualStrings(supported_arch_help, "gemma3, gemma4, diffusion-gemma, qwen35, qwen4exp, qwen4-exp, gpt-oss, nemotron-h, nemotron-nano, glm4, deepseek4, llama4");
+    try std.testing.expectEqualStrings(supported_arch_help, "gemma4, diffusion-gemma, qwen35, qwen4exp, qwen4-exp, deepseek4, llama4");
 }
 
 // man/agave.1 is generated from usage_text by scripts/gen-manpage.sh, so a

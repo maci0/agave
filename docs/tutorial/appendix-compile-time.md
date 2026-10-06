@@ -754,7 +754,7 @@ RingBuffer(comptime T, comptime size):
 conv_state = RingBuffer(f32, 4).init()   # 4-element f32 ring buffer
 ```
 
-**Implementation:** [`src/models/nemotron_h.zig`](../../src/models/nemotron_h.zig) (`conv_states` ring buffer, `causalConv1dSilu` in [`src/ops/ssm.zig`](../../src/ops/ssm.zig))
+**Implementation:** `causalConv1dSilu` in [`src/ops/ssm.zig`](../../src/ops/ssm.zig)
 
 **Each instantiation** (`RingBuffer(f32, 4)`, `RingBuffer(u32, 8)`) generates **separate specialized code**.
 

@@ -37,7 +37,6 @@ const msl_source = @embedFile("kernels/metal/common.metal") ++
     @embedFile("kernels/metal/mega_gemma_q4k.metal") ++
     @embedFile("kernels/metal/mega_gemma_q8.metal") ++
     @embedFile("kernels/metal/mega_qwen35_q4k.metal") ++
-    @embedFile("kernels/metal/mega_nemotron_h_q8.metal") ++
     @embedFile("kernels/metal/ds4.metal") ++
     @embedFile("kernels/metal/ds4_fused.metal");
 
@@ -245,7 +244,6 @@ pub const MetalBackend = struct {
     pipe_mega_gemma_q4k: objc.id,
     pipe_mega_gemma_q8: objc.id,
     pipe_mega_qwen35_q4k: objc.id,
-    pipe_mega_nemotron_h_q8: objc.id,
     /// Auto-composed megakernel pipeline (null until compileComposedMegakernel called).
     pipe_mega_auto: ?objc.id = null,
     pipe_fused_ffn_silu_mlx_q4: objc.id,
@@ -457,7 +455,6 @@ pub const MetalBackend = struct {
             .pipe_mega_gemma_q4k = undefined,
             .pipe_mega_gemma_q8 = undefined,
             .pipe_mega_qwen35_q4k = undefined,
-            .pipe_mega_nemotron_h_q8 = undefined,
             .pipe_fused_ffn_silu_mlx_q4 = undefined,
             .pipe_fused_ffn_gelu_q8 = undefined,
             .pipe_fused_ffn_gelu_q4_k = undefined,
@@ -573,7 +570,6 @@ pub const MetalBackend = struct {
         self.pipe_mega_gemma_q4k = try self.makePipeline("megakernel_gemma_q4k");
         self.pipe_mega_gemma_q8 = try self.makePipeline("megakernel_gemma_q8");
         self.pipe_mega_qwen35_q4k = try self.makePipeline("megakernel_qwen35_q4k");
-        self.pipe_mega_nemotron_h_q8 = try self.makePipeline("megakernel_nemotron_h_q8");
         self.pipe_fused_ffn_silu_mlx_q4 = try self.makePipeline("fused_ffn_gate_up_silu_mlx_q4");
         self.pipe_fused_ffn_gelu_q8 = try self.makePipeline("fused_ffn_gate_up_gelu_q8");
         self.pipe_fused_ffn_gelu_q4_k = try self.makePipeline("fused_ffn_gate_up_gelu_q4_k");
@@ -1843,54 +1839,6 @@ pub const MetalBackend = struct {
         setBuf(enc, s_ref, 5);
         setBuf(enc, sc_ref, 6);
         setBytes(enc, params, params_size, 7);
-
-        self.endEncodeThreadgroups(enc, n_tgs, threadgroup_size);
-    }
-
-    /// Dispatch the Nemotron-H Q8_0 true megakernel: single launch for
-    /// attention and FFN-only layers. SSM layers break out.
-    /// Buffer 8 carries the per-layer type array (u32 per layer).
-    pub fn dispatchMegakernelNemotronHQ8(
-        self: *MetalBackend,
-        weights: [*]const u8,
-        weights_size: usize,
-        layer_offsets: [*]const u8,
-        layer_offsets_size: usize,
-        kv_keys: [*]f32,
-        kv_keys_size: usize,
-        kv_values: [*]f32,
-        kv_values_size: usize,
-        hidden: [*]f32,
-        hidden_size: usize,
-        scratch: [*]f32,
-        scratch_size: usize,
-        sync_ctrs: [*]f32,
-        sync_ctrs_size: usize,
-        params: *const anyopaque,
-        params_size: usize,
-        layer_types: [*]const u32,
-        layer_types_size: usize,
-        n_tgs: u32,
-    ) void {
-        const w_ref = self.getBufRef(weights, weights_size);
-        const lo_ref = self.getBufRef(layer_offsets, layer_offsets_size);
-        const kk_ref = self.getBufRef(@ptrCast(kv_keys), kv_keys_size);
-        const kv_ref = self.getBufRef(@ptrCast(kv_values), kv_values_size);
-        const h_ref = self.getBufRef(@ptrCast(hidden), hidden_size);
-        const s_ref = self.getBufRef(@ptrCast(scratch), scratch_size);
-        const sc_ref = self.getBufRef(@ptrCast(sync_ctrs), sync_ctrs_size);
-        const lt_ref = self.getBufRef(@ptrCast(layer_types), layer_types_size);
-
-        const enc = self.getEncoder(self.pipe_mega_nemotron_h_q8);
-        setBuf(enc, w_ref, 0);
-        setBuf(enc, lo_ref, 1);
-        setBuf(enc, kk_ref, 2);
-        setBuf(enc, kv_ref, 3);
-        setBuf(enc, h_ref, 4);
-        setBuf(enc, s_ref, 5);
-        setBuf(enc, sc_ref, 6);
-        setBytes(enc, params, params_size, 7);
-        setBuf(enc, lt_ref, 8);
 
         self.endEncodeThreadgroups(enc, n_tgs, threadgroup_size);
     }
@@ -4666,16 +4614,6 @@ test "MetalBackend.dispatchMegakernelQwen35Q4K signature" {
     }
 }
 
-test "MetalBackend.dispatchMegakernelNemotronHQ8 signature" {
-    if (comptime builtin.os.tag != .macos) return error.SkipZigTest;
-    comptime {
-        const F = @TypeOf(MetalBackend.dispatchMegakernelNemotronHQ8);
-        const info = @typeInfo(F);
-        // Same as Qwen35 but +2 for layer_types ptr/size = 20 params
-        try std.testing.expectEqual(20, info.@"fn".params.len);
-    }
-}
-
 test "MetalBackend.dispatchMegakernelAuto signature" {
     if (comptime builtin.os.tag != .macos) return error.SkipZigTest;
     comptime {
@@ -4744,70 +4682,69 @@ test "fuzz: all metal functions" {
     comptime {
         const decls = [_][]const u8{
             // Init / deinit
-            "init",                          "deinit",
+            "init",                       "deinit",
             // Info
-            "deviceName",                    "backendInfo",
+            "deviceName",                 "backendInfo",
             "n_pipelines",
             // KV cache
-                              "allocKvSlice",
+                           "allocKvSlice",
             "freeKvSlice",
             // GEMV variants
-                              "gemv",
-            "gemvNvfp4St",                   "gemvMlxQ",
-            "gemvMxfp4St",                   "gemvGptq",
-            "gemvAwq",                       "gemvHqq",
-            "gemvMulti",                     "gemvT",
+                           "gemv",
+            "gemvNvfp4St",                "gemvMlxQ",
+            "gemvMxfp4St",                "gemvGptq",
+            "gemvAwq",                    "gemvHqq",
+            "gemvMulti",                  "gemvT",
             // Norms
-            "rmsNorm",                       "addRmsNorm",
-            "rmsNormMulti",                  "rmsNormBatched",
+            "rmsNorm",                    "addRmsNorm",
+            "rmsNormMulti",               "rmsNormBatched",
             "l2Norm",
             // Activations
-                                   "silu",
-            "gelu",                          "siluMul",
-            "geluMul",                       "sigmoidMul",
+                                "silu",
+            "gelu",                       "siluMul",
+            "geluMul",                    "sigmoidMul",
             // Fused FFN (SiLU)
-            "fusedFfnGateUpSiluQ8",          "fusedFfnGateUpSiluQ4K",
-            "fusedFfnGateUpSiluQ40",         "fusedFfnGateUpSiluMlxQ4",
-            "fusedFfnGateUpSiluQ6K",         "fusedFfnGateUpSiluQ5K",
+            "fusedFfnGateUpSiluQ8",       "fusedFfnGateUpSiluQ4K",
+            "fusedFfnGateUpSiluQ40",      "fusedFfnGateUpSiluMlxQ4",
+            "fusedFfnGateUpSiluQ6K",      "fusedFfnGateUpSiluQ5K",
             // Fused FFN (GELU)
-            "fusedFfnGateUpGeluQ8",          "fusedFfnGateUpGeluQ4K",
-            "fusedFfnGateUpGeluQ40",         "fusedFfnGateUpGeluQ6K",
+            "fusedFfnGateUpGeluQ8",       "fusedFfnGateUpGeluQ4K",
+            "fusedFfnGateUpGeluQ40",      "fusedFfnGateUpGeluQ6K",
             "fusedFfnGateUpGeluQ5K",
             // Megakernels
-                    "dispatchMegakernelQwen35Q8",
-            "dispatchMegakernelGemmaQ4K",    "dispatchMegakernelQwen35Q4K",
-            "dispatchMegakernelNemotronHQ8", "compileComposedMegakernel",
-            "dispatchMegakernelAuto",
+                 "dispatchMegakernelQwen35Q8",
+            "dispatchMegakernelGemmaQ4K", "dispatchMegakernelQwen35Q4K",
+            "compileComposedMegakernel",  "dispatchMegakernelAuto",
             // Elementwise
-                   "add",
-            "mul",                           "addScaled",
+            "add",                        "mul",
+            "addScaled",
             // Interleave / split
-            "deinterleave",                  "splitQGate",
+                             "deinterleave",
+            "splitQGate",
             // Softmax
-            "softmax",
+                            "softmax",
             // RoPE
-                                  "rope",
-            "ropeBatched",
+            "rope",                       "ropeBatched",
             // Embedding
-                              "embLookup",
+            "embLookup",
             // GEMM
-            "gemm",
+                             "gemm",
             // SDPA
-                                     "sdpa",
-            "sdpaPaged",                     "sdpaWithStats",
-            "sdpaTree",                      "sdpaPrefill",
+            "sdpa",                       "sdpaPaged",
+            "sdpaWithStats",              "sdpaTree",
+            "sdpaPrefill",
             // Batch / sync
-            "beginBatch",                    "endBatch",
-            "sync",                          "resetCounters",
+                           "beginBatch",
+            "endBatch",                   "sync",
+            "resetCounters",
             // SSM
-            "deltaNet",
+                         "deltaNet",
             // DS4 hyper-connection and turbo hd512
-                                 "ds4HcWeights",
-            "ds4HcPreMix",                   "ds4HcPost",
-            "ds4EmbBroadcast",               "ds4RopeTable",
-            "ds4InvRopeTable",               "ds4WeightedAccum",
-            "ds4SdpaTurboHd512",             "ds4HcHeadWeights",
-            "ds4FusedAttnProj",
+            "ds4HcWeights",               "ds4HcPreMix",
+            "ds4HcPost",                  "ds4EmbBroadcast",
+            "ds4RopeTable",               "ds4InvRopeTable",
+            "ds4WeightedAccum",           "ds4SdpaTurboHd512",
+            "ds4HcHeadWeights",           "ds4FusedAttnProj",
         };
         for (decls) |name| {
             if (!@hasDecl(MetalBackend, name))

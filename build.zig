@@ -37,14 +37,9 @@ pub fn build(b: *std.Build) void {
     const enable_webgpu = b.option(bool, "enable-webgpu", "Enable WebGPU backend via wgpu-native (default: true)") orelse true;
 
     // ── Model enable/disable flags (all default to true) ─────────
-    const enable_gemma3 = b.option(bool, "enable-gemma3", "Enable Gemma3 model support (default: true)") orelse true;
     const enable_qwen35 = b.option(bool, "enable-qwen35", "Enable Qwen3.5 model support (default: true)") orelse true;
     const enable_qwen4exp = b.option(bool, "enable-qwen4exp", "Enable Qwen3.8-Flash-Next GGUF (qwen4exp) model support (default: true)") orelse true;
     const enable_qwen4_exp = b.option(bool, "enable-qwen4-exp", "Enable Qwen4-Exp SafeTensors (qwen4_exp) model support (default: true)") orelse true;
-    const enable_gpt_oss = b.option(bool, "enable-gpt-oss", "Enable GPT-OSS model support (default: true)") orelse true;
-    const enable_nemotron_h = b.option(bool, "enable-nemotron-h", "Enable Nemotron-H model support (default: true)") orelse true;
-    const enable_nemotron_nano = b.option(bool, "enable-nemotron-nano", "Enable Nemotron-Nano model support (default: true)") orelse true;
-    const enable_glm4 = b.option(bool, "enable-glm4", "Enable GLM-4 model support (default: true)") orelse true;
     const enable_gemma4 = b.option(bool, "enable-gemma4", "Enable Gemma4 model support (default: true)") orelse true;
     const enable_diffusion_gemma = b.option(bool, "enable-diffusion-gemma", "Enable DiffusionGemma model support (default: true)") orelse true;
     const enable_deepseek4 = b.option(bool, "enable-deepseek4", "Enable DeepSeek V4 model support (default: true)") orelse true;
@@ -260,14 +255,9 @@ pub fn build(b: *std.Build) void {
     backend_options.addOption(bool, "enable_cuda", enable_cuda);
     backend_options.addOption(bool, "enable_rocm", enable_rocm);
     backend_options.addOption(bool, "enable_webgpu", enable_webgpu);
-    backend_options.addOption(bool, "enable_gemma3", enable_gemma3);
     backend_options.addOption(bool, "enable_qwen35", enable_qwen35);
     backend_options.addOption(bool, "enable_qwen4exp", enable_qwen4exp);
     backend_options.addOption(bool, "enable_qwen4_exp", enable_qwen4_exp);
-    backend_options.addOption(bool, "enable_gpt_oss", enable_gpt_oss);
-    backend_options.addOption(bool, "enable_nemotron_h", enable_nemotron_h);
-    backend_options.addOption(bool, "enable_nemotron_nano", enable_nemotron_nano);
-    backend_options.addOption(bool, "enable_glm4", enable_glm4);
     backend_options.addOption(bool, "enable_gemma4", enable_gemma4);
     backend_options.addOption(bool, "enable_diffusion_gemma", enable_diffusion_gemma);
     backend_options.addOption(bool, "enable_deepseek4", enable_deepseek4);
@@ -578,15 +568,10 @@ pub fn build(b: *std.Build) void {
     wasm_options.addOption(bool, "enable_cuda", false);
     wasm_options.addOption(bool, "enable_rocm", false);
     wasm_options.addOption(bool, "enable_webgpu", false);
-    wasm_options.addOption(bool, "enable_gemma3", enable_gemma3);
     wasm_options.addOption(bool, "enable_qwen35", false); // disabled: Zig+LLVM wasm32 codegen bug in DeltaNet SSM
     wasm_options.addOption(bool, "enable_qwen4exp", false);
     wasm_options.addOption(bool, "enable_qwen4_exp", false);
-    wasm_options.addOption(bool, "enable_gpt_oss", false);
-    wasm_options.addOption(bool, "enable_nemotron_h", false);
-    wasm_options.addOption(bool, "enable_nemotron_nano", false);
-    wasm_options.addOption(bool, "enable_glm4", false);
-    wasm_options.addOption(bool, "enable_gemma4", false); // disabled: test isolation
+    wasm_options.addOption(bool, "enable_gemma4", true); // the one arch the browser module carries
     wasm_options.addOption(bool, "enable_diffusion_gemma", false);
     wasm_options.addOption(bool, "enable_deepseek4", false);
     wasm_options.addOption(bool, "enable_llama4", false);

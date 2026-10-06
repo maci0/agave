@@ -62,7 +62,7 @@ const InferenceContext = struct {
     gguf_valid: bool = false,
     eos_id: u32 = 0,
     bos_id: u32 = 0,
-    arch: Arch = .gemma3,
+    arch: Arch = .gemma4,
     n_layers: u32 = 0,
     n_embd: u32 = 0,
     vocab_size: u32 = 0,
@@ -122,7 +122,7 @@ export fn agave_init(model_ptr: [*]const u8, model_len: usize) usize {
     ctx.vocab_size = @intCast(vocab.len);
 
     const merges = fmt.getMerges();
-    if (merges == null or ctx.arch == .gemma3 or ctx.arch == .gemma4) {
+    if (merges == null or ctx.arch == .gemma4) {
         ctx.tok.loadFromGGUFSpm(vocab, ctx.eos_id) catch |e| {
             return fail(ctx, .tokenizer, "Tok error: {s}", .{@errorName(e)});
         };

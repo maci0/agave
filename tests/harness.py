@@ -14,7 +14,7 @@ Usage:
     tests/.venv/bin/python tests/harness.py
 
     # Filter by backend, model arch, or quant
-    tests/.venv/bin/python tests/harness.py --backend metal cpu --arch gemma3 qwen35
+    tests/.venv/bin/python tests/harness.py --backend metal cpu --arch gemma4 qwen35
     tests/.venv/bin/python tests/harness.py --quant Q4_0 Q8_0
 
     # Run only benchmarks (skip correctness)
@@ -45,7 +45,7 @@ Usage:
     tests/.venv/bin/python tests/harness.py --baseline results/baseline.json
 
     # Profiling with Instruments (macOS)
-    tests/.venv/bin/python tests/harness.py --profile instruments --arch gemma3
+    tests/.venv/bin/python tests/harness.py --profile instruments --arch gemma4
 
     # Save results
     tests/.venv/bin/python tests/harness.py --save results/run-$(date +%Y%m%d).json
@@ -122,14 +122,9 @@ def utc_timestamp() -> str:
 
 # Architecture detection from filename patterns
 ARCH_PATTERNS: dict[str, list[str]] = {
-    "gemma3": ["gemma-3", "gemma3"],
     "gemma4": ["gemma-4", "gemma4"],
     "qwen35": ["qwen3.5", "qwen35"],
     "deepseek_r1_qwen3": ["deepseek-r1", "deepseek_r1"],
-    "gpt_oss": ["gpt-oss", "gptoss"],
-    "nemotron_h": ["nemotron-h", "nemotron_h", "nemotron-3-nano-30b"],
-    "nemotron_nano": ["nemotron-nano", "nemotron_nano", "nemotron-3-nano-4b"],
-    "glm4": ["glm-4", "glm4"],
     "deepseek4": ["deepseek-v4", "deepseek4"],
     "llama4": ["llama-4", "llama4"],
     "diffusion_gemma": ["diffusiongemma", "diffusion-gemma"],
@@ -356,17 +351,7 @@ class BenchResult:
 def detect_arch(name: str) -> str | None:
     """Detect model architecture from file/directory name."""
     lower = name.lower()
-    # Check nemotron variants carefully (nano-30b vs nano-4b)
-    if "nemotron" in lower:
-        if "nemotron-h" in lower or "nemotron_h" in lower:
-            return "nemotron_h"
-        if "30b" in lower or "nano-30b" in lower:
-            return "nemotron_h"  # 30B-A3B is the hybrid SSM+attention arch
-        if "nano" in lower:
-            return "nemotron_nano"  # 4B is the standard Nemotron Nano
     for arch, patterns in ARCH_PATTERNS.items():
-        if arch.startswith("nemotron"):
-            continue  # Already handled above
         for pat in patterns:
             if pat.lower() in lower:
                 return arch
@@ -1568,7 +1553,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     filt = p.add_argument_group("Filtering")
     filt.add_argument("--backend", nargs="+", metavar="BE", help="Backends to test (e.g., metal cpu vulkan cuda)")
-    filt.add_argument("--arch", nargs="+", metavar="ARCH", help="Model architectures (e.g., gemma3 qwen35)")
+    filt.add_argument("--arch", nargs="+", metavar="ARCH", help="Model architectures (e.g., gemma4 qwen35)")
     filt.add_argument("--quant", nargs="+", metavar="Q", help="Quantization formats (e.g., Q4_0 Q8_0 BF16)")
     filt.add_argument("--model", nargs="+", metavar="PATH", help="Specific model files/dirs (overrides discovery)")
 

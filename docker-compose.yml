@@ -9,7 +9,7 @@ services:
     build:
       context: .
       args:
-        # Fast local image: CPU + Gemma3 only (override in compose.override.yml if needed).
+        # Fast local image: CPU + Gemma4 only (override in compose.override.yml if needed).
         ENABLE_CUDA: "false"
         ENABLE_VULKAN: "false"
         ENABLE_ROCM: "false"
@@ -18,10 +18,6 @@ services:
         ENABLE_QWEN35: "false"
         ENABLE_QWEN4EXP: "false"
         ENABLE_QWEN4_EXP: "false"
-        ENABLE_GPT_OSS: "false"
-        ENABLE_NEMOTRON_H: "false"
-        ENABLE_NEMOTRON_NANO: "false"
-        ENABLE_GLM4: "false"
         ENABLE_GEMMA4: "false"
         ENABLE_DIFFUSION_GEMMA: "false"
         ENABLE_DEEPSEEK4: "false"

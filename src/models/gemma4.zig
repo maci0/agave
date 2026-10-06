@@ -747,7 +747,7 @@ pub const Gemma4Model = struct {
             .tiered_cache = tiered_cache,
             .mlx_bits = f.getMetaU32("bits") orelse default_mlx_bits,
             // Gemma4 always uses norm_add_one=false: both GGUF and SafeTensors store
-            // raw norm weights (unlike Gemma3 where SafeTensors needs +1).
+            // raw norm weights.
             .norm_add_one = false,
         };
 

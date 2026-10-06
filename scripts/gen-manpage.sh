@@ -20,7 +20,7 @@ src=src/main.zig
 # The value supported_arch_help computes. It is built by a comptime block, not
 # a literal, so it cannot be read back the way repl_help is; a test in
 # src/main.zig pins this same string, so the block changing fails there first.
-readonly ARCH_LIST="gemma3, gemma4, diffusion-gemma, qwen35, qwen4exp, qwen4-exp, gpt-oss, nemotron-h, nemotron-nano, glm4, deepseek4, llama4"
+readonly ARCH_LIST="gemma4, diffusion-gemma, qwen35, qwen4exp, qwen4-exp, deepseek4, llama4"
 
 # A multiline string literal: one `\\`-prefixed source line per output line,
 # from `const NAME =` to ENDLINE inclusive, with the delimiters dropped.

@@ -2,9 +2,8 @@
 //! Provides a type-erased interface via comptime vtable generation, allowing
 //! the engine to work with any model architecture through a uniform API.
 //!
-//! Implementations: gemma3.zig, gemma4.zig, deepseek4.zig, diffusion_gemma.zig,
-//! qwen35.zig, qwen4exp.zig, qwen4_exp.zig, gpt_oss.zig, nemotron_h.zig, nemotron_nano.zig, glm4.zig,
-//! llama4.zig, dflash2.zig, vision.zig
+//! Implementations: gemma4.zig, deepseek4.zig, diffusion_gemma.zig,
+//! qwen35.zig, qwen4exp.zig, llama4.zig, dflash2.zig, vision.zig
 
 const std = @import("std");
 const build_options = @import("build_options");
@@ -877,16 +876,11 @@ pub fn resetKvCache(self: anytype) void {
 /// lifecycle and configuration methods without exposing implementation types.
 /// Uses `inline else` dispatch for zero-overhead method calls.
 pub const ModelStorage = union(enum) {
-    gemma3: Gemma3Model,
     gemma4: Gemma4Model,
     diffusion_gemma: DiffusionGemmaModel,
     qwen35: Qwen35Model,
     qwen4exp: Qwen4ExpGgufModel,
     qwen4_exp: Qwen4ExpHfModel,
-    gpt_oss: GptOssModel,
-    nemotron_h: NemotronHModel,
-    nemotron_nano: NemotronNanoModel,
-    glm4: Glm4Model,
     deepseek4: Ds4Model,
     llama4: Llama4Model,
     dflash2: DFlash2Model,
@@ -899,7 +893,7 @@ pub const ModelStorage = union(enum) {
         if ((kv_type_k.cpuSdpaOnly() or kv_type_v.cpuSdpaOnly()) and arch != .deepseek4)
             @panic("nvfp4_ds_mla is DeepSeek MLA only, use --kv-type q8_0 or f16");
         switch (arch) {
-            inline .gemma3, .gemma4, .diffusion_gemma, .qwen35, .qwen4exp, .qwen4_exp, .gpt_oss, .nemotron_h, .nemotron_nano, .glm4, .deepseek4, .llama4, .dflash2 => |a| {
+            inline .gemma4, .diffusion_gemma, .qwen35, .qwen4exp, .qwen4_exp, .deepseek4, .llama4, .dflash2 => |a| {
                 if (comptime !a.isEnabled()) unreachable;
                 const M = comptime modelType(a);
                 var mdl = try M.init(allocator, fmt, be, ctx_size, kv_type_k, kv_type_v, tiered_cache);
@@ -924,16 +918,11 @@ pub const ModelStorage = union(enum) {
     /// Map Arch variant to concrete model type at comptime.
     fn modelType(comptime a: Arch) type {
         return switch (a) {
-            .gemma3 => Gemma3Model,
             .gemma4 => Gemma4Model,
             .diffusion_gemma => DiffusionGemmaModel,
             .qwen35 => Qwen35Model,
             .qwen4exp => Qwen4ExpGgufModel,
             .qwen4_exp => Qwen4ExpHfModel,
-            .gpt_oss => GptOssModel,
-            .nemotron_h => NemotronHModel,
-            .nemotron_nano => NemotronNanoModel,
-            .glm4 => Glm4Model,
             .deepseek4 => Ds4Model,
             .llama4 => Llama4Model,
             .dflash2 => DFlash2Model,
@@ -1246,17 +1235,19 @@ pub const ModelStorage = union(enum) {
 
 // ── Concrete model types (internal, access via ModelStorage) ────
 
-const Gemma3Model = if (build_options.enable_gemma3) @import("gemma3.zig").Gemma3Model else void;
 const Gemma4Model = if (build_options.enable_gemma4) @import("gemma4.zig").Gemma4Model else void;
 const DiffusionGemmaModel = if (build_options.enable_diffusion_gemma) @import("diffusion_gemma.zig").DiffusionGemmaModel else void;
 const Qwen35Model = if (build_options.enable_qwen35) @import("qwen35.zig").Qwen35Model else void;
 const Qwen4ExpGgufModel = if (build_options.enable_qwen4exp) @import("qwen4exp.zig").Qwen4ExpModel else void;
-const Qwen4ExpHfModel = if (build_options.enable_qwen4_exp) @import("qwen4_exp.zig").Qwen4ExpModel else void;
-const GptOssModel = if (build_options.enable_gpt_oss) @import("gpt_oss.zig").GptOssModel else void;
-const NemotronHModel = if (build_options.enable_nemotron_h) @import("nemotron_h.zig").NemotronHModel else void;
-const Glm4Model = if (build_options.enable_glm4) @import("glm4.zig").Glm4Model else void;
+// Qwen4-Exp SafeTensors runs on the Qwen3.5 implementation: same DeltaNet/MoE
+// layer stack, config read from the HF top-level keys. The arch stays separate
+// only to keep its own display name.
+const Qwen4ExpHfModel = if (build_options.enable_qwen4_exp) blk: {
+    if (!build_options.enable_qwen35)
+        @compileError("-Denable-qwen4-exp requires -Denable-qwen35: Qwen4-Exp SafeTensors runs on the Qwen3.5 implementation");
+    break :blk Qwen35Model;
+} else void;
 const Ds4Model = if (build_options.enable_deepseek4) @import("deepseek4.zig").Ds4Model else void;
-const NemotronNanoModel = if (build_options.enable_nemotron_nano) @import("nemotron_nano.zig").NemotronNanoModel else void;
 const Llama4Model = if (build_options.enable_llama4) @import("llama4.zig").Llama4Model else void;
 
 // ── Tests ─────────────────────────────────────────────────────────

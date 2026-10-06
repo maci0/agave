@@ -2474,7 +2474,8 @@ fn applyNvfp4Scale(fmt: Format, buf: []f32, layer: u32, expert: usize, proj: []c
     const n = std.fmt.bufPrint(&nb, "model.language_model.layers.{d}.mlp.experts.{d}.{s}.weight_global_scale", .{ layer, expert, proj }) catch return;
     const t = fmt.getTensor(n) orelse return;
     const gs = @as(*const f32, @ptrCast(@alignCast(t.data_ptr))).*;
-    if (gs != 1.0 and gs != 0.0) {
+    // A NaN/inf global scale would poison every element of the buffer.
+    if (std.math.isFinite(gs) and gs != 1.0 and gs != 0.0) {
         const inv = 1.0 / gs;
         for (buf) |*v| {
             v.* *= inv;
@@ -2688,6 +2689,49 @@ test "applyNvfp4Scale no-op when tensor missing" {
     // Buffer should be unchanged, no matching tensor found.
     try std.testing.expectApproxEqAbs(@as(f32, 1.0), buf[0], 1e-6);
     try std.testing.expectApproxEqAbs(@as(f32, 4.0), buf[3], 1e-6);
+}
+
+test "applyNvfp4Scale no-op on non-finite scale" {
+    // A NaN or inf weight_global_scale must leave the buffer alone: dividing by it
+    // would turn every activation in the expert output into NaN.
+    const scale_name = "model.language_model.layers.0.mlp.experts.0.gate_proj.weight_global_scale";
+    for ([_]f32{ std.math.nan(f32), std.math.inf(f32), -std.math.inf(f32) }) |bad| {
+        const scale: f32 = bad;
+        var mock = @import("model.zig").MockFormat{ .tensors = &.{.{
+            .name = scale_name,
+            .info = .{
+                .name = scale_name,
+                .n_dims = 1,
+                .dims = .{ 1, 0, 0, 0 },
+                .dtype = .f32,
+                .data_ptr = @ptrCast(&scale),
+            },
+        }} };
+        var buf = [_]f32{ 1.0, 2.0, 3.0, 4.0 };
+        applyNvfp4Scale(mock.format(), &buf, 0, 0, "gate_proj");
+        for (buf, [_]f32{ 1.0, 2.0, 3.0, 4.0 }) |got, want| {
+            try std.testing.expectApproxEqAbs(want, got, 1e-6);
+        }
+    }
+}
+
+test "applyNvfp4Scale divides by a finite scale" {
+    const scale_name = "model.language_model.layers.0.mlp.experts.0.gate_proj.weight_global_scale";
+    const scale: f32 = 2.0;
+    var mock = @import("model.zig").MockFormat{ .tensors = &.{.{
+        .name = scale_name,
+        .info = .{
+            .name = scale_name,
+            .n_dims = 1,
+            .dims = .{ 1, 0, 0, 0 },
+            .dtype = .f32,
+            .data_ptr = @ptrCast(&scale),
+        },
+    }} };
+    var buf = [_]f32{ 1.0, 2.0, 3.0, 4.0 };
+    applyNvfp4Scale(mock.format(), &buf, 0, 0, "gate_proj");
+    try std.testing.expectApproxEqAbs(@as(f32, 0.5), buf[0], 1e-6);
+    try std.testing.expectApproxEqAbs(@as(f32, 2.0), buf[3], 1e-6);
 }
 
 test "mropeCoords 2x2 image grid" {

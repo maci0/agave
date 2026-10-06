@@ -19,7 +19,7 @@ agave model.gguf --megakernel "prompt"     # Fused FFN (active)
 agave model.gguf "prompt"                  # Standard dispatch (default)
 ```
 
-`--megakernel` CLI gate (`src/main.zig`): Qwen 3.5, Gemma 3/4, and GLM-4 on Metal; Qwen 3.5 on CUDA. Other arches/backends error out (including Nemotron-H and ROCm), even where Tier 2 kernel files exist.
+`--megakernel` CLI gate (`src/main.zig`): Qwen 3.5 and Gemma 4 on Metal; Qwen 3.5 on CUDA. Other arches/backends error out (including ROCm), even where Tier 2 kernel files exist.
 
 ## Tier 1: Fused FFN Kernels (Active)
 
@@ -34,12 +34,11 @@ Fuses gate GEMV + up GEMV + activation into a single dispatch per FFN layer. Sav
 | `fused_ffn_gate_up_silu_q5_k` | SiLU | Q5_K | Qwen 3.5 |
 | `fused_ffn_gate_up_silu_q6_k` | SiLU | Q6_K | Qwen 3.5 |
 | `fused_ffn_gate_up_silu_q4_0` | SiLU | Q4_0 | Qwen 3.5 |
-| `fused_ffn_gate_up_silu_mlx_q4` | SiLU | MLX-Q4 | GLM-4 |
-| `fused_ffn_gate_up_gelu_q8` | GELU | Q8_0 | Gemma 3/4 |
-| `fused_ffn_gate_up_gelu_q4_k` | GELU | Q4_K | Gemma 3/4 |
-| `fused_ffn_gate_up_gelu_q5_k` | GELU | Q5_K | Gemma 3/4 |
-| `fused_ffn_gate_up_gelu_q6_k` | GELU | Q6_K | Gemma 3/4 |
-| `fused_ffn_gate_up_gelu_q4_0` | GELU | Q4_0 | Gemma 3/4 |
+| `fused_ffn_gate_up_gelu_q8` | GELU | Q8_0 | Gemma 4 |
+| `fused_ffn_gate_up_gelu_q4_k` | GELU | Q4_K | Gemma 4 |
+| `fused_ffn_gate_up_gelu_q5_k` | GELU | Q5_K | Gemma 4 |
+| `fused_ffn_gate_up_gelu_q6_k` | GELU | Q6_K | Gemma 4 |
+| `fused_ffn_gate_up_gelu_q4_0` | GELU | Q4_0 | Gemma 4 |
 | `fused_ffn_gate_up_clamped_silu_q2_k` | clamped SiLU | Q2_K | DeepSeek V4 (compiled, not dispatched — see below) |
 | `fused_ffn_gate_up_clamped_silu_mxfp4` | clamped SiLU | MXFP4 | DeepSeek V4 (compiled, not dispatched — see below) |
 
@@ -89,12 +88,11 @@ Single GPU dispatch for ALL layers. Uses composable building blocks with atomic 
 |---------|------|-------|-------|
 | Metal | `mega_qwen35_q8.metal` | Qwen 3.5 | Q8_0 |
 | Metal | `mega_qwen35_q4k.metal` | Qwen 3.5 | Q4_K |
-| Metal | `mega_gemma_q4k.metal` | Gemma 3/4 | Q4_K |
-| Metal | `mega_gemma_q8.metal` | Gemma 3/4 | Q8_0 |
-| Metal | `mega_nemotron_h_q8.metal` | Nemotron-H | Q8_0 |
+| Metal | `mega_gemma_q4k.metal` | Gemma 4 | Q4_K |
+| Metal | `mega_gemma_q8.metal` | Gemma 4 | Q8_0 |
 | CUDA | `mega_qwen35_q8.zig` | Qwen 3.5 | Q8_0 |
-| CUDA | `mega_gemma_q4k.zig` | Gemma 3/4 | Q4_K |
-| CUDA | `mega_gemma_q8.zig` | Gemma 3/4 | Q8_0 |
+| CUDA | `mega_gemma_q4k.zig` | Gemma 4 | Q4_K |
+| CUDA | `mega_gemma_q8.zig` | Gemma 4 | Q8_0 |
 | ROCm | `mega_qwen35_q8.zig` | Qwen 3.5 | Q8_0 |
 
 ### TurboQuant+ in Megakernels
@@ -112,7 +110,7 @@ True megakernel sources compile and `dispatchMegakernel*` helpers exist on Metal
 
 Known limitations of hand-written megakernels:
 - Qwen 3.5: Q+gate deinterleave, per-head QK norms, sigmoid gate not yet in megakernel
-- Gemma 3/4: Sliding-window vs global attention layers have different head dims
+- Gemma 4: Sliding-window vs global attention layers have different head dims
 - Paged KV cache incompatible with flat KV arrays in megakernel (needs flat allocation mode)
 - CUDA/ROCm `mega_qwen35_q8.zig` and `mega_gemma_{q8,q4k}.zig`: attention is a
   scaffold, not an implementation. The kernels feed `q_buf` straight into the output
@@ -211,7 +209,7 @@ Helper constructors simplify common patterns:
 
 | Constructor | Pattern |
 |-------------|---------|
-| `ModelDesc.uniform(n, .attention)` | All layers are attention (Gemma 3, Gemma 4 dense) |
+| `ModelDesc.uniform(n, .attention)` | All layers are attention (Gemma 4 dense) |
 | `ModelDesc.qwenHybrid(n, interval)` | DeltaNet except every Nth layer is attention (Qwen 3.5) |
 
 ### ModelDesc Flags
@@ -238,13 +236,8 @@ Helper constructors simplify common patterns:
 | Model | Fused FFN | True Megakernel | Composed Megakernel | Notes |
 |-------|:---------:|:---------------:|:-------------------:|-------|
 | Qwen 3.5 | SiLU (all quants) | Q8_0 + Q4_K | Yes (SiLU, fused residual) | DeltaNet breaks out to standard dispatch |
-| Gemma 3 | GELU (all quants) | Q4_K + Q8_0 | Yes (GELU, uniform) | Cleanest megakernel |
 | Gemma 4 (dense) | GELU (all quants) | Q4_K + Q8_0 | Yes (GELU, uniform) | SL/GL attention complicates true megakernel |
 | Gemma 4 (MoE) | GELU (per-expert) | n/a | n/a | MoE routing is CPU-side |
-| GLM-4 | SiLU (MLX-Q4) | n/a | n/a | MLA attention is CPU-side |
-| Nemotron-H | n/a | Q8_0 (attn+FFN) | Yes (ReLU-squared) | SSM breaks out, FFN uses ReLU² (no gate) |
-| Nemotron-Nano | n/a | n/a | n/a | MoE + SSM, all CPU-side |
-| GPT-OSS | n/a | n/a | n/a | Bias+clamp between GEMV and activation |
 
 ## Pipeline/Kernel Counts
 

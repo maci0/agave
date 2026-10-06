@@ -394,7 +394,7 @@ flowchart TD
 
 Layer types are determined at init from model **metadata** (descriptive information about the model structure, layer counts, dimensions, patterns, stored in the model file header) and dispatched in each model's `forward()` loop.
 
-**Nemotron-H's Mamba-2 layers** are distinct from Qwen3.5's DeltaNet layers. Where DeltaNet uses the delta rule (error-correcting outer-product updates) for its recurrence, Mamba-2 uses selective-state-space recurrence with causal conv1d and discretized dt (timestep) gating. In the 8B variant (42 layers), Nemotron-H has 21 SSM (Mamba-2) layers on even indices, 4 attention layers at positions 1, 9, 17, 25, and 17 FFN-only layers filling the rest. Layer types are not hardcoded, they're detected at init by probing for tensor presence (`ssm_in.weight` → SSM, `attn_q.weight` → attention, else FFN-only). See [`src/models/nemotron_h.zig`](../../src/models/nemotron_h.zig).
+**Mamba-2 is distinct from DeltaNet.** Where DeltaNet uses the delta rule (error-correcting outer-product updates) for its recurrence, Mamba-2 uses selective-state-space recurrence with causal conv1d and discretized dt (timestep) gating. Agave shipped Mamba-2 through the Nemotron-H and Nemotron-Nano architectures; both were removed, so DeltaNet in [`src/models/qwen35.zig`](../../src/models/qwen35.zig) is now the only recurrence in the tree. The shared SSM primitives it builds on stay in [`src/ops/ssm.zig`](../../src/ops/ssm.zig).
 
 ## Gotchas
 

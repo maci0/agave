@@ -306,7 +306,7 @@ Memory: 4× smaller KV cache vs full Multi-Head Attention (MHA)
 
 ### MLA (Multi-head Latent Attention)
 
-[MLA (DeepSeek-AI, 2024)](https://arxiv.org/abs/2405.04434) goes further than GQA, instead of sharing K/V heads, it compresses K and V into a **low-rank latent vector** before generating per-head keys and values. Used by GLM-4 and DeepSeek V2/V3 (`src/models/glm4.zig`).
+[MLA (DeepSeek-AI, 2024)](https://arxiv.org/abs/2405.04434) goes further than GQA, instead of sharing K/V heads, it compresses K and V into a **low-rank latent vector** before generating per-head keys and values. Used by DeepSeek V4 Flash (`src/models/deepseek4.zig`).
 
 **The problem MLA solves:** GQA reduces KV cache by sharing heads (4× with 16Q/4KV). But the cache still stores one full K vector and one full V vector per head per position. MLA compresses further by factoring the K/V computation through a narrow bottleneck.
 
@@ -382,7 +382,7 @@ flowchart TD
 
 **KV cache trade-off:** A fully absorbed MLA implementation would cache only the latent vector (`kv_lora_rank + rope_dim = 576` floats per position, shared across all heads). Agave's current implementation reconstructs the full per-head K and V from the latent and caches the expanded result (`n_head × (nope_dim + rope_dim) + n_head × v_head_dim = 20×256 + 20×256 = 10,240` floats per position). This trades higher cache memory for simpler attention dispatch, the SDPA kernel sees standard per-head K/V arrays identical to GQA, so no attention-kernel changes are needed. A future absorbed-KV path would cut cache memory by ~18× at the cost of re-expanding the latent for every cached position during every attention computation.
 
-**Implementation:** [`src/models/glm4.zig`](../../src/models/glm4.zig) (`mlaAttention`, `multiLinearGemv`). Architecture string `deepseek2` maps to `glm4` in [`src/arch.zig`](../../src/arch.zig).
+**Implementation:** [`src/models/deepseek4.zig`](../../src/models/deepseek4.zig) (MLA with compressed KV).
 
 ### SDPA (Scaled Dot-Product Attention)
 

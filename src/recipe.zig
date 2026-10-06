@@ -91,7 +91,7 @@ pub const Recipe = struct {
     /// `match()` iterates the `presets` array in order and returns the first hit,
     /// so more-specific presets must come before broader ones.
     const Preset = struct {
-        /// Architecture name prefix to match (e.g. "gemma3"). Empty matches any arch.
+        /// Architecture name prefix to match (e.g. "gemma4"). Empty matches any arch.
         arch_prefix: []const u8,
         /// Backend name to match exactly (e.g. "Metal"). Empty matches any backend.
         backend: []const u8,
@@ -125,19 +125,6 @@ pub const Recipe = struct {
                 .max_tokens = 1024,
             },
         },
-        // ── Qwen 2 on Metal Q4, older Qwen variant, similar tuning ──
-        .{
-            .arch_prefix = "qwen2",
-            .backend = "Metal",
-            .quant = "Q4",
-            .recipe = .{
-                .name = "Qwen2 Q4 Metal",
-                .temperature = 0.7,
-                .top_p = 0.8,
-                .repeat_penalty = 1.1,
-                .max_tokens = 1024,
-            },
-        },
         .{
             .arch_prefix = "gemma",
             .backend = "Metal",
@@ -147,31 +134,6 @@ pub const Recipe = struct {
                 .temperature = 0.7,
                 .top_p = 0.95,
                 .repeat_penalty = 1.05,
-                .max_tokens = 1024,
-            },
-        },
-        // ── Large MoE on Metal, conservative to avoid OOM ──
-        .{
-            .arch_prefix = "gpt",
-            .backend = "Metal",
-            .quant = "",
-            .recipe = .{
-                .name = "GPT-OSS Metal",
-                .temperature = 0.5,
-                .top_p = 0.9,
-                .max_tokens = 512,
-                .ctx_size = 2048,
-            },
-        },
-        // ── GLM-4, needs repeat penalty to avoid greedy loops ──
-        .{
-            .arch_prefix = "glm4",
-            .backend = "",
-            .quant = "",
-            .recipe = .{
-                .name = "GLM-4 generic",
-                .temperature = 0.7,
-                .repeat_penalty = 1.1,
                 .max_tokens = 1024,
             },
         },
@@ -201,16 +163,6 @@ pub const Recipe = struct {
             .recipe = .{
                 .name = "DeepSeek V4 Flash",
                 .repeat_penalty = 1.0,
-            },
-        },
-        // ── DeepSeek V2, shares inference path with GLM-4, same repeat penalty ──
-        .{
-            .arch_prefix = "deepseek",
-            .backend = "",
-            .quant = "",
-            .recipe = .{
-                .name = "DeepSeek V2 generic",
-                .repeat_penalty = 1.1,
             },
         },
         // ── Llama 4, iRoPE + chunked attention, standard chat penalty ──
@@ -245,21 +197,12 @@ test "recipe match exact" {
     try std.testing.expectApproxEqAbs(@as(f32, 0.6), r.temperature.?, 0.001);
 }
 
-test "recipe match glm4 gets GLM-4 recipe" {
-    const r = Recipe.match("glm4", "CPU", "Q4_0") orelse Recipe.default;
-    try std.testing.expectEqualStrings("GLM-4 generic", r.name);
-    try std.testing.expectApproxEqAbs(@as(f32, 1.1), r.repeat_penalty.?, 0.001);
-}
-
 test "recipe match deepseek4 does not use V2 penalty" {
     const r4 = Recipe.match("deepseek4", "CPU", "Q4") orelse Recipe.default;
     try std.testing.expectEqualStrings("DeepSeek V4 Flash", r4.name);
     try std.testing.expectApproxEqAbs(@as(f32, 1.0), r4.repeat_penalty.?, 0.001);
     const rv4 = Recipe.match("deepseek_v4", "Metal", "MLX") orelse Recipe.default;
     try std.testing.expectEqualStrings("DeepSeek V4 Flash", rv4.name);
-    const r2 = Recipe.match("deepseek", "CPU", "Q4") orelse Recipe.default;
-    try std.testing.expectEqualStrings("DeepSeek V2 generic", r2.name);
-    try std.testing.expectApproxEqAbs(@as(f32, 1.1), r2.repeat_penalty.?, 0.001);
 }
 
 test "recipe match falls through to CPU generic" {
@@ -364,7 +307,7 @@ test "fuzz: all recipe functions" {
             }
 
             // ── Recipe.match ── with random arch/backend/quant strings
-            const archs = [_][]const u8{ "qwen35", "gemma3", "gpt", "glm4", "unknown", "" };
+            const archs = [_][]const u8{ "qwen35", "gemma4", "deepseek4", "llama4", "unknown", "" };
             const backends = [_][]const u8{ "Metal", "CPU", "Vulkan", "WebGPU", "" };
             const quants = [_][]const u8{ "Q4_K", "Q4_0", "Q8_0", "F32", "" };
 

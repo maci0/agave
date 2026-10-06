@@ -57,19 +57,19 @@ A KV cache is a type of data storage system that stores key-value pairs, allowin
 
 ## Features
 
-- **12 Model Architectures**: Gemma 3, Gemma 4, DiffusionGemma, Qwen 3.5, Qwen 3.8 Flash-Next GGUF (`qwen4exp`), Qwen4-Exp SafeTensors (`qwen4_exp`), GPT-OSS, Nemotron-H, Nemotron Nano, GLM-4, DeepSeek V4, Llama 4 (plus DFlash2 as a block-diffusion drafter, not a chat model)
+- **7 Model Architectures**: Gemma 4, DiffusionGemma, Qwen 3.5, Qwen 3.8 Flash-Next GGUF (`qwen4exp`), Qwen4-Exp SafeTensors (`qwen4_exp`), DeepSeek V4, Llama 4 (plus DFlash2 as a block-diffusion drafter, not a chat model)
 - **6 Backends**: CPU (SIMD-optimized, Accelerate.framework on macOS), Metal GPU (Apple Silicon), Vulkan, CUDA, ROCm, WebGPU, individually toggleable at build time
 - **Compile-Time Model Selection**: Disable unused model architectures to reduce binary size
 - **2 Formats**: GGUF, SafeTensors (multi-shard, MLX quantized, NVFP4)
 - **20+ Quantization Types**: F32, F16, BF16, Q2_K, Q3_K, Q4_0, Q4_1, Q4_K, Q5_0, Q5_K, Q6_K, Q8_0, TQ1_0, IQ4_XS, IQ4_NL, FP8 E4M3, FP8 E5M2, NVFP4, MXFP4, MLX 4/6/8-bit, GPTQ
 - **19 KV Cache Quantization Types**: F32, F16, Q8_0, INT8, FP8, NVFP4, NVFP4-MLA, TurboQuant 2/3/4-bit, PlanarQuant 2/3/4-bit, IsoQuant 2/3/4-bit, RotorQuant 2/3/4-bit, with asymmetric K/V support and paged SDPA
-- **Tiered KV Cache**: VRAM + RAM + SSD offloading with async prefetch, on unified-memory backends only (`--kv-tiers vram+ram+ssd`). Split-attention SDPA over mixed tiers is fully implemented for Gemma 3; other architectures warn and may produce incorrect output on long sequences
-- **Chat Templates**: Data-driven per-architecture prompt formatting (ChatML, Gemma, Gemma 4, Qwen 3.5, GLM-4, GPT-OSS, Llama 4)
+- **Tiered KV Cache**: VRAM + RAM + SSD offloading with async prefetch, on unified-memory backends only (`--kv-tiers vram+ram+ssd`). Split-attention SDPA over mixed tiers has no complete implementation on any current architecture: it warns and may produce incorrect output on long sequences
+- **Chat Templates**: Data-driven per-architecture prompt formatting (ChatML, Gemma 4, Qwen 3.5, DeepSeek V4, Llama 4)
 - **Recipes**: Optional proven-default configs per model/hardware/quant combo
 - **Model Download**: `agave pull <org/repo>`, download GGUF models from HuggingFace Hub with auto quant selection
 - **Interactive REPL**: Multi-turn chat with `/help`, `/clear`, `/stats`, `/model`, `/quit`
 - **HTTP Server**: OpenAI + Anthropic API compatible, built-in chat UI, Prometheus metrics, Bearer token auth
-- **Multimodal**: Image (`--image`) and video frames (`--video`, `--video-fps`) via Gemma 4 SigLIP-2, Gemma 3 SigLIP, and Qwen VL encoders; also HTTP API
+- **Multimodal**: Image (`--image`) and video frames (`--video`, `--video-fps`) via Gemma 4 SigLIP-2 and Qwen VL encoders; also HTTP API
 - **Structured Output**: GBNF grammar (`--grammar-string`, `--grammar`), JSON schema (`--json-schema`), JSON mode (`--json-output`), server `response_format: json_object/json_schema`
 - **Full Sampling**: CLI: temperature, top-k, top-p, min-p, repeat penalty, DRY, XTC, Mirostat, seed. HTTP API also: frequency/presence penalties, stop sequences
 - **Batched Prefill**: Chunked GEMM + fused FlashAttention-2 for fast prompt processing
@@ -192,14 +192,9 @@ Supports heterogeneous setups: different backends (CUDA + Vulkan + CPU), archite
 
 | Model | Sizes | Status | Quant Types | Notes |
 |-------|-------|--------|-------------|-------|
-| Gemma 3 | 1B, 4B, 12B, 27B | Working | BF16, Q8_0, Q4_0, Q4_K, Q5_K, Q6_K, MLX 4-bit | SPM tokenizer, GELU activation, batched prefill |
 | Gemma 4 | E2B, E4B, 26B-A4B | Working | Q8_0, Q4_K, MLX 4-bit | MoE (top-8), channel-based chat template, multimodal vision (SigLIP-2) |
 | Qwen 3.5 | 0.8B, 9B, 27B, 35B | Working | Q4_0, Q4_K_M, Q8_0, BF16, MLX 4-bit | Hybrid DeltaNet SSM + attention |
 | Qwen4-Exp | Flash-Next | Working | NVFP4, BF16, MLX 4-bit | Gated DeltaNet 36× + QSA 12×, PLE 51B ngram (mmap'd, not yet read), HC 4×320, 512 experts |
-| GPT-OSS | 20B | Partial | Q4_0 | MoE, sliding window, attention sinks (poor output quality) |
-| Nemotron-H | n/a | Partial | Q5_0 | Mamba-2 + attention hybrid, GGUF (poor output quality) |
-| Nemotron Nano | 30B | Partial | MLX 4-bit, NVFP4 | SSM + MoE + attention hybrid, SafeTensors (poor output quality) |
-| GLM-4 MoE Lite | 4.7B | Partial | MLX 4/6/8-bit | MLA + MoE (GGUF compatibility issue, poor output quality) |
 | DiffusionGemma | 26B-A4B | Working | BF16 | Block diffusion: 256-token canvas, MoE top-8, SafeTensors only |
 | DeepSeek V4 Flash | 0731 | Working | Q4_K, Q8_0 | MLA, 4-stream HC, CSA/HCA compressors, LID, 256 MoE experts top-6, MTP heads (`--mtp-model`) |
 | Llama 4 | Scout | Working | Q4_K, Q8_0 | iRoPE, chunked attention, MoE top-1 + shared expert, batched prefill |
@@ -372,12 +367,9 @@ Measured on Apple M4 Pro (48 GB unified memory). See [docs/BENCHMARKS.md](docs/B
 |-------|-------|---------|---------------:|-------------:|
 | Qwen3.5 0.8B | Q8_0 | Metal | 125† | n/a |
 | Qwen3.5 9B | Q8_0 | Metal | 41.7 | **1.67x** |
-| Gemma 3 4B | MLX-Q4 | Metal | 78.1 | n/a |
-| Gemma 3 12B | Q8_0 | Metal | 22.3 | **1.19x** |
 | Gemma 4 E2B | Q4_K_M | Metal | 21.8 | n/a |
 | Gemma 4 E4B | Q4_K_M | Metal | 14.4 | n/a |
 | Gemma 4 26B-A4B | Q4_K_M | Metal | 4.2 | n/a |
-| Gemma 3 27B | QAT 4-bit | Metal | 6.3 | n/a |
 | Qwen3.5 9B | MLX-4bit | Metal | 24.9 | n/a |
 
 ### Multi-Backend (Qwen3.5 0.8B Q8_0)
@@ -544,12 +536,11 @@ zig build -Denable-metal=false -Denable-vulkan=false -Denable-cuda=false -Denabl
 zig build -Denable-cpu=false
 
 # Disable specific model architectures
-zig build -Denable-glm4=false
+zig build -Denable-llama4=false
 
-# Minimal build: single model (Gemma 3) + single backend (Metal)
-zig build -Denable-gemma4=false -Denable-qwen35=false -Denable-qwen4exp=false -Denable-qwen4-exp=false \
-  -Denable-gpt-oss=false -Denable-nemotron-h=false -Denable-nemotron-nano=false \
-  -Denable-glm4=false -Denable-llama4=false -Denable-diffusion-gemma=false \
+# Minimal build: single model (Gemma 4) + single backend (Metal)
+zig build -Denable-qwen35=false -Denable-qwen4exp=false -Denable-qwen4-exp=false \
+  -Denable-llama4=false -Denable-diffusion-gemma=false \
   -Denable-deepseek4=false -Denable-dflash2=false \
   -Denable-vulkan=false -Denable-cuda=false -Denable-rocm=false -Denable-webgpu=false
 
@@ -581,16 +572,11 @@ zig build -Dtarget=aarch64-linux-gnu -Denable-metal=false
 
 | Option | Type | Default | Purpose |
 |--------|------|---------|---------|
-| `enable-gemma3` | bool | true | Gemma 3 model support |
 | `enable-gemma4` | bool | true | Gemma 4 model support |
 | `enable-diffusion-gemma` | bool | true | DiffusionGemma model support |
 | `enable-qwen35` | bool | true | Qwen 3.5 model support |
 | `enable-qwen4exp` | bool | true | Qwen 3.8 Flash-Next GGUF (`qwen4exp`) model support |
-| `enable-qwen4-exp` | bool | true | Qwen4-Exp SafeTensors (`qwen4_exp`) model support |
-| `enable-gpt-oss` | bool | true | GPT-OSS model support |
-| `enable-nemotron-h` | bool | true | Nemotron-H model support |
-| `enable-nemotron-nano` | bool | true | Nemotron Nano model support |
-| `enable-glm4` | bool | true | GLM-4 model support |
+| `enable-qwen4-exp` | bool | true | Qwen4-Exp SafeTensors (`qwen4_exp`) model support; runs on the Qwen3.5 implementation, so it also needs `enable-qwen35` |
 | `enable-deepseek4` | bool | true | DeepSeek V4 Flash model support |
 | `enable-llama4` | bool | true | Llama 4 model support |
 | `enable-dflash2` | bool | true | DFlash2 block-diffusion drafter support |
@@ -608,7 +594,7 @@ recipe: Qwen3.5 Q4 Metal
 ./zig-out/bin/agave model.gguf -t 0  # overrides recipe temperature
 ```
 
-Current presets: Qwen3.5 Q4 Metal, Qwen2 Q4 Metal, Gemma Q4 Metal, GPT-OSS Metal, GLM-4 generic, DeepSeek V4 Flash, DeepSeek V2 generic, Llama 4 generic, CPU generic. Add new recipes in `src/recipe.zig`.
+Current presets: Qwen3.5 Q4 Metal, Gemma Q4 Metal, DeepSeek V4 Flash, Llama 4 generic, CPU generic. Add new recipes in `src/recipe.zig`.
 
 ## Project Structure
 
@@ -654,10 +640,6 @@ docker buildx build --load -t agave \
   --build-arg ENABLE_QWEN35=false \
   --build-arg ENABLE_QWEN4EXP=false \
   --build-arg ENABLE_QWEN4_EXP=false \
-  --build-arg ENABLE_GPT_OSS=false \
-  --build-arg ENABLE_NEMOTRON_H=false \
-  --build-arg ENABLE_NEMOTRON_NANO=false \
-  --build-arg ENABLE_GLM4=false \
   --build-arg ENABLE_GEMMA4=false \
   --build-arg ENABLE_DIFFUSION_GEMMA=false \
   --build-arg ENABLE_DEEPSEEK4=false \

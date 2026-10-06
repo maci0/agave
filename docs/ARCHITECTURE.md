@@ -48,7 +48,7 @@ agave/
 │   │   ├── json.zig        # JSON field extraction, encoding, and form-parsing
 │   │   ├── idempotency.zig # Bounded replay ledger for mutating chat routes (X-Request-Id)
 │   ├── display.zig        # Rich CLI output (banner, stats, progress)
-│   ├── chat_template.zig  # Data-driven chat prompt templates (ChatML, Gemma, Gemma 4, Qwen35, GLM-4, GPT-OSS, Llama 4)
+│   ├── chat_template.zig  # Data-driven chat prompt templates (ChatML, Gemma 4, Qwen35, DeepSeek V4, Llama 4)
 │   ├── recipe.zig         # Optional preset configs per model/hardware/quant combo
 │   ├── grammar.zig        # GBNF parser, JSON schema -> grammar converter, constrained decoding
 │   ├── calibrate.zig      # TriAttention calibration subcommand (agave calibrate)
@@ -79,16 +79,10 @@ agave/
 │   ├── lora.zig           # LoRA adapter merge; Handle.dispose unmerges
 │   ├── models/
 │   │   ├── model.zig      # Model interface (forward, prefill, resetCache, cancel)
-│   │   ├── gemma3.zig     # Gemma 3 (GQA, GELU, post-norms)
 │   │   ├── gemma4.zig     # Gemma 4 (dual attention, MoE/dense variants, PLE)
 │   │   ├── diffusion_gemma.zig # DiffusionGemma (block diffusion, bidirectional canvas)
 │   │   ├── qwen35.zig     # Qwen 3.5 (hybrid DeltaNet SSM + attention)
 │   │   ├── qwen4exp.zig   # Qwen 3.8 Flash-Next GGUF (HC, GDN sigmoid gate, QSA, n-gram PLE, 512-expert MoE)
-│   │   ├── qwen4_exp.zig  # Qwen4-Exp Flash-Next SafeTensors (36× DeltaNet + 12× QSA, NVFP4, ngram mmap, not yet read)
-│   │   ├── gpt_oss.zig    # GPT-OSS (MoE, sliding window, attention sinks)
-│   │   ├── nemotron_h.zig # Nemotron-H (Mamba-2 + attention hybrid)
-│   │   ├── glm4.zig       # GLM-4 MoE Lite (MLA (DeepSeek-V2) + MoE, MLX 4/6/8-bit)
-│   │   ├── nemotron_nano.zig # Nemotron Nano (SSM + MoE + attention, NVFP4)
 │   │   ├── deepseek4.zig    # DeepSeek V4 Flash (HC, MLA, CSA/HCA, LID; Vulkan/WebGPU GEMV shaders; CpuBackend for rms/SDPA/HC)
 │   │   ├── llama4.zig       # Llama 4 (iRoPE, chunked attention, top-1 MoE)
 │   │   ├── dflash2.zig      # DFlash2 block-diffusion drafter (binds target embeddings/LM head)
@@ -219,7 +213,7 @@ When you run `agave model.gguf "Hello"`:
 
 ```
 1. LOAD        model.gguf → mmap → Format interface
-2. DETECT      "general.architecture" = "gemma3" → Gemma3Model
+2. DETECT      "general.architecture" = "gemma4" → Gemma4Model
 3. BACKEND     macOS → Metal GPU (auto), --backend cpu → CPU fallback
 4. RECIPE      Match arch + backend + quant → apply proven defaults
 5. TEMPLATE    arch → ChatTemplate → format prompt with role markers
@@ -291,12 +285,9 @@ When you run `agave model.gguf "Hello"`:
 
 | Preset | Models | EOG Tokens | Notes |
 |--------|--------|------------|-------|
-| `chatml` | Nemotron-H, Nemotron-Nano | `<\|im_end\|>`, `<\|endoftext\|>` | Standard ChatML |
+| `chatml` | fallback for archs with no specific template | `<\|im_end\|>`, `<\|endoftext\|>` | Standard ChatML |
 | `qwen35` | Qwen 3.5 | `<\|im_end\|>`, `<\|endoftext\|>` | ChatML + `<think>\n\n</think>\n\n` generation prefix (disables reasoning) |
-| `gemma` | Gemma 3, Gemma 2 | `<end_of_turn>`, `<eos>` | |
 | `gemma4` | Gemma 4 | `<turn\|>`, `<eos>`, `<channel\|>`, `<\|endoftext\|>`, `<\|end\|>` | `<\|channel>0\n<channel\|>` generation prefix |
-| `glm4` | GLM-4 | `<\|endoftext\|>`, `<\|user\|>`, `<\|observation\|>` | `[gMASK]<sop>` prefix, no generation prefix |
-| `gpt_oss` | GPT-OSS Harmony | `<\|end\|>`, `<\|endoftext\|>` | Includes default system prompt + developer role override |
 | `llama4` | Llama 4 | `<\|eot\|>`, `<\|end_of_text\|>` | Default system prompt |
 | `deepseek4` | DeepSeek V4 | `<｜end▁of▁sentence｜>`, `<｜User｜>` | BOS prefix, `</think>` generation prefix |
 
@@ -306,8 +297,6 @@ When you run `agave model.gguf "Hello"`:
 |--------|------|---------|--------------|
 | Qwen3.5 Q4 Metal | qwen3* | Metal | temp=0.6, top_p=0.9, repeat=1.1 |
 | Gemma Q4 Metal | gemma* | Metal | temp=0.7, top_p=0.95 |
-| GPT-OSS Metal | gpt* | Metal | temp=0.5, ctx=2048 |
-| GLM-4 generic | glm4* | any | temp=0.7, repeat=1.1 |
 | CPU generic | any | CPU | max_tokens=256, ctx=2048 |
 
 User CLI flags always override recipe defaults.
@@ -514,12 +503,11 @@ DDTree speculative decode -> output tokens
 |-------|----------|-------|--------|
 | `f32` | 32 | 1 | Reference |
 | `f16` | 16 | 1 | Embeddings |
-| `bf16` | 16 | 1 | Gemma3, Nemotron SSM layers |
+| `bf16` | 16 | 1 | SafeTensors weights, SSM layers |
 | `q8_0` | 8.5 | 32 | General |
 | `q6_k` | 6.6 | 256 | General |
 | `q5_k` | 5.5 | 256 | General |
 | `q4_k` | 4.8 | 256 | General |
-| `q5_0` | 5.5 | 32 | Nemotron-H |
 | `q4_0` | 4.5 | 32 | General |
 | `q4_1` | 5.0 | 32 | General |
 | `q3_k` | 3.4 | 256 | Compact |
@@ -573,7 +561,7 @@ DDTree speculative decode -> output tokens
 - **Mixed path**: GPU SDPA with softmax statistics runs concurrently with CPU SDPA on the thread pool, then partial outputs are merged via [FlashAttention-2 (Dao, 2023)](https://arxiv.org/abs/2307.08691) online softmax correction (exact, no approximation).
 - **CPU-only path**: falls back to CPU SDPA on the thread pool when all blocks have been offloaded.
 
-Split-attention SDPA is only fully implemented for Gemma 3; other architectures tier the blocks but compute SDPA against the first block only, so `main.zig` warns at startup that long-sequence output may be wrong.
+Split-attention SDPA has no complete implementation: every architecture tiers the blocks but computes SDPA against the first block only, so `main.zig` warns at startup that long-sequence output may be wrong.
 
 **Paged KV cache and paged SDPA** (`src/kvcache/view.zig`, `src/kvcache/manager.zig`, `src/backend/kernels/cpu/sdpa.zig`):
 - KV cache is organized into 256-token blocks managed by `PagedKvCache` with `RadixTree` prefix sharing and `BlockAllocator` for efficient allocation.
@@ -612,7 +600,6 @@ Vision support is implemented in `src/models/vision.zig` with three auto-detecte
 - Input standardization (`scale * x + bias`, replaces CLIP mean/std normalization).
 - Single linear projection (`mm.input_projection.weight`) to LLM hidden dimension.
 
-**Gemma 3 [SigLIP (Zhai et al., 2023)](https://arxiv.org/abs/2303.15343)** (`gemma3_siglip`):
 - 896x896 input, 14x14 patches -> 4096 patches, no spatial merge.
 - Conv2D patch embedding (with bias), learned 1D position embedding `[embd_dim, n_patches]`.
 - ViT blocks with LayerNorm (with bias), GELU FFN (up+down, no gate), no QK norms.
@@ -631,7 +618,7 @@ Vision support is implemented in `src/models/vision.zig` with three auto-detecte
 2. PATCH EMBED   Conv2D: [H, W, 3] -> [n_patches, embd_dim]
 3. POS EMBED     add learned position embeddings (1D or 2D depending on variant)
 4. VIT BLOCKS    N transformer blocks: LayerNorm/RMSNorm -> SDPA -> FFN -> residuals
-5. POOL          spatial merge (Gemma 4: 3x3 avg pool, Qwen VL: 4x MLP, Gemma 3: none)
+5. POOL          spatial merge (Gemma 4: 3x3 avg pool, Qwen VL: 4x MLP)
 6. STANDARDIZE   input standardization (Gemma 4 only: scale * x + bias)
 7. PROJECT       linear projection to LLM hidden dimension
 8. NORMALIZE     RMSNorm / soft_emb_norm on projected tokens

@@ -174,7 +174,7 @@ pub const LoadInfo = struct {
     bos_id: u32 = 0,
     /// Number of additional EOG token IDs (beyond EOS).
     n_eog: usize = 0,
-    /// Chat template name (e.g., "chatml", "gemma", "qwen35", "gpt_oss").
+    /// Chat template name (e.g., "chatml", "gemma4", "qwen35", "deepseek4").
     template_name: []const u8 = "",
     /// Model format ("GGUF v3", "SafeTensors").
     format_name: []const u8 = "",

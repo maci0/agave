@@ -1122,7 +1122,7 @@ const gguf_hf_meta_map = [_]struct { []const u8, []const u8 }{
 const layer_count_keys = [_][]const u8{ "num_hidden_layers", "block_count" };
 
 /// Translate a GGUF-style metadata key to HuggingFace config.json key.
-/// Handles both arch-prefixed keys ("gemma3.block_count") and bare keys
+/// Handles both arch-prefixed keys ("gemma4.block_count") and bare keys
 /// ("general.architecture", "tokenizer.ggml.eos_token_id").
 fn ggufKeyToHf(key: []const u8) ?[]const u8 {
     // "general.architecture" → "model_type"

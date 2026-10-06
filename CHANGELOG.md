@@ -12,6 +12,9 @@ must still appear under **Changed** or **Breaking** below. See
 ## [Unreleased]
 
 ### Fixed
+- A NaN or infinite NVFP4 `weight_global_scale` was used as a divisor, turning
+  every element of the expert output buffer into NaN. Non-finite scales are now
+  left alone, as a missing scale tensor already was.
 - `POST /v1/chat` and `POST /v1/chat/regenerate` recorded their idempotency key
   with `200 OK` even when generation failed, and answered that failure as a
   200. A client retrying after a lost response on a transient forward, enqueue,
@@ -77,7 +80,44 @@ must still appear under **Changed** or **Breaking** below. See
   true for `--tp`; this closes the `--pp` side. `docs/PARALLELISM.md` records
   the rule.
 
+### Breaking
+- **Five model architectures removed: Gemma 3 (and Gemma 2), GLM-4 (and DeepSeek
+  V2/V3), GPT-OSS, Nemotron-H, Nemotron-Nano.** Their arch strings no longer
+  resolve, so those checkpoints are rejected at load with the supported list.
+  The `qwen2` and `qwen3` strings are also gone: the Qwen floor is now 3.5,
+  which drops Qwen2/Qwen3 dense models and the DeepSeek-R1-Qwen3 distills.
+  Eight architectures remain: Gemma 4, DiffusionGemma, Qwen 3.5, Qwen 3.8
+  Flash-Next GGUF, Qwen4-Exp SafeTensors, DeepSeek V4, Llama 4, and the DFlash2
+  drafter. The matching `-Denable-*` flags, Dockerfile `ARG`s and compose
+  build-args are removed; a build passing them now fails on an unknown option.
+
+  Three features lose their only implementation and now warn or are inert
+  rather than silently doing the wrong thing:
+  - `--kv-tiers` split-attention SDPA was complete only on Gemma 3. It now
+    warns unconditionally that long-sequence output may be wrong.
+  - `--spec-mode ddtree` ancestor-masked verification (`be.sdpaTree`) was
+    Gemma 3 only. DeepSeek V4 still has `forwardTree`/`treeLogits`, but with
+    standard causal attention.
+  - `--megakernel` on Metal is down to Qwen 3.5 and Gemma 4.
+
+  The browser WASM module now carries Gemma 4 instead of Gemma 3. MXFP4 stays:
+  DeepSeek V4 and all five backends use it, so dropping GPT-OSS removed the
+  model, not the quant path. `docs/TEST_MATRIX.md` pass totals are marked stale
+  rather than recomputed, since the sweep has not been re-run.
+
 ### Changed
+- **`qwen4_exp` runs the Qwen3.5 implementation** instead of its own
+  near-identical copy of it. The two differed only in metadata key handling
+  that `gguf_hf_meta_map` in `src/format/safetensors.zig` already performs,
+  while the copy had missed the GPU prefill fixes: it skipped
+  `invalidateActivation` and the chunk-boundary `sync()`, so any prompt past
+  the first 256-token chunk read the previous chunk's device copy. The arch,
+  its arch strings and `-Denable-qwen4-exp` are unchanged, but that flag now
+  also requires `-Denable-qwen35` and says so at compile time. PLE ngram,
+  hyper-connections, the QSA indexer and MTP-1 were never implemented on this
+  path; `docs/MODELS.md` claimed otherwise and has been corrected. The
+  split-GGUF `qwen4exp` arch, which does implement PLE and hyper-connections,
+  is untouched.
 - **Readiness measures the error rate over a window, not the process lifetime.**
   `GET /ready` and the `agave_ready` gauge still go to 503 when server faults
   reach 50% of at least 10 settled requests, but the ratio now runs from the

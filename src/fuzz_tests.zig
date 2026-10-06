@@ -279,10 +279,7 @@ test "fuzz: chat template format" {
             const templates = [_]chat.ChatTemplate{
                 chat.ChatTemplate.chatml,
                 chat.ChatTemplate.qwen35,
-                chat.ChatTemplate.gemma,
                 chat.ChatTemplate.gemma4,
-                chat.ChatTemplate.glm4,
-                chat.ChatTemplate.gpt_oss,
                 chat.ChatTemplate.llama4,
             };
             const tmpl = templates[smith.indexWithHash(templates.len, 4)];
@@ -1727,7 +1724,7 @@ test "fuzz: Recipe.match no crash" {
     const recipe_mod = @import("recipe.zig");
     try std.testing.fuzz({}, struct {
         fn f(_: void, smith: *Smith) !void {
-            const archs = [_][]const u8{ "gemma3", "gemma4", "qwen3", "gpt", "glm4", "llama4", "nemotron", "unknown" };
+            const archs = [_][]const u8{ "gemma4", "qwen35", "qwen4exp", "deepseek4", "llama4", "unknown" };
             const backends = [_][]const u8{ "Metal", "Vulkan", "CPU", "CUDA", "WebGPU", "" };
             const quants = [_][]const u8{ "Q4_K", "Q8_0", "Q4_0", "BF16", "F16", "" };
             const arch = archs[smith.indexWithHash(archs.len, 0)];
@@ -1898,10 +1895,7 @@ test "fuzz: chat template all presets" {
             const templates = [_]chat.ChatTemplate{
                 chat.ChatTemplate.chatml,
                 chat.ChatTemplate.qwen35,
-                chat.ChatTemplate.gemma,
                 chat.ChatTemplate.gemma4,
-                chat.ChatTemplate.glm4,
-                chat.ChatTemplate.gpt_oss,
                 chat.ChatTemplate.llama4,
             };
 
@@ -2512,9 +2506,7 @@ test "fuzz: chat template formatContinuation" {
             const templates = [_]chat.ChatTemplate{
                 chat.ChatTemplate.chatml,
                 chat.ChatTemplate.qwen35,
-                chat.ChatTemplate.gemma,
                 chat.ChatTemplate.gemma4,
-                chat.ChatTemplate.glm4,
             };
             const tmpl = templates[smith.indexWithHash(templates.len, 2)];
             const result = tmpl.formatContinuation(std.testing.allocator, msg_buf[0..msg_len]) catch return;
@@ -3067,7 +3059,7 @@ test "fuzz: Recipe match + applyDefaults cycle" {
     const recipe_mod = @import("recipe.zig");
     try std.testing.fuzz({}, struct {
         fn f(_: void, smith: *Smith) !void {
-            const archs = [_][]const u8{ "gemma3", "gemma4", "qwen3", "gpt", "glm4", "llama4", "nemotron", "unknown", "" };
+            const archs = [_][]const u8{ "gemma4", "qwen35", "qwen4exp", "deepseek4", "llama4", "unknown", "" };
             const backends = [_][]const u8{ "Metal", "Vulkan", "CPU", "CUDA", "WebGPU", "ROCm", "" };
             const quants = [_][]const u8{ "Q4_K", "Q8_0", "Q4_0", "BF16", "F16", "IQ4_XS", "" };
             const arch = archs[smith.indexWithHash(archs.len, 0)];

@@ -97,7 +97,7 @@ Non-negotiable. Every change must respect all of them.
 - `build.zig.zon` has zero Zig package dependencies. Keep it that way. CLI is `src/cli.zig`. Terminal I/O is `src/term.zig` (posix + `std.unicode`, no libc, no `wcwidth`, no terminal frameworks).
 - Cross-compile must keep working, matching `.github/workflows/ci.yml`: `x86_64-linux-gnu`, `aarch64-linux-gnu`, `aarch64-macos` (Metal off), `x86_64-linux-musl`, `aarch64-linux-musl` (static, CPU-only), plus the separate `wasm32-freestanding` build.
 - Production is ReleaseFast and stripped (unstripped binaries embed host paths). `agave-debug` and tests are ReleaseSafe: Debug optimize mode breaks linking with GCC 16 `.sframe`. Do not switch tests to ReleaseFast: that no-ops `std.debug.assert`.
-- One `-Denable-*` model flag per architecture: 12 architectures, plus the DFlash2 block-diffusion drafter. The slug is not the display name: `gemma3` (Gemma3), `gemma4` (Gemma4), `diffusion-gemma` (DiffusionGemma), `qwen35` (Qwen3.5), `qwen4exp` (Qwen 3.8 Flash-Next GGUF), `qwen4-exp` (Qwen4-Exp SafeTensors), `gpt-oss` (GPT-OSS), `nemotron-h` (Nemotron-H), `nemotron-nano` (Nemotron-Nano), `glm4` (GLM-4), `deepseek4` (DeepSeek V4), `llama4` (Llama 4), `dflash2` (DFlash2 drafter).
+- One `-Denable-*` model flag per architecture: 7 architectures, plus the DFlash2 block-diffusion drafter. The slug is not the display name: `gemma4` (Gemma4), `diffusion-gemma` (DiffusionGemma), `qwen35` (Qwen3.5), `qwen4exp` (Qwen 3.8 Flash-Next GGUF), `qwen4-exp` (Qwen4-Exp SafeTensors, needs `qwen35`), `deepseek4` (DeepSeek V4), `llama4` (Llama 4), `dflash2` (DFlash2 drafter).
 - Committed GPU kernel artifacts (`src/backend/kernels/**/*.ptx`, `.spv`, `.hsaco`, `.metal`, `.wgsl`) are `@embedFile`d and are *not* rebuilt by `zig build`. Editing a kernel source without regenerating its artifact ships stale GPU code, and CI's kernel-freshness job (`scripts/check-shader-artifacts.sh --ptx-only`) fails on PTX drift. Regenerate and commit:
   - PTX: `zig build ptx -Dcuda-sm=<sm>`, copy `zig-out/ptx/*.ptx` into `src/backend/kernels/cuda/`. `cuda.zig` embeds `all.ptx` only, but every committed `.ptx` must be regenerated together.
   - SPIR-V: `glslangValidator -V --target-env vulkan1.1` per `.comp` in `src/backend/kernels/vulkan/`.
@@ -124,7 +124,7 @@ Non-negotiable. Every change must respect all of them.
 
 **Metal threadgroup memory ≤ 32KB.** Sum `q_local + kv_block + out_acc + scores + shared`. `makePipeline` fails silently without its error logging.
 
-**WASM runs init, parse, and tokenize only.** A Zig 0.16 + LLVM 21 wasm32 codegen bug (invalid cast in SIMD vector lowering) blocks the forward pass: `agave_generate` is exported and tokenizes, then reports the token count instead of generating text. `zig build wasm` compiles the module with Gemma3 only; every other arch is off there.
+**WASM runs init, parse, and tokenize only.** A Zig 0.16 + LLVM 21 wasm32 codegen bug (invalid cast in SIMD vector lowering) blocks the forward pass: `agave_generate` is exported and tokenizes, then reports the token count instead of generating text. `zig build wasm` compiles the module with Gemma4 only; every other arch is off there.
 
 **Kernel targets.** NVIDIA `nvptx64-cuda`, AMD `amdgcn-amdhsa`. Vulkan = GLSL compute → embedded SPIR-V. WebGPU = WGSL. No OpenCL or PAL.
 

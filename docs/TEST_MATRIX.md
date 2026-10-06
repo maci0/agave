@@ -3,7 +3,7 @@
 **Date**: 2026-05-19 (last full re-run). **GPU kernel correctness (2026-09-01):** there is now a
 harness for it, `agave-bench <kernel> --validate`, which re-runs the kernel on the CPU backend with
 byte-identical inputs and exits non-zero past a 2% relative tolerance. 44 kernels x ROCm/Vulkan, all 88 pairs pass at two values of k, covering all 18 GEMV dtypes;
-run the whole sweep with `zig build validate -Dvalidate-backend=<be>`; the MoE forward path is checked with `tools/synth-moe/moeify_gguf.py`, which derives an identity-preserving MoE model from any dense checkpoint; see "GPU Kernel Validation" in BENCHMARKS.md for what it found. **Status note (2026-07-21):** matrix coverage lags shipped features. Placeholder rows added for Llama 4, DiffusionGemma, GPT-OSS, Nemotron-H (not yet tested); the DeepSeek V4 placeholder has since been filled in. Still missing: full Vulkan/ROCm/WebGPU correctness, LoRA, and newer `--spec-mode` values. Re-run before release; treat PASS cells below as historical, not complete coverage.
+run the whole sweep with `zig build validate -Dvalidate-backend=<be>`; the MoE forward path is checked with `tools/synth-moe/moeify_gguf.py`, which derives an identity-preserving MoE model from any dense checkpoint; see "GPU Kernel Validation" in BENCHMARKS.md for what it found. **Status note (2026-07-21):** matrix coverage lags shipped features. Placeholder rows added for Llama 4 and DiffusionGemma (not yet tested); the DeepSeek V4 placeholder has since been filled in. Still missing: full Vulkan/ROCm/WebGPU correctness, LoRA, and newer `--spec-mode` values. Re-run before release; treat PASS cells below as historical, not complete coverage.
 
 **Hardware**:
 - Metal/CPU: Apple M4 Pro (14-core CPU, 20-core GPU), 48 GB unified memory, macOS 26.4
@@ -20,20 +20,15 @@ run the whole sweep with `zig build validate -Dvalidate-backend=<be>`; the MoE f
 | 1 | Gemma 4 26B-A4B | Q4_K_M | 15.6 GB | PASS "4" | PASS "4" | n/a | MoE, 30 layers |
 | 2 | Gemma 4 E2B | Q4_K_S | 2.8 GB | PASS | PASS | n/a | Dense, 35 layers |
 | 3 | Gemma 4 E4B | Q4_K_S | 4.5 GB | PASS "4" | PASS (slow) | n/a | Dense, 42 layers, ~60s CPU prefill |
-| 4 | Gemma 3 27B QAT | Q4_0 | 14.5 GB | PASS "Four." | PASS "Four." | n/a | |
 | 5 | Qwen 3.5 0.8B | Q8_0 | 764 MB | PASS "Four" | PASS "Four" | PASS "4" (71 tok/s) | |
 | 6 | Qwen 3.5 9B | Q4_K_M | 5.2 GB | PASS "Four" | PASS "Four" | n/a | |
 | 7 | Qwen 3.5 9B | Q8_0 | 8.9 GB | PASS "4" | PASS "4" | n/a | |
 | 7b | Qwen 3.8 27B | MLX-4bit ST | 15.0 GB | PASS "Hi" | PASS "Hi" | n/a | Dense hybrid. Greedy "Say hi in one word." EOS after Hi. WebGPU PASS "Hi" (vocab GEMV chunked at 65535; DeltaNet cache must not bump generation on SSM download). Vulkan: no ICD here (CPU fallback PASS). BF16/GGUF not on disk. Skip extra RMSNorm +1 on MLX-sanitized ST. |
-| 8 | GLM-4.7 Flash | Q8_0 | 30 GB | FAIL | FAIL | n/a | GGUF issue, also fails in llama.cpp |
-| 9 | Nemotron-Nano 4B | Q8_0 | 3.9 GB | PASS | PASS | n/a | Prompt-sensitive; answers correctly with clear prompts |
 | 10 | DeepSeek V4 | MLX-Q4 ST | 141 GB | PASS greedy France / 2+2 / sky (CpuBackend) | PASS (same) | PASS 2+2 on GB10 (official FP4/FP8 checkpoint, sm_121) | WebGPU PASS France + 2+2 (native MLX-Q / MXFP4 GEMV). Vulkan (KosmicKrisp) PASS France + 2+2 (same shaders). CUDA: native MLX/MXFP4 GEMV on GB10 (sync copy-back per call) + bf16 attention on GPU; q8_0 SDPA stays CPU. Flash 0731 `--kv-type nvfp4_ds_mla`. TP=2 expert-parallel over NCCL/RoCE (2× DGX Spark) verified end-to-end: `--tp 2 --peers <ip> --transport nccl`, coherent output, identical logits across ranks, 2+2 → "4". Official `deepseek-ai/DeepSeek-V4-Flash-0731` (FP4 experts gs=32 E8M0, F8_E4M3 attention) loads via the loader fusion in `format/safetensors.zig`. Metal/ROCm still use dedicated CpuBackend for GEMV. |
 | 11 | Llama 4 | n/a | n/a | Not tested | Not tested | n/a | iRoPE, chunked attention, MoE |
 | 12 | DiffusionGemma | n/a | n/a | Not tested | Not tested | n/a | Block diffusion |
-| 13 | GPT-OSS Harmony | n/a | n/a | Not tested | Not tested | n/a | |
-| 14 | Nemotron-H | n/a | n/a | Not tested | Not tested | n/a | |
 
-**Result: 10/14 architectures pass on Metal+CPU (row 7b is an extra Qwen configuration, 15 rows total). 1 failure (GLM-4) also broken in llama.cpp. 4 architectures not yet tested.**
+**Totals are stale.** Gemma 3, GLM-4, GPT-OSS, Nemotron-H and Nemotron-Nano were removed from the engine and their rows deleted; the remaining rows are historical passes, not a recomputed score. Re-run the sweep before quoting a number.
 
 ## KV Cache Quantization (Gemma 4 26B, Metal)
 
@@ -113,7 +108,6 @@ run the whole sweep with `zig build validate -Dvalidate-backend=<be>`; the MoE f
 |-------|-------|:---------:|:-----:|:-----:|
 | Qwen 3.5 0.8B | Q8_0 | 140.4 tok/s | 183.3 tok/s | **1.31×** |
 | Qwen 3.5 9B | Q8_0 | 25.0 tok/s | 41.7 tok/s | **1.67×** |
-| Gemma 3 12B | Q8_0 | 18.7 tok/s | 22.3 tok/s | **1.19×** |
 
 *llama.cpp numbers from earlier benchmark run (2026-03-24). Agave consistently 1.2-1.7× faster on Metal decode.*
 
@@ -123,8 +117,6 @@ run the whole sweep with `zig build validate -Dvalidate-backend=<be>`; the MoE f
 
 | Category | Passed | Failed | Total |
 |----------|:------:|:------:|:-----:|
-| Model × Metal | 10 | 1 (GLM-4) | 11 |
-| Model × CPU | 10 | 1 (GLM-4) | 11 |
 | Model × CUDA | 5 | 0 | 5 |
 | KV Quantization | 7 | 0 | 7 |
 | KV Eviction | 2 | 0 | 2 |
@@ -133,7 +125,7 @@ run the whole sweep with `zig build validate -Dvalidate-backend=<be>`; the MoE f
 | Distributed | 8 | 0 | 8 |
 | **Total** | **48** | **2** | **50** |
 
-**Overall: 48/50 tests pass (96%). The 2 failures are GLM-4 which also fails in llama.cpp (broken GGUF conversion).**
+**Overall totals are stale** after the Gemma 3 / GLM-4 / GPT-OSS / Nemotron removals. Re-run before quoting a pass rate.
 
 ## Additional Quant Format Tests (2026-04-16)
 
@@ -141,7 +133,6 @@ run the whole sweep with `zig build validate -Dvalidate-backend=<be>`; the MoE f
 |-------|-------|:-----:|:---:|-------|
 | Gemma 4 E2B (bartowski) | Q4_K_M | PASS | PASS | Different converter, also works |
 | Gemma 4 E4B (bartowski) | Q4_K_M | PASS | PASS | |
-| Gemma 3 12B | Q8_0 | PASS | PASS | |
 | Qwen 3.5 35B-A3B | Q4_K_M | PASS | PASS | MoE+SSM hybrid, fixed: addRmsNorm residual in moeLayer |
 
 ## Performance Regression Analysis (2026-04-16, Metal, M4 Pro)
@@ -199,6 +190,5 @@ run the whole sweep with `zig build validate -Dvalidate-backend=<be>`; the MoE f
 
 ## Known Issues
 
-1. **GLM-4.7 Flash**, degenerate output on both agave and llama.cpp. Likely broken GGUF conversion. The older ChatGLM-4 9B (`chatglm` arch) is a different architecture not currently supported.
 2. **Qwen 3.5 35B-A3B**, FIXED. Was missing addRmsNorm residual in moeLayer. Now producing coherent output.
 3. **Gemma 4 E4B CPU**, works but extremely slow (~60s prefill for 4.5GB model with 42 layers).

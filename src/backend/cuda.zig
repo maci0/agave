@@ -1359,7 +1359,7 @@ pub const CudaBackend = struct {
         self.fusedFfnGateUp(self.fn_fused_ffn_q8, .q8_0, x, w_gate, w_up, ff_out, n_ff, n_embd);
     }
 
-    /// Fused FFN: gelu(W_gate @ x) * (W_up @ x) in a single dispatch (Gemma 3/4).
+    /// Fused FFN: gelu(W_gate @ x) * (W_up @ x) in a single dispatch (Gemma 4).
     pub fn fusedFfnGateUpGeluQ8(
         self: *CudaBackend,
         x: [*]const f32,
@@ -1487,7 +1487,7 @@ pub const CudaBackend = struct {
         self.launch(self.fn_mega_qwen35_q8, n_blocks, block_size, reduction_smem, &params);
     }
 
-    /// Dispatch the Gemma 3/4 Q4_K true megakernel: single launch for all layers.
+    /// Dispatch the Gemma 4 Q4_K true megakernel: single launch for all layers.
     /// Same cooperative grid sync pattern as Qwen 3.5.
     pub fn dispatchMegakernelGemmaQ4K(
         self: *CudaBackend,

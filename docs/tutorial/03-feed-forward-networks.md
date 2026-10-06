@@ -318,7 +318,7 @@ ops = [ {w: gate_data, dtype: gate.dtype, y: gate_buf, n: ff},
 be.gemvMulti(input, ops, k)        # one thread-pool dispatch, both rows in parallel
 ```
 
-**Implementation:** [`src/backend/backend.zig`](../../src/backend/backend.zig) (`GemvOp`, `gemvMulti`), [`src/models/gpt_oss.zig`](../../src/models/gpt_oss.zig) (batched expert gate+up dispatch)
+**Implementation:** [`src/backend/backend.zig`](../../src/backend/backend.zig) (`GemvOp`, `gemvMulti`), [`src/models/qwen35.zig`](../../src/models/qwen35.zig) (batched expert gate+up dispatch)
 
 ## Megakernel Fusion
 
@@ -374,7 +374,7 @@ Enable with `--megakernel`. See [Chapter 13](13-batched-dispatch-and-fusion.md) 
 
 ---
 
-**In the code:** [src/backend/kernels/cpu/activation.zig](../../src/backend/kernels/cpu/activation.zig) (SiLU, GELU), [src/ops/math.zig](../../src/ops/math.zig) (softplus, sigmoid, topKExperts), [src/models/gpt_oss.zig](../../src/models/gpt_oss.zig) (MoE implementation)
+**In the code:** [src/backend/kernels/cpu/activation.zig](../../src/backend/kernels/cpu/activation.zig) (SiLU, GELU), [src/ops/math.zig](../../src/ops/math.zig) (softplus, sigmoid, topKExperts), [src/models/qwen35.zig](../../src/models/qwen35.zig) (MoE implementation)
 
 ```text
 gate = silu(x @ W_gate)              # src/backend/kernels/cpu/activation.zig

@@ -1023,7 +1023,7 @@ test "fuzz: all mega_compose functions" {
     }.f, .{});
 }
 
-test "composeMSL generates Nemotron-H ReLU² FFN" {
+test "composeMSL generates ReLU² FFN" {
     var buf: [32768]u8 = undefined;
     var layer_types: [max_layers]LayerKind = undefined;
     for (0..42) |i| layer_types[i] = .ffn_only;
@@ -1031,7 +1031,7 @@ test "composeMSL generates Nemotron-H ReLU² FFN" {
     layer_types[12] = .attention;
 
     const desc = ModelDesc{
-        .name = "nemotron_h",
+        .name = "relu2_test",
         .n_layers = 42,
         .n_embd = 3136,
         .n_ff = 12544,

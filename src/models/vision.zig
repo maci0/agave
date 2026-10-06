@@ -16,12 +16,6 @@
 //!       no standardization (embd=768, blocks=16, heads=12). mmproj also contains
 //!       a.blk.* audio encoder tensors which are ignored by the vision path.
 //!
-//!   Gemma 3 SigLIP (`gemma3_siglip`):
-//!     - Conv2D patch embedding (14×14 patches from 896×896 image), with bias
-//!     - Learned 1D position embedding [embd_dim, n_patches]
-//!     - ViT blocks with: LayerNorm (with bias), GELU FFN (up+down, no gate), no QK norms
-//!     - Post-encoder LayerNorm (v.post_ln), then mm.soft_emb_norm + mm.input_projection
-//!
 //!   Qwen VL (`qwen_vl`):
 //!     - Conv2D/Conv3d patch embedding with bias; dual conv weights on Qwen2-VL mmproj
 //!     - Qwen3.5/3.8 in-checkpoint ViT: Conv3d (temporal_patch_size=2), still images
@@ -103,8 +97,6 @@ const VisionVariant = enum {
     /// Gemma 4 SigLIP-2: QK norms, SwiGLU, 2D pos, no bias, mm.input_projection.
     /// Used by 26B-A4B (with spatial merge + standardization) and E2B/E4B (without).
     gemma4_siglip2,
-    /// Gemma 3 SigLIP: bias, GELU FFN, 1D pos, post_ln, mm.soft_emb_norm + mm.input_projection.
-    gemma3_siglip,
     /// Qwen VL: fused QKV, bias, GELU FFN, 1D pos, MLP projector mm.0 + mm.2.
     qwen_vl,
 };
@@ -402,7 +394,6 @@ pub const VisionEncoder = struct {
 
         const variant_name: []const u8 = switch (variant) {
             .gemma4_siglip2 => "Gemma4 SigLIP-2",
-            .gemma3_siglip => "Gemma3 SigLIP",
             .qwen_vl => "Qwen VL",
         };
         if (n_merge > 0) {
@@ -486,8 +477,6 @@ pub const VisionEncoder = struct {
         if (fmt.getTensor("v.blk.0.attn_q_norm.weight") != null) return .gemma4_siglip2;
         // Qwen VL: has fused QKV projection
         if (fmt.getTensor("v.blk.0.attn_qkv.weight") != null) return .qwen_vl;
-        // Gemma 3 SigLIP: has separate Q/K/V with bias
-        if (fmt.getTensor("v.blk.0.attn_q.bias") != null) return .gemma3_siglip;
         // Fallback: assume Gemma 4 SigLIP-2
         return .gemma4_siglip2;
     }
@@ -1253,19 +1242,6 @@ pub const VisionEncoder = struct {
                     const base = p * pd;
                     rmsNormInPlaceNoWeight(self.output[base..][0..pd], pd, self.norm_eps);
                 }
-            },
-            .gemma3_siglip => {
-                // Apply soft_emb_norm (RMSNorm) before projection
-                const norm_t = self.fmt.getTensor("mm.soft_emb_norm.weight") orelse return error.MissingTensor;
-                const norm_ptr = self.normAsF32(norm_t, ed);
-                for (0..np) |p| {
-                    const base = p * ed;
-                    rmsNormInPlace(self.hidden[base..][0..ed], norm_ptr, ed, self.norm_eps);
-                }
-
-                // Linear projection (batched across all patches)
-                const proj_t = self.fmt.getTensor("mm.input_projection.weight") orelse return error.MissingTensor;
-                self.batchGemm(self.hidden.ptr, proj_t, self.output.ptr, np, pd, ed);
             },
             .qwen_vl => {
                 // hidden is [n_patches, embd] (pixel-shuffled). Merge 2×2 → n_patches/4 tokens.
@@ -2128,8 +2104,6 @@ test "pixel normalization" {
 
 test "VisionVariant detection constants" {
     // Verify variant enum values exist and are distinct
-    try std.testing.expect(@intFromEnum(VisionVariant.gemma4_siglip2) != @intFromEnum(VisionVariant.gemma3_siglip));
-    try std.testing.expect(@intFromEnum(VisionVariant.gemma3_siglip) != @intFromEnum(VisionVariant.qwen_vl));
     try std.testing.expect(@intFromEnum(VisionVariant.gemma4_siglip2) != @intFromEnum(VisionVariant.qwen_vl));
 }
 
