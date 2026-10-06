@@ -1632,7 +1632,7 @@ test "f16 roundtrip" {
     try std.testing.expectApproxEqAbs(expected_dot, dot8, 1e-3);
 
     // MulAccum with weight to exercise weighted accumulation
-    var acc = [_]f32{0} ** 8;
+    var acc: [8]f32 = @splat(0);
     kvMulAccum(&acc, 2.5, &buf, 8, .f16);
     for (0..8) |i| {
         const f16_val: f32 = @floatCast(@as(f16, @floatCast(src[i])));
@@ -1648,14 +1648,14 @@ test "q8_0 roundtrip accuracy" {
 
     // Per-element verification via unit vector dots
     for (0..8) |i| {
-        var q_unit = [_]f32{0} ** 8;
+        var q_unit: [8]f32 = @splat(0);
         q_unit[i] = 1.0;
         const dot = kvDot(&q_unit, &buf, 8, .q8_0);
         try std.testing.expectApproxEqAbs(src[i], dot, 0.01);
     }
 
     // Dot with all-ones should ≈ sum(src)
-    var q_ones = [_]f32{1.0} ** 8;
+    var q_ones: [8]f32 = @splat(1.0);
     const dot_sum = kvDot(&q_ones, &buf, 8, .q8_0);
     var expected_sum: f32 = 0;
     for (src) |v| expected_sum += v;
@@ -1669,14 +1669,14 @@ test "int8 roundtrip accuracy" {
 
     // Per-element verification via unit vector dots
     for (0..8) |i| {
-        var q_unit = [_]f32{0} ** 8;
+        var q_unit: [8]f32 = @splat(0);
         q_unit[i] = 1.0;
         const dot = kvDot(&q_unit, &buf, 8, .int8);
         try std.testing.expectApproxEqAbs(src[i], dot, 0.01);
     }
 
     // Dot with all-ones should ≈ sum(src)
-    var q_ones = [_]f32{1.0} ** 8;
+    var q_ones: [8]f32 = @splat(1.0);
     const dot_sum = kvDot(&q_ones, &buf, 8, .int8);
     var expected: f32 = 0;
     for (src) |v| expected += v;
@@ -1689,13 +1689,13 @@ test "fp8_e4m3 roundtrip" {
     kvStore(&buf, &src, 8, .fp8_e4m3);
 
     // FP8 E4M3 should preserve these simple values exactly or very closely
-    var q_unit = [_]f32{0} ** 8;
+    var q_unit: [8]f32 = @splat(0);
     q_unit[0] = 1.0;
     const dot = kvDot(&q_unit, &buf, 8, .fp8_e4m3);
     try std.testing.expectApproxEqAbs(src[0], dot, 0.01);
 
     // Test mulAccum
-    var acc = [_]f32{0} ** 8;
+    var acc: [8]f32 = @splat(0);
     kvMulAccum(&acc, 1.0, &buf, 8, .fp8_e4m3);
     for (0..8) |i| {
         try std.testing.expectApproxEqAbs(src[i], acc[i], 0.01);
@@ -1714,7 +1714,7 @@ test "nvfp4 roundtrip" {
     // Non-representable values should be quantized to nearest codebook entry.
     var accum: [8]f32 = undefined;
     for (0..8) |i| {
-        var unit = [_]f32{0} ** 8;
+        var unit: [8]f32 = @splat(0);
         unit[i] = 1.0;
         accum[i] = kvDot(&unit, &buf, 8, .nvfp4);
     }
@@ -1725,7 +1725,7 @@ test "nvfp4 roundtrip" {
     }
 
     // Dot with all-ones should approximate sum(src)
-    var q_ones = [_]f32{1.0} ** 8;
+    var q_ones: [8]f32 = @splat(1.0);
     const dot = kvDot(&q_ones, &buf, 8, .nvfp4);
     var expected: f32 = 0;
     for (accum) |v| expected += v;
@@ -1965,7 +1965,7 @@ test "turbo4 roundtrip accuracy" {
     // Dot with all-ones = sum of dequantized values. Compare against sum of source
     // (WHT redistributes quantization error, so the sums can differ, but should be
     // in the same ballpark).
-    var q_ones = [_]f32{1.0} ** 32;
+    var q_ones: [32]f32 = @splat(1.0);
     const dot_sum = kvDot(&q_ones, &buf, 32, .turbo4);
     try std.testing.expect(std.math.isFinite(dot_sum));
     var src_sum: f32 = 0;
@@ -1975,7 +1975,7 @@ test "turbo4 roundtrip accuracy" {
     // MulAccum MSE: verify quantization is not completely broken.
     // Turbo uses WHT + Lloyd-Max which can have significant per-element error
     // on small (32-element) signals; the turboDot-vs-naive test validates consistency.
-    var acc = [_]f32{0} ** 32;
+    var acc: [32]f32 = @splat(0);
     kvMulAccum(&acc, 1.0, &buf, 32, .turbo4);
     var mse: f32 = 0;
     for (0..32) |i| {
@@ -1996,7 +1996,7 @@ test "turbo3 roundtrip accuracy" {
     kvStore(&buf, &src, 32, .turbo3);
 
     // Dot with all-ones = sum of dequantized. Compare against source sum.
-    var q_ones = [_]f32{1.0} ** 32;
+    var q_ones: [32]f32 = @splat(1.0);
     const dot_sum = kvDot(&q_ones, &buf, 32, .turbo3);
     try std.testing.expect(std.math.isFinite(dot_sum));
     var src_sum: f32 = 0;
@@ -2004,7 +2004,7 @@ test "turbo3 roundtrip accuracy" {
     try std.testing.expectApproxEqAbs(src_sum, dot_sum, 12.0);
 
     // MulAccum MSE (3-bit has higher error than 4-bit; turboDot-vs-naive validates consistency)
-    var acc = [_]f32{0} ** 32;
+    var acc: [32]f32 = @splat(0);
     kvMulAccum(&acc, 1.0, &buf, 32, .turbo3);
     var mse: f32 = 0;
     for (0..32) |i| {
@@ -2025,7 +2025,7 @@ test "turbo2 roundtrip accuracy" {
     kvStore(&buf, &src, 32, .turbo2);
 
     // Dot with all-ones = sum of dequantized. Compare against source sum.
-    var q_ones = [_]f32{1.0} ** 32;
+    var q_ones: [32]f32 = @splat(1.0);
     const dot_sum = kvDot(&q_ones, &buf, 32, .turbo2);
     try std.testing.expect(std.math.isFinite(dot_sum));
     var src_sum: f32 = 0;
@@ -2033,7 +2033,7 @@ test "turbo2 roundtrip accuracy" {
     try std.testing.expectApproxEqAbs(src_sum, dot_sum, 20.0);
 
     // MulAccum MSE (2-bit has highest error; turboDot-vs-naive validates consistency)
-    var acc = [_]f32{0} ** 32;
+    var acc: [32]f32 = @splat(0);
     kvMulAccum(&acc, 1.0, &buf, 32, .turbo2);
     var mse: f32 = 0;
     for (0..32) |i| {
@@ -2064,7 +2064,7 @@ test "turboDot matches naive dequant-then-dot" {
     const dot_opt = kvDot(&q_vec, &buf, 32, .turbo4);
 
     // Naive: dequant then dot
-    var dequant = [_]f32{0} ** 32;
+    var dequant: [32]f32 = @splat(0);
     kvMulAccum(&dequant, 1.0, &buf, 32, .turbo4);
     var dot_naive: f32 = 0;
     for (0..32) |i| dot_naive += q_vec[i] * dequant[i];
@@ -2108,7 +2108,7 @@ test "rotor sandwich is isoclinic" {
     // RvR̃ for a planar e12 rotor has one shared diagonal (s² - b12²) and
     // off-diagonals ±2·s·b12. An axis that was scaled instead of rotated shows
     // up as a different diagonal, which is what the store/dot pair relies on.
-    var buf: [32]f32 = [_]f32{0} ** 32;
+    var buf: [32]f32 = @splat(0);
     buf[0] = 1;
     rotorForward(&buf);
     const g = rotor_params[0];
@@ -2131,7 +2131,7 @@ test "turbo fromString" {
 
 test "turbo zero vector" {
     // Zero input should produce zero output
-    const src = [_]f32{0} ** 32;
+    const src: [32]f32 = @splat(0);
 
     // Test all bit widths
     inline for ([_]KvQuantType{ .turbo2, .turbo3, .turbo4 }) |kv_type| {
@@ -2146,7 +2146,7 @@ test "turbo zero vector" {
         try std.testing.expectApproxEqAbs(@as(f32, 0.0), dot, 1e-6);
 
         // MulAccum should leave accumulator unchanged
-        var acc = [_]f32{1.0} ** 32;
+        var acc: [32]f32 = @splat(1.0);
         kvMulAccum(&acc, 2.5, buf[0..bb].ptr, 32, kv_type);
         for (0..32) |i| {
             try std.testing.expectApproxEqAbs(@as(f32, 1.0), acc[i], 1e-6);
@@ -2293,9 +2293,11 @@ test "fuzz: all kv_quant functions" {
                 v.* = fval;
             }
 
-            // Allocate enough buffer for any kv type at n=32
-            // Max is int8: 36 bytes per 32 elems. Turbo4: 18. Use 64 for safety.
-            var kv_buf: [64]u8 align(4) = @splat(0);
+            // The widest format at n=32 is `.f32` at 4 bytes per element, so a
+            // buffer sized for anything narrower (int8's 36, turbo4's 18) runs
+            // off the end. Size from the type and assert the slice fits.
+            var kv_buf: [32 * 4]u8 align(4) = @splat(0);
+            std.debug.assert(slice_bytes <= kv_buf.len);
             kvStore(&kv_buf, &src, n, kv_type);
 
             // kvDot, result must be finite
@@ -2311,7 +2313,7 @@ test "fuzz: all kv_quant functions" {
             std.debug.assert(std.math.isFinite(dot));
 
             // kvMulAccum, result elements must be finite
-            var acc = [_]f32{0} ** 32;
+            var acc: [32]f32 = @splat(0);
             const weight_bits = smith.valueWithHash(u32, 300);
             var weight: f32 = @bitCast(weight_bits);
             if (!std.math.isFinite(weight)) weight = 1.0;

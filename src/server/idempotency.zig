@@ -407,7 +407,7 @@ test "empty and oversized keys are always fresh" {
 
     const empty = l.claim("", test_route, test_owner, 0);
     try testing.expectEqual(@as(u64, 0), empty.fresh);
-    const long = "x" ** (max_key_len + 1);
+    const long = &@as([max_key_len + 1]u8, @splat(0x78));
     try testing.expectEqual(@as(u64, 0), l.claim(long, test_route, test_owner, 0).fresh);
 }
 
@@ -444,7 +444,7 @@ test "empty and oversized routes are never claimed" {
     defer l.deinit();
 
     try testing.expectEqual(@as(u64, 0), l.claim("a", "", test_owner, 0).fresh);
-    const long = "r" ** (max_route_len + 1);
+    const long = &@as([max_route_len + 1]u8, @splat(0x72));
     try testing.expectEqual(@as(u64, 0), l.claim("a", long, test_owner, 0).fresh);
 }
 
@@ -479,7 +479,7 @@ test "oversized body still records completion" {
     var l = Ledger.init(testing.allocator);
     defer l.deinit();
 
-    const big = "y" ** (max_body_len + 1);
+    const big = &@as([max_body_len + 1]u8, @splat(0x79));
     const t = try claimKey(&l, "a", 0);
     l.complete("a", test_route, test_owner, t, 0, "200 OK", "text/html", big);
     const c = l.claim("a", test_route, test_owner, 1);

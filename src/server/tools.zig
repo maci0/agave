@@ -29,7 +29,7 @@ pub const Handle = struct {
 
 /// Dense-with-holes registry. Unregister leaves a free slot.
 pub const Registry = struct {
-    slots: [max_tools]?Tool = .{null} ** max_tools,
+    slots: [max_tools]?Tool = @splat(null),
 
     /// Insert `tool`. Fails if the name is already registered or the table is full.
     pub fn register(self: *Registry, tool: Tool) error{ RegistryFull, DuplicateName }!Handle {
@@ -143,7 +143,7 @@ test "request tool wins on name clash" {
     const req = [_]?Tool{
         .{ .name = "search", .description = "request", .parameters_json = "{\"q\":true}" },
     };
-    var out: [max_tools]?Tool = .{null} ** max_tools;
+    var out: [max_tools]?Tool = @splat(null);
     const n = reg.mergeInto(&req, &out);
     try std.testing.expectEqual(@as(u32, 1), n);
     try std.testing.expectEqualStrings("request", out[0].?.description);
@@ -163,7 +163,7 @@ test "merge appends distinct request tools" {
     const req = [_]?Tool{
         .{ .name = "b", .description = "", .parameters_json = "{}" },
     };
-    var out: [max_tools]?Tool = .{null} ** max_tools;
+    var out: [max_tools]?Tool = @splat(null);
     const n = reg.mergeInto(&req, &out);
     try std.testing.expectEqual(@as(u32, 2), n);
 }

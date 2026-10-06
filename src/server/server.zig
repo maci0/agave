@@ -627,7 +627,7 @@ const Server = struct {
     /// True when the server is in sleep mode (idle too long).
     sleeping: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     /// Last published `/health` state (`HealthState`) for transition-only logs.
-    health_state: std.atomic.Value(u8) = std.atomic.Value(u8).init(@intFromEnum(HealthState.ok)),
+    health_state: std.atomic.Value(u8) = std.atomic.Value(u8).init(@backingInt(HealthState.ok)),
     /// Completed and failed request counts as of the last time the server was
     /// healthy. The error-rate check subtracts this baseline so it measures the
     /// failures since the last known-good point instead of the process
@@ -1609,7 +1609,7 @@ fn buildToolSystemPrompt(allocator: Allocator, tmpl: ChatTemplate, tp: *const js
     }
     try buf.appendSlice(allocator, "You have access to the following tools:\n\n");
 
-    var req_tools: [tools_mod.max_tools]?tools_mod.Tool = .{null} ** tools_mod.max_tools;
+    var req_tools: [tools_mod.max_tools]?tools_mod.Tool = @splat(null);
     var req_n: u32 = 0;
     for (tp.tools) |maybe| {
         const t = maybe orelse continue;
@@ -1621,7 +1621,7 @@ fn buildToolSystemPrompt(allocator: Allocator, tmpl: ChatTemplate, tp: *const js
         };
         req_n += 1;
     }
-    var merged: [tools_mod.max_tools]?tools_mod.Tool = .{null} ** tools_mod.max_tools;
+    var merged: [tools_mod.max_tools]?tools_mod.Tool = @splat(null);
     const n = registry.mergeInto(req_tools[0..req_n], &merged);
 
     for (merged[0..n]) |maybe| {
@@ -2192,11 +2192,11 @@ fn loadHealthView() HealthView {
 
 /// Log once when `/health`/`/ready` state changes (ok ↔ degraded/shutdown).
 fn noteHealthTransition(view: HealthView) void {
-    const next = @intFromEnum(view.state());
+    const next = @backingInt(view.state());
     const prev = g_server.health_state.swap(next, .acq_rel);
     if (prev == next) return;
-    const prev_state: HealthState = if (prev <= @intFromEnum(HealthState.shutting_down))
-        @enumFromInt(prev)
+    const prev_state: HealthState = if (prev <= @backingInt(HealthState.shutting_down))
+        @fromBackingInt(@intCast(prev))
     else
         .ok;
     if (view.state() == .ok) {
@@ -5331,7 +5331,7 @@ const Utf8Holdback = struct {
     /// Assembled storage for a character completed from held + fresh bytes.
     completed: [max_utf8_seq_len]u8 = undefined,
     /// Held leading bytes of an incomplete sequence.
-    pending: [max_utf8_seq_len - 1]u8 = .{0} ** (max_utf8_seq_len - 1),
+    pending: [max_utf8_seq_len - 1]u8 = @splat(0),
     pending_len: usize = 0,
 
     pub const Pieces = struct {
@@ -8507,7 +8507,7 @@ test "sanitizeClientRequestId accepts correlation tokens" {
     try std.testing.expectEqual(@as(usize, 0), http.sanitizeClientRequestId("", &buf));
     try std.testing.expectEqual(@as(usize, 0), http.sanitizeClientRequestId("has space", &buf));
     try std.testing.expectEqual(@as(usize, 0), http.sanitizeClientRequestId("bad\nid", &buf));
-    try std.testing.expectEqual(@as(usize, 0), http.sanitizeClientRequestId("a" ** 65, &buf));
+    try std.testing.expectEqual(@as(usize, 0), http.sanitizeClientRequestId(&@as([65]u8, @splat(0x61)), &buf));
 }
 
 test "HealthView maps degradation reasons" {
@@ -9108,7 +9108,10 @@ test "Conversation.setTitle keeps trailing multi-byte characters" {
 
     // Truncation that lands inside a multi-byte sequence drops the fragment.
     var conv2 = Conversation{ .id = 2 };
-    const long = "\xe4\xb8\x96" ** 20; // 60 bytes of complete chars
+    const long = comptime blk: { // 60 bytes of complete chars
+        const u: [20][3]u8 = @splat("\xe4\xb8\x96".*);
+        break :blk std.mem.sliceAsBytes(&u);
+    };
     conv2.setTitle(long[0..47]); // cut splits the 16th char
     // Result must be valid UTF-8: ends on a character boundary.
     const t = conv2.titleSlice();

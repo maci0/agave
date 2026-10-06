@@ -124,14 +124,14 @@ Non-negotiable. Every change must respect all of them.
 
 **Metal threadgroup memory ≤ 32KB.** Sum `q_local + kv_block + out_acc + scores + shared`. `makePipeline` fails silently without its error logging.
 
-**WASM runs init, parse, and tokenize only.** A Zig 0.16 + LLVM 21 wasm32 codegen bug (invalid cast in SIMD vector lowering) blocks the forward pass: `agave_generate` is exported and tokenizes, then reports the token count instead of generating text. `zig build wasm` compiles the module with Gemma4 only; every other arch is off there.
+**WASM runs init, parse, and tokenize only.** A wasm32 codegen bug (invalid cast in SIMD vector lowering), first hit on Zig 0.16 + LLVM 21, blocks the forward pass: `agave_generate` is exported and tokenizes, then reports the token count instead of generating text. Whether Zig 0.17 + LLVM 22 still miscompiles it is untested; the module builds. `zig build wasm` compiles with Gemma4 only; every other arch is off there.
 
 **Kernel targets.** NVIDIA `nvptx64-cuda`, AMD `amdgcn-amdhsa`. Vulkan = GLSL compute → embedded SPIR-V. WebGPU = WGSL. No OpenCL or PAL.
 
 **macOS Vulkan** uses the KosmicKrisp ICD:
 `VK_ICD_FILENAMES=$(brew --prefix)/share/android-commandlinetools/emulator/lib64/vulkan/libkosmickrisp_icd.json`
 
-## Zig 0.16
+## Zig 0.17
 
 - `main()` takes `std.process.Init`: `init.io`, `init.gpa`, `init.minimal.args`. Thread `io` through all I/O.
 - Files: `Io.Dir.cwd().openFile(io, path, .{})`, `file.close(io)`, `file.readPositionalAll(io, buf, offset)`.
@@ -143,3 +143,10 @@ Non-negotiable. Every change must respect all of them.
 - Build: `mod.link_libc = true`, `mod.linkFramework("Metal", .{})` on Module, not Step.Compile.
 - `@Type()` is gone: `@Int()`, `@Enum()`, `@Struct()`, `@Union()`.
 - ArrayList: `.empty`, pass allocator to every method (`list.append(allocator, val)`).
+- **No `**` operator.** Array repeat is `@splat(v)` against a known result type (`var x: [N]T = @splat(0)`). A repeated multi-byte string has no direct form: splat the unit and flatten, `const u: [N][3]u8 = @splat("─".*); std.mem.sliceAsBytes(&u)`.
+- **No `errdefer |err|` capture.** Record what the handler needs as it is raised (see `replaceWithMode` in `src/durable_file.zig`).
+- **`@hasDecl` sees only `pub` decls.** Every optional model method probed by the `Model.from` vtable (`forwardTree`, `restoreSsmState`, `exportKvPrefix`, …) must be `pub fn` or the capability silently turns off. Test mocks included.
+- `@typeInfo` is struct-of-arrays: `.@"struct".field_names` / `.field_types`, `.@"enum".field_names` / `.field_values`, `.@"fn".param_types`. No `.fields`, no `field.name` / `field.type`.
+- `allocator.dupeZ(T, m)` is `allocator.dupeSentinel(T, m, 0)`. `std.ascii.indexOfIgnoreCase` is `findIgnoreCase`.
+- Optimize modes are lowercase: `.debug` / `.safe` / `.fast` / `.small`. The `.Debug` / `.ReleaseFast` spellings are aliases removed after 0.18. `std.builtin` is an alias of `std.lang`.
+- Build: `b.findProgram(.{ .names = &.{"x"} })` returns `?[]const u8` (no error union); `b.build_root` is `b.root` (a `Cache.Path`, so `b.root.openDir(io, sub, .{})`); `if (b.args)` is `run.addPassthruArgs()`; `b.graph.zig_lib_directory` is gone, so a `Step.Compile.TestRunner` cannot name the stock runner and tests use the default.

@@ -188,7 +188,7 @@ pub const SafeTensorsDir = struct {
                 if (shard_name_list.items.len > 0) {
                     const check_path = try std.fs.path.join(allocator, &.{ dir_path, shard_name_list.items[0] });
                     defer allocator.free(check_path);
-                    const check_z = try allocator.dupeZ(u8, check_path);
+                    const check_z = try allocator.dupeSentinel(u8, check_path, 0);
                     defer allocator.free(check_z);
                     const check_fd = std.posix.system.open(check_z.ptr, .{}, @as(std.posix.mode_t, 0));
                     if (check_fd >= 0) {
@@ -230,7 +230,7 @@ pub const SafeTensorsDir = struct {
             defer allocator.free(shard_path);
 
             std.log.debug("[st] opening shard {d}: '{s}'", .{ si, shard_path });
-            const shard_z = try allocator.dupeZ(u8, shard_path);
+            const shard_z = try allocator.dupeSentinel(u8, shard_path, 0);
             defer allocator.free(shard_z);
             const fd = std.posix.system.open(shard_z.ptr, .{}, @as(std.posix.mode_t, 0));
             if (fd < 0) {
@@ -2234,7 +2234,7 @@ fn discoverShards(
     owned: *std.ArrayList([]u8),
 ) !void {
     // Use C opendir/readdir to iterate without Zig Io context (0.16 compat).
-    const dir_z = try allocator.dupeZ(u8, dir_path);
+    const dir_z = try allocator.dupeSentinel(u8, dir_path, 0);
     defer allocator.free(dir_z);
     const dirp = std.c.opendir(dir_z.ptr) orelse return;
     defer _ = std.c.closedir(dirp);
@@ -2292,7 +2292,7 @@ fn fileSizeFd(fd: std.posix.fd_t) ?usize {
 
 /// Read an entire file into a heap-allocated slice (caller must free).
 fn readFile(allocator: Allocator, path: []const u8) ![]u8 {
-    const path_z = try allocator.dupeZ(u8, path);
+    const path_z = try allocator.dupeSentinel(u8, path, 0);
     defer allocator.free(path_z);
     const fd = std.posix.system.open(path_z.ptr, .{}, @as(std.posix.mode_t, 0));
     if (fd < 0) return error.FileNotFound;

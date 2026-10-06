@@ -59,9 +59,9 @@ test "DType enum completeness" {
         "mxfp4",  "tq1_0",   "tq2_0",   "mlx_q",    "gptq",     "awq",
         "hqq",    "unknown",
     };
-    const dtype_fields = @typeInfo(DType).@"enum".fields;
+    const dtype_fields = @typeInfo(DType).@"enum".field_names;
     try std.testing.expectEqual(expected.len, dtype_fields.len);
     inline for (expected, 0..) |name, i| {
-        try std.testing.expectEqualStrings(name, dtype_fields[i].name);
+        try std.testing.expectEqualStrings(name, dtype_fields[i]);
     }
 }

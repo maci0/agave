@@ -83,7 +83,7 @@ A KV cache is a type of data storage system that stores key-value pairs, allowin
 ## Quick Start
 
 ```bash
-# Requires Zig 0.16.0 (pin: .zigversion). https://ziglang.org/download/
+# Requires Zig 0.17.0 (pin: .zigversion). https://ziglang.org/download/
 # Build (produces both ReleaseFast and Debug binaries)
 zig build
 
@@ -406,7 +406,7 @@ All quant formats supported on all backends: Q8_0 (GPU), Q4_0/Q4_K/Q5_K/Q6_K (GP
 
 ## Prerequisites
 
-- **Zig 0.16.0** (pin in `.zigversion`; must match `build.zig.zon` `.minimum_zig_version`). Download: https://ziglang.org/download/
+- **Zig 0.17.0** (pin in `.zigversion`; must match `build.zig.zon` `.minimum_zig_version`). Download: https://ziglang.org/download/
 - macOS (Metal backend) / Linux (Vulkan, CUDA, ROCm) / any platform (CPU, WebGPU backends)
 - GPU backends load drivers at runtime via dlopen, no SDK needed at build time
 - Contributors: run `zig build doctor` first, it reports whether this machine can run the gate and names every tool that is missing. `zig build ci` is the full local CI gate. It needs Python 3.11+ (`check`: format + docs hygiene + unit tests), bun 1.4.2 plus `bun install --frozen-lockfile` (`lint-web`: oxlint + tsc), shellcheck (`lint-shell`), and ruff (`uv tool install ruff`, `lint-python`). Run the halves separately if only one toolchain is installed. See [Contributing](docs/CONTRIBUTING.md).
@@ -655,7 +655,7 @@ docker run --rm -p 127.0.0.1:49453:49453 -e AGAVE_API_KEY \
   -v /path/to/models:/models agave /models/model.gguf --serve
 
 # Override Zig version at build time
-docker buildx build --build-arg ZIG_VERSION=0.16.0 -t agave .
+docker buildx build --build-arg ZIG_VERSION=0.17.0 -t agave .
 ```
 
 Dlopen backends (CUDA, Vulkan, ROCm, WebGPU) load native libraries at runtime and require glibc. When all four are disabled, the Docker build switches to musl for a fully static binary. Zig cross-compiles natively, no QEMU emulation needed during build.

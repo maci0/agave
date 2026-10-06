@@ -268,11 +268,11 @@ test "sdpaHeadSparse matches dense for small seq" {
     const sl: usize = 4;
     const scale: f32 = 1.0 / @sqrt(@as(f32, @floatFromInt(hd)));
 
-    const q = [_]f32{1.0} ** (nh * hd);
-    var keys = [_]f32{0.5} ** (sl * nkv * hd);
-    var values = [_]f32{0.25} ** (sl * nkv * hd);
-    var out_sparse = [_]f32{0.0} ** (nh * hd);
-    var out_dense = [_]f32{0.0} ** (nh * hd);
+    const q: [(nh * hd)]f32 = @splat(1.0);
+    var keys: [(sl * nkv * hd)]f32 = @splat(0.5);
+    var values: [(sl * nkv * hd)]f32 = @splat(0.25);
+    var out_sparse: [(nh * hd)]f32 = @splat(0.0);
+    var out_dense: [(nh * hd)]f32 = @splat(0.0);
 
     const allocator = std.testing.allocator;
     // block_size=8 > sl=4: all positions in block 0 → fully dense
@@ -302,10 +302,10 @@ test "sdpaHeadSparse skips masked blocks" {
     const sl: usize = 8; // exactly 1 block
     const scale: f32 = 0.5;
 
-    var q = [_]f32{1.0} ** hd;
-    var keys = [_]f32{0.1} ** (sl * nkv * hd);
-    var values = [_]f32{1.0} ** (sl * nkv * hd);
-    var out = [_]f32{0.0} ** hd;
+    var q: [hd]f32 = @splat(1.0);
+    var keys: [(sl * nkv * hd)]f32 = @splat(0.1);
+    var values: [(sl * nkv * hd)]f32 = @splat(1.0);
+    var out: [hd]f32 = @splat(0.0);
 
     const allocator = std.testing.allocator;
     const pattern = BlockSparsePattern{ .block_size = 4, .n_global = 1, .window = 0 };

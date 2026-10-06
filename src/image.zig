@@ -748,7 +748,7 @@ test "fuzz: all image functions" {
                 var buf: [16]u8 = undefined;
                 for (&buf, 0..) |*b, i| b.* = smith.valueWithHash(u8, @intCast(i));
                 const fmt = detectFormat(&buf);
-                _ = @intFromEnum(fmt); // valid enum
+                _ = @backingInt(fmt); // valid enum
             }
 
             // --- pub fn decodePng (structure-aware: valid sig + IHDR, mutated body) ---

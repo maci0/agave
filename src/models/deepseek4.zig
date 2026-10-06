@@ -258,7 +258,7 @@ pub const Ds4Model = struct {
     max_seq_len: u32 = 512,
     eos_token_id: u32 = arch_mod.deepseek4_fallback_eos,
     /// Per-layer compression ratios: 0=none, 4=CSA, 128=HCA. Drives rope freq selection.
-    compress_ratios: [64]u32 = [_]u32{0} ** 64,
+    compress_ratios: [64]u32 = @splat(0),
 
     // Vtable compatibility
     cancelled: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
@@ -1621,7 +1621,7 @@ pub const Ds4Model = struct {
         // Try fused kernel (gate+up+clampedSiluMul in 1 dispatch per expert)
         // when Q2_K weights on Metal. Falls back to 3-phase unfused path.
         var n_scratch: usize = 0;
-        var slot_weights: [9]f32 = [_]f32{0.0} ** 9;
+        var slot_weights: [9]f32 = @splat(0.0);
 
         // Detect fused-capable backend at comptime, avoids runtime dispatch overhead.
         // Fused gate+up+clampedSiluMul: disabled for MXFP4 (Metal compiler issue).
@@ -1665,7 +1665,7 @@ pub const Ds4Model = struct {
         var de_dtype: DType = .f32;
         var de_exp_tensor: ?TensorInfo = null;
         var de_exp_stride: usize = 0;
-        var de_slot_eids: [9]usize = [_]usize{0} ** 9;
+        var de_slot_eids: [9]usize = @splat(0);
         if (self.layerTensor(li, "ffn_gate_exps.weight")) |ge| {
             const ue = self.layerTensor(li, "ffn_up_exps.weight") orelse return error.MissingTensor;
             const de = self.layerTensor(li, "ffn_down_exps.weight") orelse return error.MissingTensor;
@@ -3995,8 +3995,8 @@ test "scaleExpertWeights L1 then routed scale" {
 test "csaOverlapPool first group uses current high half" {
     const head_dim: usize = 8;
     const stride: usize = 16;
-    var curr_kv: [csa_compress_ratio * stride]f32 = [_]f32{0} ** (csa_compress_ratio * stride);
-    var curr_score: [csa_compress_ratio * stride]f32 = [_]f32{0} ** (csa_compress_ratio * stride);
+    var curr_kv: [csa_compress_ratio * stride]f32 = @splat(0);
+    var curr_score: [csa_compress_ratio * stride]f32 = @splat(0);
     for (0..csa_compress_ratio) |t| {
         const base = t * stride;
         for (0..head_dim) |d| curr_kv[base + d] = 100.0; // low half must not win
@@ -4013,10 +4013,10 @@ test "csaOverlapPool first group uses current high half" {
 test "csaOverlapPool mixes previous low half with current high half" {
     const head_dim: usize = 8;
     const stride: usize = 16;
-    var curr_kv: [csa_compress_ratio * stride]f32 = [_]f32{0} ** (csa_compress_ratio * stride);
-    var curr_score: [csa_compress_ratio * stride]f32 = [_]f32{0} ** (csa_compress_ratio * stride);
-    var prev_kv: [csa_compress_ratio * stride]f32 = [_]f32{0} ** (csa_compress_ratio * stride);
-    var prev_score: [csa_compress_ratio * stride]f32 = [_]f32{0} ** (csa_compress_ratio * stride);
+    var curr_kv: [csa_compress_ratio * stride]f32 = @splat(0);
+    var curr_score: [csa_compress_ratio * stride]f32 = @splat(0);
+    var prev_kv: [csa_compress_ratio * stride]f32 = @splat(0);
+    var prev_score: [csa_compress_ratio * stride]f32 = @splat(0);
     for (0..csa_compress_ratio) |t| {
         const base = t * stride;
         for (0..head_dim) |d| {

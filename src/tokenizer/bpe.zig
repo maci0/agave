@@ -73,7 +73,7 @@ pub const BpeTokenizer = struct {
     /// hashing and iterator overhead at every `'<'` / `'['` in the prompt.
     special_list: std.ArrayList(SpecialTok) = .empty,
     merge_map: std.StringHashMap(u32),
-    byte_to_unicode: [256][]const u8 = [_][]const u8{&.{}} ** 256,
+    byte_to_unicode: [256][]const u8 = @splat(&.{}),
     unicode_to_byte: std.StringHashMap(u8),
     byte_mappings_init: bool = false,
     vocab_size: u32 = 0,
@@ -1224,7 +1224,10 @@ test "BPE heap merge order matches naive findBestMerge" {
 
     // 128 repeats of "ab": heap and naive must both collapse to 128 "ab" tokens.
     const n_pairs: usize = 128;
-    const text = "ab" ** n_pairs;
+    const text = comptime blk: {
+        const u: [n_pairs][2]u8 = @splat("ab".*);
+        break :blk std.mem.sliceAsBytes(&u);
+    };
     const ids = try tok.encode(text);
     defer allocator.free(ids);
     try std.testing.expectEqual(n_pairs, ids.len);
@@ -1382,7 +1385,7 @@ test "decodeOne matches single-token decode in all modes" {
     {
         var tok = BpeTokenizer.init(allocator);
         defer tok.deinit();
-        const long_tok = "x" ** 100;
+        const long_tok = &@as([100]u8, @splat(0x78));
         const vocab = [_][]const u8{ long_tok, "y" };
         try tok.loadFromGGUFSpm(&vocab, 0);
         tok.tok_kind = .spm;

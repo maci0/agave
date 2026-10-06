@@ -2104,7 +2104,7 @@ test "pixel normalization" {
 
 test "VisionVariant detection constants" {
     // Verify variant enum values exist and are distinct
-    try std.testing.expect(@intFromEnum(VisionVariant.gemma4_siglip2) != @intFromEnum(VisionVariant.qwen_vl));
+    try std.testing.expect(@backingInt(VisionVariant.gemma4_siglip2) != @backingInt(VisionVariant.qwen_vl));
 }
 
 test "qwen merge-block coords match HF spatial merge order" {

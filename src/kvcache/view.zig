@@ -99,10 +99,10 @@ pub const PagedKvView = struct {
 };
 
 test "PagedKvView power-of-two block addressing" {
-    var k0 = [_]f32{0} ** 32;
-    var v0 = [_]f32{0} ** 32;
-    var k1 = [_]f32{0} ** 32;
-    var v1 = [_]f32{0} ** 32;
+    var k0: [32]f32 = @splat(0);
+    var v0: [32]f32 = @splat(0);
+    var k1: [32]f32 = @splat(0);
+    var v1: [32]f32 = @splat(0);
     var blocks = [_]CacheBlock{
         .{ .keys = &k0, .values = &v0 },
         .{ .keys = &k1, .values = &v1 },
@@ -128,10 +128,10 @@ test "PagedKvView power-of-two block addressing" {
 }
 
 test "PagedKvView non-power-of-two block addressing" {
-    var k0 = [_]f32{0} ** 48;
-    var v0 = [_]f32{0} ** 48;
-    var k1 = [_]f32{0} ** 48;
-    var v1 = [_]f32{0} ** 48;
+    var k0: [48]f32 = @splat(0);
+    var v0: [48]f32 = @splat(0);
+    var k1: [48]f32 = @splat(0);
+    var v1: [48]f32 = @splat(0);
     var blocks = [_]CacheBlock{
         .{ .keys = &k0, .values = &v0 },
         .{ .keys = &k1, .values = &v1 },

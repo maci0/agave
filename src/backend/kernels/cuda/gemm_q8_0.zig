@@ -22,7 +22,7 @@ export fn gemm_q8_0_kernel(x: [*]const f32, w: [*]const u8, y: [*]f32, n_out: u3
         const t_end = @min(t_base + tile_t, n_tok);
         const nt = t_end - t_base;
 
-        var sums: [tile_t]f32 = .{0} ** tile_t;
+        var sums: [tile_t]f32 = @splat(0);
 
         var blk = tid;
         while (blk < blocks_per_row) : (blk += bdim) {

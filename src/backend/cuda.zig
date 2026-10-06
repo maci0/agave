@@ -319,10 +319,10 @@ pub const CudaBackend = struct {
     driver_version: u32 = 0,
 
     /// Pre-formatted compute capability string (e.g., "sm_121").
-    cc_str: [16]u8 = .{0} ** 16,
+    cc_str: [16]u8 = @splat(0),
 
     /// Pre-formatted driver version string (e.g., "CUDA 13.0").
-    drv_str: [16]u8 = .{0} ** 16,
+    drv_str: [16]u8 = @splat(0),
 
     /// Allocator for buffer caches.
     allocator: std.mem.Allocator = undefined,

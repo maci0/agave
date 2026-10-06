@@ -1135,8 +1135,8 @@ test "fuzz: all tiered functions" {
 
             // --- BlockTier enum ---
             const tier_val = smith.valueWithHash(u8, 0) % 3;
-            const tier: BlockTier = @enumFromInt(tier_val);
-            _ = @intFromEnum(tier);
+            const tier: BlockTier = @fromBackingInt(@intCast(tier_val));
+            _ = @backingInt(tier);
 
             // --- TieredBlock struct fields ---
             var tb: TieredBlock = undefined;

@@ -384,8 +384,8 @@ pub const GGUFFile = struct {
             // Skip if formatted index/total is wider than the first shard's padding width
             // (e.g., shard "1-of-10" → idx_width=1, but shard 10 formats as "10" len=2).
             if (idx_raw.len > idx_width or tot_raw.len > idx_width) continue;
-            var idx_buf = [_]u8{'0'} ** shard_digits;
-            var tot_buf = [_]u8{'0'} ** shard_digits;
+            var idx_buf: [shard_digits]u8 = @splat('0');
+            var tot_buf: [shard_digits]u8 = @splat('0');
             @memcpy(idx_buf[idx_width - idx_raw.len .. idx_width], idx_raw);
             @memcpy(tot_buf[idx_width - tot_raw.len .. idx_width], tot_raw);
 
@@ -743,7 +743,7 @@ pub const GGUFFile = struct {
     }
 
     fn readMetaValue(self: *GGUFFile, off: usize) !struct { val: MetaValue, len: usize } {
-        const vtype: MetaValueType = @enumFromInt(try self.readU32(off));
+        const vtype: MetaValueType = @fromBackingInt(@intCast(try self.readU32(off)));
         var pos: usize = off + 4;
         switch (vtype) {
             .uint8 => {
@@ -778,7 +778,7 @@ pub const GGUFFile = struct {
             .float64 => return .{ .val = .{ .float64 = @bitCast(try self.readU64(pos)) }, .len = 12 },
             .array => {
                 const arr_pos = std.math.add(usize, pos, 4) catch return error.OffsetOutOfBounds;
-                const arr_type: MetaValueType = @enumFromInt(try self.readU32(pos));
+                const arr_type: MetaValueType = @fromBackingInt(@intCast(try self.readU32(pos)));
                 const arr_len_u64 = try self.readU64(arr_pos);
                 if (arr_len_u64 > max_array_len) return error.ArrayTooLarge;
                 const arr_len: usize = std.math.cast(usize, arr_len_u64) orelse return error.ArrayTooLarge;
@@ -913,7 +913,7 @@ pub const GGUFFile = struct {
             var dims: [4]u64 = .{ 0, 0, 0, 0 };
             for (0..n_dims) |d| dims[d] = raw_dims[n_dims - 1 - d];
 
-            const ggml_type: GGMLType = @enumFromInt(try self.readU32(off));
+            const ggml_type: GGMLType = @fromBackingInt(@intCast(try self.readU32(off)));
             off = std.math.add(usize, off, 4) catch return error.OffsetOutOfBounds;
 
             const tensor_offset = try self.readU64(off);
@@ -1424,7 +1424,7 @@ test "GGMLType blockSize all types" {
         try std.testing.expectEqual(@as(usize, 256), t.blockSize());
     }
     // Unknown/invalid type falls to else => 1
-    try std.testing.expectEqual(@as(usize, 1), (@as(GGMLType, @enumFromInt(99))).blockSize());
+    try std.testing.expectEqual(@as(usize, 1), (@as(GGMLType, @fromBackingInt(@intCast(99)))).blockSize());
 }
 
 test "GGMLType bytesPerBlock all types" {
@@ -1753,7 +1753,7 @@ test "GGUF fromBuffer truncated metadata does not leak" {
     std.mem.writeInt(u64, buf[16..24], 1, .little); // metadata_kv_count
     std.mem.writeInt(u64, buf[24..32], 1, .little); // key len
     buf[32] = 'k';
-    std.mem.writeInt(u32, buf[33..37], @intFromEnum(MetaValueType.string), .little);
+    std.mem.writeInt(u32, buf[33..37], @backingInt(MetaValueType.string), .little);
     std.mem.writeInt(u64, buf[37..45], 1000, .little); // value length past EOF
     try std.testing.expectError(error.OffsetOutOfBounds, GGUFFile.fromBuffer(allocator, &buf));
 }
@@ -1763,7 +1763,7 @@ test "fuzz: all gguf functions" {
         fn f(_: void, smith: *std.testing.Smith) !void {
             // --- GGMLType: blockSize, bytesPerBlock, tensorBytes ---
             const ggml_raw = smith.valueWithHash(u32, 0);
-            const ggml_type: GGMLType = @enumFromInt(ggml_raw);
+            const ggml_type: GGMLType = @fromBackingInt(@intCast(ggml_raw));
             const bs = ggml_type.blockSize();
             std.debug.assert(bs >= 1);
             const bpb = ggml_type.bytesPerBlock();
@@ -1798,7 +1798,7 @@ test "fuzz: all gguf functions" {
                     smith.valueWithHash(u64, 13) % 64,
                     smith.valueWithHash(u64, 14) % 64,
                 },
-                .ggml_type = @enumFromInt(smith.valueWithHash(u32, 15) % 40),
+                .ggml_type = @fromBackingInt(@intCast(smith.valueWithHash(u32, 15) % 40)),
                 .offset = 0,
             };
             const ne = ti.numElements();
@@ -1848,14 +1848,14 @@ test "fuzz: all gguf functions" {
             _ = GGUFFile.open(allocator, "/__nonexistent_fuzz_path__") catch {};
 
             // --- dequantQ4_0 ---
-            var q4_block align(2) = [_]u8{0} ** 18;
+            var q4_block: [18]u8 align(2) = @splat(0);
             for (&q4_block, 0..) |*b, i| b.* = smith.valueWithHash(u8, @intCast(81 + i));
             var q4_out: [32]f32 = undefined;
             GGUFFile.dequantQ4_0(&q4_block, &q4_out);
             for (q4_out) |v| if (!std.math.isFinite(v)) return; // NaN/Inf from f16 is ok, just bail
 
             // --- dequantQ8_0 ---
-            var q8_block align(2) = [_]u8{0} ** 34;
+            var q8_block: [34]u8 align(2) = @splat(0);
             for (&q8_block, 0..) |*b, i| b.* = smith.valueWithHash(u8, @intCast(99 + i));
             var q8_out: [32]f32 = undefined;
             GGUFFile.dequantQ8_0(&q8_block, &q8_out);
@@ -1913,38 +1913,38 @@ test "fuzz: GGUF fromBuffer structured metadata and tensors" {
                 const key = std.fmt.bufPrint(&key_buf, "k{d}", .{kv_i}) catch return;
                 if (!writeStr(&buf, &pos, key)) return;
                 const vtype: u32 = switch (smith.valueWithHash(u8, @truncate(10 + kv_i)) % 6) {
-                    0 => @intFromEnum(MetaValueType.uint32),
-                    1 => @intFromEnum(MetaValueType.string),
-                    2 => @intFromEnum(MetaValueType.bool_type),
-                    3 => @intFromEnum(MetaValueType.float32),
-                    4 => @intFromEnum(MetaValueType.uint8),
-                    else => @intFromEnum(MetaValueType.array),
+                    0 => @backingInt(MetaValueType.uint32),
+                    1 => @backingInt(MetaValueType.string),
+                    2 => @backingInt(MetaValueType.bool_type),
+                    3 => @backingInt(MetaValueType.float32),
+                    4 => @backingInt(MetaValueType.uint8),
+                    else => @backingInt(MetaValueType.array),
                 };
                 if (buf.len - pos < 4) return;
                 std.mem.writeInt(u32, buf[pos..][0..4], vtype, .little);
                 pos += 4;
                 switch (vtype) {
-                    @intFromEnum(MetaValueType.uint32), @intFromEnum(MetaValueType.float32) => {
+                    @backingInt(MetaValueType.uint32), @backingInt(MetaValueType.float32) => {
                         if (buf.len - pos < 4) return;
                         std.mem.writeInt(u32, buf[pos..][0..4], smith.valueWithHash(u32, @truncate(20 + kv_i)), .little);
                         pos += 4;
                     },
-                    @intFromEnum(MetaValueType.string) => {
+                    @backingInt(MetaValueType.string) => {
                         if (!writeStr(&buf, &pos, "v")) return;
                     },
-                    @intFromEnum(MetaValueType.bool_type), @intFromEnum(MetaValueType.uint8) => {
+                    @backingInt(MetaValueType.bool_type), @backingInt(MetaValueType.uint8) => {
                         if (pos >= buf.len) return;
                         buf[pos] = smith.valueWithHash(u8, @truncate(30 + kv_i));
                         pos += 1;
                     },
-                    @intFromEnum(MetaValueType.array) => {
+                    @backingInt(MetaValueType.array) => {
                         const as_str = smith.valueWithHash(u8, @truncate(40 + kv_i)) & 1 == 0;
                         const alen: u64 = 1 + (smith.valueWithHash(u8, @truncate(41 + kv_i)) % 2);
                         if (buf.len - pos < 12) return;
                         std.mem.writeInt(u32, buf[pos..][0..4], if (as_str)
-                            @intFromEnum(MetaValueType.string)
+                            @backingInt(MetaValueType.string)
                         else
-                            @intFromEnum(MetaValueType.uint32), .little);
+                            @backingInt(MetaValueType.uint32), .little);
                         pos += 4;
                         std.mem.writeInt(u64, buf[pos..][0..8], alen, .little);
                         pos += 8;
@@ -1975,7 +1975,7 @@ test "fuzz: GGUF fromBuffer structured metadata and tensors" {
                 pos += 4;
                 std.mem.writeInt(u64, buf[pos..][0..8], elems_per_tensor, .little);
                 pos += 8;
-                std.mem.writeInt(u32, buf[pos..][0..4], @intFromEnum(GGMLType.f32), .little);
+                std.mem.writeInt(u32, buf[pos..][0..4], @backingInt(GGMLType.f32), .little);
                 pos += 4;
                 std.mem.writeInt(u64, buf[pos..][0..8], t * bytes_per_tensor, .little);
                 pos += 8;

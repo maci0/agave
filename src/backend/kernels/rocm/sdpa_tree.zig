@@ -49,7 +49,7 @@ export fn sdpa_tree_kernel(
     var l_i: f32 = 0.0;
 
     // Output accumulator in registers (per thread, strided)
-    var out_acc: [8]f32 = .{0} ** 8;
+    var out_acc: [8]f32 = @splat(0);
     const max_out_per_thread: u32 = 8;
 
     // Phase 1: Prefix blocks (unconditional)

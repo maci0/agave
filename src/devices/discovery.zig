@@ -22,12 +22,12 @@ pub const BackendKind = enum { cpu, metal, cuda, rocm, vulkan };
 pub const DeviceInfo = struct {
     backend: BackendKind,
     device_id: u32,
-    name: [name_buf_size]u8 = .{0} ** name_buf_size,
+    name: [name_buf_size]u8 = @splat(0),
     name_len: usize = 0,
     total_mem: usize = 0,
     avail_mem: usize = 0,
     is_uma: bool = false,
-    compute_cap: [cc_buf_size]u8 = .{0} ** cc_buf_size,
+    compute_cap: [cc_buf_size]u8 = @splat(0),
     cc_len: usize = 0,
 
     /// Returns the human-readable device name (e.g. "Apple M2 Max") as a slice.
@@ -164,7 +164,7 @@ fn enumerateCuda(list: *DeviceList) void {
         var dev = DeviceInfo{ .backend = .cuda, .device_id = @intCast(i) };
 
         // Name
-        var name_c: [name_buf_size]u8 = .{0} ** name_buf_size;
+        var name_c: [name_buf_size]u8 = @splat(0);
         if (cuDeviceGetName(&name_c, name_buf_size, cuda_dev) == CUDA_SUCCESS) {
             dev.name_len = std.mem.indexOfScalar(u8, &name_c, 0) orelse name_buf_size;
             @memcpy(dev.name[0..dev.name_len], name_c[0..dev.name_len]);
@@ -240,7 +240,7 @@ fn enumerateRocm(list: *DeviceList) void {
         var dev = DeviceInfo{ .backend = .rocm, .device_id = @intCast(i) };
 
         if (hipDeviceGetName) |getName| {
-            var name_c: [name_buf_size]u8 = .{0} ** name_buf_size;
+            var name_c: [name_buf_size]u8 = @splat(0);
             if (getName(&name_c, name_buf_size, i) == HIP_SUCCESS) {
                 dev.name_len = std.mem.indexOfScalar(u8, &name_c, 0) orelse name_buf_size;
                 @memcpy(dev.name[0..dev.name_len], name_c[0..dev.name_len]);
@@ -294,16 +294,16 @@ fn enumerateVulkan(list: *DeviceList) void {
         vendorID: u32 = 0,
         deviceID: u32 = 0,
         deviceType: u32 = 0,
-        deviceName: [256]u8 = .{0} ** 256,
-        pipelineCacheUUID: [16]u8 = .{0} ** 16,
-        limits: [504]u8 = .{0} ** 504,
-        sparseProperties: [20]u8 = .{0} ** 20,
+        deviceName: [256]u8 = @splat(0),
+        pipelineCacheUUID: [16]u8 = @splat(0),
+        limits: [504]u8 = @splat(0),
+        sparseProperties: [20]u8 = @splat(0),
     };
     const VkPhysicalDeviceMemoryProperties = extern struct {
         memoryTypeCount: u32 = 0,
-        memoryTypes: [32 * 8]u8 = .{0} ** (32 * 8),
+        memoryTypes: [32 * 8]u8 = @splat(0),
         memoryHeapCount: u32 = 0,
-        memoryHeaps: [16 * 16]u8 = .{0} ** (16 * 16),
+        memoryHeaps: [16 * 16]u8 = @splat(0),
     };
 
     const FnCreateInstance = *const fn (*const VkInstanceCreateInfo, ?*const anyopaque, *VkInstance) callconv(.c) VkResult;
@@ -331,7 +331,7 @@ fn enumerateVulkan(list: *DeviceList) void {
     if (vkEnumeratePhysicalDevices(instance, &count, null) != VK_SUCCESS) return;
     if (count == 0) return;
 
-    var phys_devs: [max_devices]VkPhysicalDevice = .{null} ** max_devices;
+    var phys_devs: [max_devices]VkPhysicalDevice = @splat(null);
     var n: u32 = @intCast(@min(count, max_devices));
     if (vkEnumeratePhysicalDevices(instance, &n, &phys_devs) != VK_SUCCESS) return;
 
@@ -436,11 +436,11 @@ test "DeviceInfo, name buffer size" {
 }
 
 test "BackendKind, all variants" {
-    const fields = @typeInfo(BackendKind).@"enum".fields;
+    const fields = @typeInfo(BackendKind).@"enum".field_names;
     const expected = [_][]const u8{ "cpu", "metal", "cuda", "rocm", "vulkan" };
     try std.testing.expectEqual(expected.len, fields.len);
     inline for (expected, 0..) |name, i| {
-        try std.testing.expectEqualStrings(name, fields[i].name);
+        try std.testing.expectEqualStrings(name, fields[i]);
     }
 }
 
@@ -613,7 +613,7 @@ test "fuzz: all discovery functions" {
             const n_devs = smith.valueWithHash(u8, 3) % (max_devices + 2); // may exceed max
             for (0..n_devs) |j| {
                 const backend_idx = smith.valueWithHash(u8, @intCast(j + 300)) % 5;
-                const backend: BackendKind = @enumFromInt(backend_idx);
+                const backend: BackendKind = @fromBackingInt(@intCast(backend_idx));
                 list.add(.{ .backend = backend, .device_id = smith.valueWithHash(u32, @intCast(j + 400)) });
             }
             const sl = list.slice();

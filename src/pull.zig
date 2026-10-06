@@ -680,7 +680,7 @@ pub fn selectModel(result: *const ListResult, quant: ?[]const u8) PullError!Sele
 
         // User-specified quantization: search GGUF files.
         for (result.files) |f| {
-            if (std.ascii.indexOfIgnoreCase(f.filename, q) != null) {
+            if (std.ascii.findIgnoreCase(f.filename, q) != null) {
                 return .{ .gguf = f };
             }
         }
@@ -704,7 +704,7 @@ pub fn selectModel(result: *const ListResult, quant: ?[]const u8) PullError!Sele
     if (result.files.len > 0) {
         for (&quant_preference) |pref| {
             for (result.files) |f| {
-                if (std.ascii.indexOfIgnoreCase(f.filename, pref) != null) {
+                if (std.ascii.findIgnoreCase(f.filename, pref) != null) {
                     return .{ .gguf = f };
                 }
             }
@@ -728,7 +728,7 @@ pub fn selectFile(files: []const GgufFile, quant: ?[]const u8) PullError!GgufFil
 
     if (quant) |q| {
         for (files) |f| {
-            if (std.ascii.indexOfIgnoreCase(f.filename, q) != null) {
+            if (std.ascii.findIgnoreCase(f.filename, q) != null) {
                 return f;
             }
         }
@@ -747,7 +747,7 @@ pub fn selectFile(files: []const GgufFile, quant: ?[]const u8) PullError!GgufFil
 
     for (&quant_preference) |pref| {
         for (files) |f| {
-            if (std.ascii.indexOfIgnoreCase(f.filename, pref) != null) {
+            if (std.ascii.findIgnoreCase(f.filename, pref) != null) {
                 return f;
             }
         }
@@ -865,7 +865,7 @@ fn httpGet(allocator: Allocator, url: []const u8, token: ?[]const u8) (PullError
         .not_found => return PullError.RepoNotFound,
         .unauthorized, .forbidden => return PullError.AuthenticationFailed,
         else => {
-            eprint("Error: HTTP {d}\n", .{@intFromEnum(response.head.status)});
+            eprint("Error: HTTP {d}\n", .{@backingInt(response.head.status)});
             return PullError.HttpRequestFailed;
         },
     }
@@ -971,9 +971,9 @@ fn cachePaths(pa: Allocator, repo: []const u8, commit_sha: []const u8) (PullErro
 
 /// Create a symbolic link using the C library (std.posix.symlink removed in Zig 0.16).
 fn createSymlink(allocator: Allocator, target: []const u8, link_path: []const u8) !void {
-    const target_z = try allocator.dupeZ(u8, target);
+    const target_z = try allocator.dupeSentinel(u8, target, 0);
     defer allocator.free(target_z);
-    const link_z = try allocator.dupeZ(u8, link_path);
+    const link_z = try allocator.dupeSentinel(u8, link_path, 0);
     defer allocator.free(link_z);
     const ret = std.c.symlink(target_z, link_z);
     const e = std.c.errno(ret);
@@ -1303,7 +1303,7 @@ fn downloadFileOnce(
             }
         },
         else => {
-            eprint("Error: HTTP {d}\n", .{@intFromEnum(status)});
+            eprint("Error: HTTP {d}\n", .{@backingInt(status)});
             return PullError.HttpRequestFailed;
         },
     }
@@ -1549,9 +1549,9 @@ fn buildShardFilename(allocator: Allocator, shard1: []const u8, idx: u32, total:
     // Guard against malformed filenames where digit width is too narrow for the values.
     if (idx_raw.len > width or tot_raw.len > width) return error.InvalidShardName;
     // Pad with leading zeros
-    var idx_padded: [16]u8 = [_]u8{'0'} ** 16;
+    var idx_padded: [16]u8 = @splat('0');
     @memcpy(idx_padded[width - idx_raw.len .. width], idx_raw);
-    var tot_padded: [16]u8 = [_]u8{'0'} ** 16;
+    var tot_padded: [16]u8 = @splat('0');
     @memcpy(tot_padded[width - tot_raw.len .. width], tot_raw);
     return std.fmt.allocPrint(allocator, "{s}{s}-of-{s}{s}", .{
         base, idx_padded[0..width], tot_padded[0..width], gguf_sfx,
@@ -2059,9 +2059,9 @@ test "isValidHexSha accepts valid hashes" {
     try std.testing.expect(!isValidHexSha("ghijk")); // non-hex
     try std.testing.expect(!isValidHexSha("ABCXYZ"));
     // Too long (>64 chars)
-    try std.testing.expect(!isValidHexSha("a" ** 65));
+    try std.testing.expect(!isValidHexSha(&@as([65]u8, @splat(0x61))));
     // Exactly 64 chars (valid)
-    try std.testing.expect(isValidHexSha("a" ** 64));
+    try std.testing.expect(isValidHexSha(&@as([64]u8, @splat(0x61))));
 }
 
 // ── Rerun safety (416 resume handling) ──────────────────────────────────────

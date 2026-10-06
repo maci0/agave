@@ -159,7 +159,7 @@ pub const Grammar = struct {
 
         // Build first-byte acceptance bitmap: test each byte 0..255 against current
         // grammar state. Rejects ~90% of vocab tokens without per-token state copy.
-        var first_byte_valid: [256]bool = .{false} ** 256;
+        var first_byte_valid: [256]bool = @splat(false);
         for (0..256) |byte_val| {
             test_state.stack.items.len = src.len;
             @memcpy(test_state.stack.items.ptr[0..src.len], src);
@@ -224,7 +224,7 @@ pub const Grammar = struct {
         defer state.scratch = test_state.stack;
 
         // First-byte bitmap: skip tokens whose first byte is rejected
-        var first_byte_valid: [256]bool = .{false} ** 256;
+        var first_byte_valid: [256]bool = @splat(false);
         for (0..256) |byte_val| {
             test_state.stack.items.len = src.len;
             @memcpy(test_state.stack.items.ptr[0..src.len], src);

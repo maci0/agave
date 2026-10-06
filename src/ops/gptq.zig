@@ -109,7 +109,7 @@ test "gptq dequant basic" {
     const scales = [_]u16{@bitCast(@as(f16, 2.0))};
     // Zero-point = 1 in lowest nibble
     const qzeros = [_]u32{0x00000001};
-    const x = [_]f32{1.0} ** 8;
+    const x: [8]f32 = @splat(1.0);
     var y = [_]f32{0.0};
 
     // dequant: (nibble - zero) * scale = [0, 2, 4, -2, 0, 2, 4, -2]
@@ -123,7 +123,7 @@ test "gptqGemvRows with start_row offset" {
     const qweight = [_]u32{0x03210321};
     const scales = [_]u16{@bitCast(@as(f16, 2.0))};
     const qzeros = [_]u32{0x00000001};
-    const x = [_]f32{1.0} ** 8;
+    const x: [8]f32 = @splat(1.0);
     var y = [_]f32{0.0};
 
     gptqGemvRows(&x, &qweight, &scales, &qzeros, &y, 0, 1, 1, 8, 8);
@@ -136,12 +136,12 @@ test "gptqGemvRows chunk uses full-n qzeros stride" {
     const n: usize = 16;
     const k: usize = 8;
     const group_size: u32 = 8;
-    var qweight = [_]u32{0x03210321} ** n;
-    var scales = [_]u16{@bitCast(@as(f16, 1.0))} ** n;
+    var qweight: [n]u32 = @splat(0x03210321);
+    var scales: [n]u16 = @splat(@bitCast(@as(f16, 1.0)));
     // Two zero-words: first for rows 0-7 (zero=1), second for rows 8-15 (zero=0).
     const qzeros = [_]u32{ 0x11111111, 0x00000000 };
-    const x = [_]f32{1.0} ** k;
-    var y = [_]f32{0.0} ** n;
+    const x: [k]f32 = @splat(1.0);
+    var y: [n]f32 = @splat(0.0);
 
     gptqGemvRows(&x, &qweight, &scales, &qzeros, &y, 8, 8, n, k, group_size);
     // zero=0 → dequant nibbles [1,2,3,0,1,2,3,0] → sum=12

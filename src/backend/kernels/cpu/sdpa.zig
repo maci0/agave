@@ -263,8 +263,8 @@ test "sdpa GQA two query heads one KV head" {
 
     // 2 query heads, 1 KV head (GQA), hd=4
     // Both query heads share the same KV, so outputs should match for identical queries.
-    var keys = [_]f32{0} ** 24; // space for 3 positions × 1 KV head × 4 dims
-    var values = [_]f32{0} ** 24;
+    var keys: [24]f32 = @splat(0); // space for 3 positions × 1 KV head × 4 dims
+    var values: [24]f32 = @splat(0);
     var output: [8]f32 = undefined; // 2 heads × 4 dims
 
     // Insert at pos 0: k=[1,0,0,0], v=[1,0,0,0]
@@ -301,8 +301,8 @@ test "sdpa GQA two query heads one KV head" {
 test "sdpa single head two positions" {
 
     // 1 head, hd=4, first insert a key/value at seq_len=0, then query at seq_len=1.
-    var keys = [_]f32{0} ** 12; // space for 3 positions
-    var values = [_]f32{0} ** 12;
+    var keys: [12]f32 = @splat(0); // space for 3 positions
+    var values: [12]f32 = @splat(0);
     var output: [4]f32 = undefined;
 
     // Position 0: insert k0 = [1,0,0,0], v0 = [1,0,0,0]
@@ -337,8 +337,8 @@ test "sdpa quantized f16 roundtrip" {
     const kvd = hd; // 1 KV head
     const max_sl = 4;
     const kv_bytes = comptime kv_quant.kvSliceBytes(.f16, max_sl * kvd);
-    var keys_buf: [kv_bytes]u8 = .{0} ** kv_bytes;
-    var vals_buf: [kv_bytes]u8 = .{0} ** kv_bytes;
+    var keys_buf: [kv_bytes]u8 = @splat(0);
+    var vals_buf: [kv_bytes]u8 = @splat(0);
 
     var q = [_]f32{ 1.0, 0.0, 0.0, 0.0 };
     var k_new = [_]f32{ 1.0, 0.0, 0.0, 0.0 };
@@ -366,8 +366,8 @@ test "sdpaQuantHeadWithStats returns correct softmax stats" {
     const kvd = nkv * hd;
     const sl = 2;
     const kv_bytes = comptime kv_quant.kvSliceBytes(.f16, sl * kvd);
-    var keys_buf: [kv_bytes]u8 = .{0} ** kv_bytes;
-    var vals_buf: [kv_bytes]u8 = .{0} ** kv_bytes;
+    var keys_buf: [kv_bytes]u8 = @splat(0);
+    var vals_buf: [kv_bytes]u8 = @splat(0);
 
     // Store KV: k0=[1,0,0,0], k1=[0,0,0,1], v0=[1,0,0,0], v1=[0,1,0,0]
     const k0 = [_]f32{ 1.0, 0.0, 0.0, 0.0 };
@@ -414,26 +414,26 @@ test "sdpa exercises SIMD dot product path" {
     var output: [hd]f32 = undefined;
 
     // Position 0: k=[1,0,...,0], v=[0.5 repeated]
-    var k_new0: [hd]f32 = .{0} ** hd;
+    var k_new0: [hd]f32 = @splat(0);
     k_new0[0] = 1.0;
     var v_new0: [hd]f32 = undefined;
     for (&v_new0) |*v| v.* = 0.5;
 
     // Insert position 0
-    var q0: [hd]f32 = .{0} ** hd;
+    var q0: [hd]f32 = @splat(0);
     q0[0] = 1.0;
     sdpa(&q0, &keys, &values, &k_new0, &v_new0, &output, 1, 1, hd, 0, 1.0);
     // Single position: output = v_new0
     for (0..hd) |i| try std.testing.expectApproxEqAbs(@as(f32, 0.5), output[i], 1e-5);
 
     // Position 1: k=[0,1,0,...,0], v=[0.25 repeated]
-    var k_new1: [hd]f32 = .{0} ** hd;
+    var k_new1: [hd]f32 = @splat(0);
     k_new1[1] = 1.0;
     var v_new1: [hd]f32 = undefined;
     for (&v_new1) |*v| v.* = 0.25;
 
     // Query aligns with k1: q=[0,1,0,...,0]
-    var q1: [hd]f32 = .{0} ** hd;
+    var q1: [hd]f32 = @splat(0);
     q1[1] = 1.0;
     sdpa(&q1, &keys, &values, &k_new1, &v_new1, &output, 1, 1, hd, 1, 1.0);
 
@@ -617,8 +617,8 @@ test "fuzz: all sdpa functions" {
             }
 
             const scale: f32 = 1.0 / @sqrt(@as(f32, @floatFromInt(hd)));
-            var keys: [2 * kvd]f32 = .{0} ** (2 * kvd);
-            var values: [2 * kvd]f32 = .{0} ** (2 * kvd);
+            var keys: [2 * kvd]f32 = @splat(0);
+            var values: [2 * kvd]f32 = @splat(0);
             var output: [nh * hd]f32 = undefined;
 
             // 1. sdpa, append at pos 0, compute over 1 position
@@ -635,8 +635,8 @@ test "fuzz: all sdpa functions" {
 
             // 4-5. sdpaQuantHeads / sdpaQuantHead, f16 quantized path
             const kv_bytes = comptime kv_quant.kvSliceBytes(.f16, 2 * kvd);
-            var qk_buf: [kv_bytes]u8 = .{0} ** kv_bytes;
-            var qv_buf: [kv_bytes]u8 = .{0} ** kv_bytes;
+            var qk_buf: [kv_bytes]u8 = @splat(0);
+            var qv_buf: [kv_bytes]u8 = @splat(0);
             kv_quant.kvStore(&qk_buf, &k_new, kvd, .f16);
             kv_quant.kvStore(&qv_buf, &v_new, kvd, .f16);
 
@@ -662,7 +662,7 @@ test "fuzz: all sdpa functions" {
             std.debug.assert(std.math.isFinite(dot));
 
             // 9. mulAccumF32
-            var accum: [hd]f32 = .{0} ** hd;
+            var accum: [hd]f32 = @splat(0);
             const weight = std.math.clamp(smith.valueWithHash(f32, 3), -10.0, 10.0);
             mulAccumF32(&accum, weight, &v_new, hd);
             for (accum) |a| std.debug.assert(std.math.isFinite(a));
@@ -683,8 +683,8 @@ test "fuzz: all sdpa functions" {
             std.debug.assert(sm_sum >= 0 and sm_sum <= 4.0 + 1e-3);
 
             // 11-12. sdpaPagedHeads / sdpaPagedHead, paged KV path
-            var block_keys: [kvd]f32 = .{0} ** kvd;
-            var block_values: [kvd]f32 = .{0} ** kvd;
+            var block_keys: [kvd]f32 = @splat(0);
+            var block_values: [kvd]f32 = @splat(0);
             const block = CacheBlock{
                 .keys = &block_keys,
                 .values = &block_values,

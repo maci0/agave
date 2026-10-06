@@ -13,6 +13,17 @@ const Io = if (is_freestanding) void else std.Io;
 const sim_clock = @import("sim_clock.zig");
 
 const us_per_ms: f64 = 1000.0;
+
+/// Width in columns of the perf table's horizontal rule, matching the
+/// `{s:<16} {s:>8} {s:>10} {s:>8} {s:>6}` header row.
+const table_width: usize = 54;
+/// The rule itself. Zig 0.17 removed `**`, and `@splat` repeats an element
+/// rather than a multi-byte string, so the box-drawing char is splatted as a
+/// 3-byte array and flattened.
+const table_rule: []const u8 = blk: {
+    const units: [table_width][3]u8 = @splat("─".*);
+    break :blk std.mem.sliceAsBytes(&units);
+};
 const percent_scale: f64 = 100.0;
 
 /// Stderr file handle via std.Io.File (Zig 0.16 idiom).
@@ -43,7 +54,7 @@ pub const Op = enum {
     deltanet,
 };
 
-const n_ops = @typeInfo(Op).@"enum".fields.len;
+const n_ops = @typeInfo(Op).@"enum".field_names.len;
 
 /// Buffer size for the profiling report output.
 const report_buf_size: usize = 4096;
@@ -51,10 +62,10 @@ const report_buf_size: usize = 4096;
 /// Accumulates wall-clock time per operation type across all tokens.
 pub const PerfCounters = struct {
     /// Per-operation invocation counts, indexed by `@intFromEnum(Op)`.
-    counts: [n_ops]u64 = [_]u64{0} ** n_ops,
+    counts: [n_ops]u64 = @splat(0),
     /// Cumulative elapsed monotonic microseconds per operation, indexed by
     /// `@intFromEnum(Op)`.
-    times_us: [n_ops]u64 = [_]u64{0} ** n_ops,
+    times_us: [n_ops]u64 = @splat(0),
     /// Total tokens generated since last reset (used for per-token averaging).
     n_tokens: u64 = 0,
     /// When false, `start`/`end` are no-ops and no timing overhead is incurred.
@@ -74,7 +85,7 @@ pub const PerfCounters = struct {
         if (!self.enabled) return;
         const delta = nanoTimestamp() - t0;
         const elapsed: u64 = if (delta > 0) @intCast(@divFloor(delta, 1000)) else 0;
-        const idx = @intFromEnum(op);
+        const idx = @backingInt(op);
         self.times_us[idx] += elapsed;
         self.counts[idx] += 1;
     }
@@ -105,16 +116,16 @@ pub const PerfCounters = struct {
             @as(f64, @floatFromInt(total_us)) / @as(f64, @floatFromInt(self.n_tokens)) / us_per_ms,
         });
         eprintFn(&buf, "{s:<16} {s:>8} {s:>10} {s:>8} {s:>6}\n", .{ "Operation", "Calls", "Total(ms)", "Avg(µs)", "%" });
-        eprintFn(&buf, "{s}\n", .{"─" ** 54});
+        eprintFn(&buf, "{s}\n", .{table_rule});
 
-        const fields = @typeInfo(Op).@"enum".fields;
-        inline for (fields) |field| {
-            const idx = field.value;
+        const info = @typeInfo(Op).@"enum";
+        inline for (info.field_names, info.field_values) |field_name, field_value| {
+            const idx = field_value;
             if (self.counts[idx] > 0) {
                 const pct = @as(f64, @floatFromInt(self.times_us[idx])) / @as(f64, @floatFromInt(total_us)) * percent_scale;
                 const avg = @as(f64, @floatFromInt(self.times_us[idx])) / @as(f64, @floatFromInt(self.counts[idx]));
                 eprintFn(&buf, "{s:<16} {d:>8} {d:>10.1} {d:>8.0} {d:>5.1}%\n", .{
-                    field.name,
+                    field_name,
                     self.counts[idx],
                     @as(f64, @floatFromInt(self.times_us[idx])) / us_per_ms,
                     avg,
@@ -122,7 +133,7 @@ pub const PerfCounters = struct {
                 });
             }
         }
-        eprintFn(&buf, "{s}\n", .{"─" ** 54});
+        eprintFn(&buf, "{s}\n", .{table_rule});
         eprintFn(&buf, "{s:<16} {s:>8} {d:>10.1}\n", .{
             "TOTAL",                                       "",
             @as(f64, @floatFromInt(total_us)) / us_per_ms,
@@ -135,8 +146,8 @@ test "PerfCounters disabled is no-op" {
     const t0 = pc.start();
     try std.testing.expectEqual(@as(i128, 0), t0);
     pc.end(.rope, t0); // should not crash or accumulate
-    try std.testing.expectEqual(@as(u64, 0), pc.counts[@intFromEnum(Op.rope)]);
-    try std.testing.expectEqual(@as(u64, 0), pc.times_us[@intFromEnum(Op.rope)]);
+    try std.testing.expectEqual(@as(u64, 0), pc.counts[@backingInt(Op.rope)]);
+    try std.testing.expectEqual(@as(u64, 0), pc.times_us[@backingInt(Op.rope)]);
     pc.addToken(); // should not increment
     try std.testing.expectEqual(@as(u64, 0), pc.n_tokens);
 }
@@ -151,11 +162,11 @@ test "PerfCounters enabled tracks calls" {
     const t0 = pc.start();
     try std.testing.expect(t0 != 0); // enabled → non-zero timestamp
     pc.end(.rope, t0);
-    try std.testing.expectEqual(@as(u64, 1), pc.counts[@intFromEnum(Op.rope)]);
+    try std.testing.expectEqual(@as(u64, 1), pc.counts[@backingInt(Op.rope)]);
     // Second end call should increment count
     const t1 = pc.start();
     pc.end(.rope, t1);
-    try std.testing.expectEqual(@as(u64, 2), pc.counts[@intFromEnum(Op.rope)]);
+    try std.testing.expectEqual(@as(u64, 2), pc.counts[@backingInt(Op.rope)]);
 }
 
 test "PerfCounters multiple ops accumulate independently" {
@@ -167,10 +178,10 @@ test "PerfCounters multiple ops accumulate independently" {
     const t2 = pc.start();
     pc.end(.rope, t2);
 
-    try std.testing.expectEqual(@as(u64, 2), pc.counts[@intFromEnum(Op.rope)]);
-    try std.testing.expectEqual(@as(u64, 1), pc.counts[@intFromEnum(Op.sdpa)]);
+    try std.testing.expectEqual(@as(u64, 2), pc.counts[@backingInt(Op.rope)]);
+    try std.testing.expectEqual(@as(u64, 1), pc.counts[@backingInt(Op.sdpa)]);
     // Other ops should be zero
-    try std.testing.expectEqual(@as(u64, 0), pc.counts[@intFromEnum(Op.gemv_qkv)]);
+    try std.testing.expectEqual(@as(u64, 0), pc.counts[@backingInt(Op.gemv_qkv)]);
 }
 
 test "PerfCounters follows sim_clock override" {
@@ -181,22 +192,22 @@ test "PerfCounters follows sim_clock override" {
     try std.testing.expectEqual(@as(i128, 1_000_000) * 1_000_000, t0);
     pc.end(.rope, t0);
     // Frozen virtual clock: zero elapsed, still counted.
-    try std.testing.expectEqual(@as(u64, 1), pc.counts[@intFromEnum(Op.rope)]);
-    try std.testing.expectEqual(@as(u64, 0), pc.times_us[@intFromEnum(Op.rope)]);
+    try std.testing.expectEqual(@as(u64, 1), pc.counts[@backingInt(Op.rope)]);
+    try std.testing.expectEqual(@as(u64, 0), pc.times_us[@backingInt(Op.rope)]);
     const t1 = pc.start();
     sim_clock.advanceMs(3);
     pc.end(.sdpa, t1);
-    try std.testing.expectEqual(@as(u64, 3_000), pc.times_us[@intFromEnum(Op.sdpa)]);
+    try std.testing.expectEqual(@as(u64, 3_000), pc.times_us[@backingInt(Op.sdpa)]);
     const t2 = pc.start();
     sim_clock.setOverrideMs(999_000);
     pc.end(.sdpa, t2);
-    try std.testing.expectEqual(@as(u64, 2), pc.counts[@intFromEnum(Op.sdpa)]);
-    try std.testing.expectEqual(@as(u64, 3_000), pc.times_us[@intFromEnum(Op.sdpa)]);
+    try std.testing.expectEqual(@as(u64, 2), pc.counts[@backingInt(Op.sdpa)]);
+    try std.testing.expectEqual(@as(u64, 3_000), pc.times_us[@backingInt(Op.sdpa)]);
 }
 
 test "PerfCounters Op enum has expected fields" {
     // Verify the number of Op variants matches n_ops
-    const fields = @typeInfo(Op).@"enum".fields;
+    const fields = @typeInfo(Op).@"enum".field_names;
     try std.testing.expectEqual(n_ops, fields.len);
     // Verify at least some known ops exist
     try std.testing.expect(n_ops >= 10);
@@ -213,7 +224,7 @@ test "fuzz: PerfCounters" {
             // Use random bytes to select ops and call counts.
             const op_idx = raw[0] % n_ops;
             const call_count = (raw[1] % 10) + 1;
-            const op: Op = @enumFromInt(op_idx);
+            const op: Op = @fromBackingInt(@intCast(op_idx));
 
             for (0..call_count) |_| {
                 const t0 = pc.start();

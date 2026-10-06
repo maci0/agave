@@ -243,7 +243,7 @@ else
 pub const metal_list_name_buf_size: usize = 64;
 
 pub const MetalDeviceListEntry = struct {
-    name: [metal_list_name_buf_size]u8 = .{0} ** metal_list_name_buf_size,
+    name: [metal_list_name_buf_size]u8 = @splat(0),
     name_len: usize = 0,
     total_mem: usize = 0,
 };
@@ -1868,11 +1868,11 @@ test "quant block constants" {
 }
 
 test "BackendChoice, all variants exist" {
-    const fields = @typeInfo(BackendChoice).@"enum".fields;
+    const fields = @typeInfo(BackendChoice).@"enum".field_names;
     const expected = [_][]const u8{ "auto", "cpu", "metal", "vulkan", "cuda", "rocm", "webgpu" };
     try std.testing.expectEqual(expected.len, fields.len);
     inline for (expected, 0..) |name, i| {
-        try std.testing.expectEqualStrings(name, fields[i].name);
+        try std.testing.expectEqualStrings(name, fields[i]);
     }
 }
 
@@ -2809,7 +2809,7 @@ test "fuzz: all backend functions" {
             // GemvOp
             {
                 var y_buf: [1]f32 = .{0};
-                var w_data = [_]u8{0} ** 4;
+                var w_data: [4]u8 = @splat(0);
                 const op = GemvOp{ .w = .{ .data = &w_data, .dtype = .f32 }, .y = &y_buf, .n = 1, .mlx_bits = smith.valueWithHash(u32, 4) & 0x7 };
                 _ = op.mlx_scales;
                 _ = op.mlx_biases;
@@ -2964,7 +2964,7 @@ test "fuzz: all backend functions" {
             var ar_dst = [_]f32{ 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0 };
             var ar_src = [_]f32{ 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0 };
             be.allReduceAdd(&ar_dst, &ar_src, dim);
-            var host_region = [_]u8{0} ** 16;
+            var host_region: [16]u8 = @splat(0);
             be.registerHostRegion(&host_region, 16);
             const kv_slice = be.allocKvSlice(std.testing.allocator, 64) catch return;
             try std.testing.expectEqual(@as(usize, 64), kv_slice.len);

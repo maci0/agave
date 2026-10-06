@@ -749,12 +749,12 @@ pub const MetalBackend = struct {
     /// Call this when the MetalBackend is no longer needed.
     pub fn deinit(self: *MetalBackend) void {
         // Release all compute pipeline states created during init.
-        inline for (@typeInfo(MetalBackend).@"struct".fields) |field| {
-            if (comptime std.mem.startsWith(u8, field.name, "pipe_")) {
-                if (field.type == objc.id) {
-                    release(@field(self, field.name));
-                } else if (field.type == ?objc.id) {
-                    if (@field(self, field.name)) |p| release(p);
+        inline for (@typeInfo(MetalBackend).@"struct".field_names, @typeInfo(MetalBackend).@"struct".field_types) |field_name, field_type| {
+            if (comptime std.mem.startsWith(u8, field_name, "pipe_")) {
+                if (field_type == objc.id) {
+                    release(@field(self, field_name));
+                } else if (field_type == ?objc.id) {
+                    if (@field(self, field_name)) |p| release(p);
                 }
             }
         }
@@ -3732,12 +3732,12 @@ test "Metal backend gemvMlxQ4 basic" {
 
     // 1x64 GEMV: one output row, 64 input elements (one group).
     // x = [1.0, 1.0, 0, 0, ...], first two elements set
-    var x: [64]f32 = [_]f32{0} ** 64;
+    var x: [64]f32 = @splat(0);
     x[0] = 1.0;
     x[1] = 1.0;
     // Weight: u32 word[0] nibbles: elem[0]=3, elem[1]=5, rest=0.
     // word[0] = 0x00000053 (nibble[0]=3, nibble[1]=5)
-    var weight: [8]u32 = [_]u32{0} ** 8;
+    var weight: [8]u32 = @splat(0);
     weight[0] = 0x53; // nibble[0]=3, nibble[1]=5
     // Scale = bf16 1.0 = 0x3F80 (lo=0x80, hi=0x3F)
     var sc = [2]u8{ 0x80, 0x3F };
@@ -4252,7 +4252,7 @@ test "MetalBackend.gemvT" {
         const F = @TypeOf(MetalBackend.gemvT);
         const info = @typeInfo(F);
         // gemvT takes self + 5 params = 6 total
-        try std.testing.expectEqual(6, info.@"fn".params.len);
+        try std.testing.expectEqual(6, info.@"fn".param_types.len);
     }
 }
 
@@ -4401,8 +4401,8 @@ test "MetalBackend.sdpa f32 basic" {
     var output: [4]f32 = undefined;
 
     // Allocate KV cache for 1 position
-    var keys_mem: [kvd]f32 = [_]f32{0} ** kvd;
-    var vals_mem: [kvd]f32 = [_]f32{0} ** kvd;
+    var keys_mem: [kvd]f32 = @splat(0);
+    var vals_mem: [kvd]f32 = @splat(0);
     const keys_bytes = std.mem.sliceAsBytes(&keys_mem);
     const vals_bytes = std.mem.sliceAsBytes(&vals_mem);
 
@@ -4430,8 +4430,8 @@ test "MetalBackend.sdpaWithStats" {
     var head_max: [1]f32 = undefined;
     var head_sum: [1]f32 = undefined;
 
-    var keys_mem: [kvd]f32 = [_]f32{0} ** kvd;
-    var vals_mem: [kvd]f32 = [_]f32{0} ** kvd;
+    var keys_mem: [kvd]f32 = @splat(0);
+    var vals_mem: [kvd]f32 = @splat(0);
     const keys_bytes = std.mem.sliceAsBytes(&keys_mem);
     const vals_bytes = std.mem.sliceAsBytes(&vals_mem);
 
@@ -4450,7 +4450,7 @@ test "MetalBackend.gemvMxfp4St signature" {
         const F = @TypeOf(MetalBackend.gemvMxfp4St);
         const info = @typeInfo(F);
         // self + x + weight + scale + y + n + k + gs + sf = 9 params
-        try std.testing.expectEqual(9, info.@"fn".params.len);
+        try std.testing.expectEqual(9, info.@"fn".param_types.len);
     }
 }
 
@@ -4460,7 +4460,7 @@ test "MetalBackend.gemvGptq signature" {
         const F = @TypeOf(MetalBackend.gemvGptq);
         const info = @typeInfo(F);
         // self + x + qweight + scales + qzeros + y + n + k + group_size = 9 params
-        try std.testing.expectEqual(9, info.@"fn".params.len);
+        try std.testing.expectEqual(9, info.@"fn".param_types.len);
     }
 }
 
@@ -4471,7 +4471,7 @@ test "MetalBackend.gemvHqq signature" {
         const F = @TypeOf(MetalBackend.gemvHqq);
         const info = @typeInfo(F);
         // self + x + w_q + scale + zero + y + n + k + group_size = 9 params
-        try std.testing.expectEqual(9, info.@"fn".params.len);
+        try std.testing.expectEqual(9, info.@"fn".param_types.len);
     }
 }
 
@@ -4481,7 +4481,7 @@ test "MetalBackend.gemvAwq signature" {
         const F = @TypeOf(MetalBackend.gemvAwq);
         const info = @typeInfo(F);
         // self + x + qweight + scales + qzeros + y + n + k + group_size = 9 params
-        try std.testing.expectEqual(9, info.@"fn".params.len);
+        try std.testing.expectEqual(9, info.@"fn".param_types.len);
     }
 }
 
@@ -4491,7 +4491,7 @@ test "MetalBackend.fusedFfnGateUpSiluQ8 signature" {
         const F = @TypeOf(MetalBackend.fusedFfnGateUpSiluQ8);
         const info = @typeInfo(F);
         // self + x + w_gate + w_up + ff_out + n_ff + n_embd = 7 params
-        try std.testing.expectEqual(7, info.@"fn".params.len);
+        try std.testing.expectEqual(7, info.@"fn".param_types.len);
     }
 }
 
@@ -4500,7 +4500,7 @@ test "MetalBackend.fusedFfnGateUpSiluQ4K signature" {
     comptime {
         const F = @TypeOf(MetalBackend.fusedFfnGateUpSiluQ4K);
         const info = @typeInfo(F);
-        try std.testing.expectEqual(7, info.@"fn".params.len);
+        try std.testing.expectEqual(7, info.@"fn".param_types.len);
     }
 }
 
@@ -4509,7 +4509,7 @@ test "MetalBackend.fusedFfnGateUpSiluQ40 signature" {
     comptime {
         const F = @TypeOf(MetalBackend.fusedFfnGateUpSiluQ40);
         const info = @typeInfo(F);
-        try std.testing.expectEqual(7, info.@"fn".params.len);
+        try std.testing.expectEqual(7, info.@"fn".param_types.len);
     }
 }
 
@@ -4518,7 +4518,7 @@ test "MetalBackend.fusedFfnGateUpGeluQ8 signature" {
     comptime {
         const F = @TypeOf(MetalBackend.fusedFfnGateUpGeluQ8);
         const info = @typeInfo(F);
-        try std.testing.expectEqual(7, info.@"fn".params.len);
+        try std.testing.expectEqual(7, info.@"fn".param_types.len);
     }
 }
 
@@ -4527,7 +4527,7 @@ test "MetalBackend.fusedFfnGateUpGeluQ4K signature" {
     comptime {
         const F = @TypeOf(MetalBackend.fusedFfnGateUpGeluQ4K);
         const info = @typeInfo(F);
-        try std.testing.expectEqual(7, info.@"fn".params.len);
+        try std.testing.expectEqual(7, info.@"fn".param_types.len);
     }
 }
 
@@ -4536,7 +4536,7 @@ test "MetalBackend.fusedFfnGateUpGeluQ40 signature" {
     comptime {
         const F = @TypeOf(MetalBackend.fusedFfnGateUpGeluQ40);
         const info = @typeInfo(F);
-        try std.testing.expectEqual(7, info.@"fn".params.len);
+        try std.testing.expectEqual(7, info.@"fn".param_types.len);
     }
 }
 
@@ -4545,7 +4545,7 @@ test "MetalBackend.fusedFfnGateUpSiluQ6K signature" {
     comptime {
         const F = @TypeOf(MetalBackend.fusedFfnGateUpSiluQ6K);
         const info = @typeInfo(F);
-        try std.testing.expectEqual(7, info.@"fn".params.len);
+        try std.testing.expectEqual(7, info.@"fn".param_types.len);
     }
 }
 
@@ -4554,7 +4554,7 @@ test "MetalBackend.fusedFfnGateUpGeluQ6K signature" {
     comptime {
         const F = @TypeOf(MetalBackend.fusedFfnGateUpGeluQ6K);
         const info = @typeInfo(F);
-        try std.testing.expectEqual(7, info.@"fn".params.len);
+        try std.testing.expectEqual(7, info.@"fn".param_types.len);
     }
 }
 
@@ -4563,7 +4563,7 @@ test "MetalBackend.fusedFfnGateUpSiluQ5K signature" {
     comptime {
         const F = @TypeOf(MetalBackend.fusedFfnGateUpSiluQ5K);
         const info = @typeInfo(F);
-        try std.testing.expectEqual(7, info.@"fn".params.len);
+        try std.testing.expectEqual(7, info.@"fn".param_types.len);
     }
 }
 
@@ -4572,7 +4572,7 @@ test "MetalBackend.fusedFfnGateUpGeluQ5K signature" {
     comptime {
         const F = @TypeOf(MetalBackend.fusedFfnGateUpGeluQ5K);
         const info = @typeInfo(F);
-        try std.testing.expectEqual(7, info.@"fn".params.len);
+        try std.testing.expectEqual(7, info.@"fn".param_types.len);
     }
 }
 
@@ -4582,7 +4582,7 @@ test "MetalBackend.fusedFfnGateUpSiluMlxQ4 signature" {
         const F = @TypeOf(MetalBackend.fusedFfnGateUpSiluMlxQ4);
         const info = @typeInfo(F);
         // self + x + gate_w/s/b + up_w/s/b + ff_out + n_ff + n_embd = 11 params
-        try std.testing.expectEqual(11, info.@"fn".params.len);
+        try std.testing.expectEqual(11, info.@"fn".param_types.len);
     }
 }
 
@@ -4592,7 +4592,7 @@ test "MetalBackend.dispatchMegakernelQwen35Q8 signature" {
         const F = @TypeOf(MetalBackend.dispatchMegakernelQwen35Q8);
         const info = @typeInfo(F);
         // self + 8 buffer pairs (ptr+size) + params + params_size + n_tgs = 18 params
-        try std.testing.expectEqual(18, info.@"fn".params.len);
+        try std.testing.expectEqual(18, info.@"fn".param_types.len);
     }
 }
 
@@ -4601,7 +4601,7 @@ test "MetalBackend.dispatchMegakernelGemmaQ4K signature" {
     comptime {
         const F = @TypeOf(MetalBackend.dispatchMegakernelGemmaQ4K);
         const info = @typeInfo(F);
-        try std.testing.expectEqual(18, info.@"fn".params.len);
+        try std.testing.expectEqual(18, info.@"fn".param_types.len);
     }
 }
 
@@ -4610,7 +4610,7 @@ test "MetalBackend.dispatchMegakernelQwen35Q4K signature" {
     comptime {
         const F = @TypeOf(MetalBackend.dispatchMegakernelQwen35Q4K);
         const info = @typeInfo(F);
-        try std.testing.expectEqual(18, info.@"fn".params.len);
+        try std.testing.expectEqual(18, info.@"fn".param_types.len);
     }
 }
 
@@ -4619,7 +4619,7 @@ test "MetalBackend.dispatchMegakernelAuto signature" {
     comptime {
         const F = @TypeOf(MetalBackend.dispatchMegakernelAuto);
         const info = @typeInfo(F);
-        try std.testing.expectEqual(18, info.@"fn".params.len);
+        try std.testing.expectEqual(18, info.@"fn".param_types.len);
     }
 }
 
@@ -4629,7 +4629,7 @@ test "MetalBackend.compileComposedMegakernel signature" {
         const F = @TypeOf(MetalBackend.compileComposedMegakernel);
         const info = @typeInfo(F);
         // self + composed_msl = 2 params
-        try std.testing.expectEqual(2, info.@"fn".params.len);
+        try std.testing.expectEqual(2, info.@"fn".param_types.len);
     }
 }
 

@@ -167,8 +167,8 @@ pub const Request = struct {
     mirostat_eta: f32 = 0.1,
     /// Mirostat running estimate; reset when sampling is configured.
     mirostat_mu: f32 = 10.0,
-    logit_bias_ids: [max_scheduler_logit_bias]u32 = .{0} ** max_scheduler_logit_bias,
-    logit_bias_vals: [max_scheduler_logit_bias]f32 = .{0} ** max_scheduler_logit_bias,
+    logit_bias_ids: [max_scheduler_logit_bias]u32 = @splat(0),
+    logit_bias_vals: [max_scheduler_logit_bias]f32 = @splat(0),
     logit_bias_count: u32 = 0,
     /// Sampling stream. A fixed placeholder until the handler publishes the
     /// request's sampling params: `id` is handed out in connection-accept

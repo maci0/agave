@@ -214,9 +214,9 @@ test "fuzz: all megakernel functions" {
             };
 
             // All 20 fields must be accessible via reflection
-            const fields = @typeInfo(LayerOffsets).@"struct".fields;
+            const fields = @typeInfo(LayerOffsets).@"struct".field_names;
             inline for (fields) |field| {
-                const val = @field(lo, field.name);
+                const val = @field(lo, field);
                 try std.testing.expect(val <= std.math.maxInt(usize));
             }
 

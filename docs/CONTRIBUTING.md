@@ -4,13 +4,13 @@ Templates and step-by-step guides for extending the inference engine.
 
 ## Development setup
 
-Install **Zig 0.16.0** from https://ziglang.org/download/ (pin: [`.zigversion`](../.zigversion), also `build.zig.zon` `.minimum_zig_version`). `zig build` exits if the running compiler does not match that pin. GPU backends `dlopen` drivers at runtime; no GPU SDK is needed to compile.
+Install **Zig 0.17.0** from https://ziglang.org/download/ (pin: [`.zigversion`](../.zigversion), also `build.zig.zon` `.minimum_zig_version`). `zig build` exits if the running compiler does not match that pin. GPU backends `dlopen` drivers at runtime; no GPU SDK is needed to compile.
 
 `zig build check` also needs **Python 3.11+** (`scripts/check-docs.py`). TypeScript gates need **bun 1.4.2** (`package.json` `packageManager`, enforced exactly by `scripts/lint-web.sh`) and `bun install --frozen-lockfile`. The remaining `zig build ci` halves need **shellcheck** (`zig build lint-shell`) and **ruff** (`zig build lint-python`). `scripts/lint-python.sh` runs a `ruff` on PATH when it already reports the `ruff.toml` pin, and otherwise runs the pinned ruff ephemerally through `uvx`, the same way CI does, so no global tool install is required; with neither available it names both ways to get the pin.
 
 ```bash
 zig build doctor     # what this machine is missing for `zig build ci`, before the gate finds it
-zig version          # must print 0.16.0
+zig version          # must print 0.17.0
 zig build            # agave (ReleaseFast) + agave-debug (ReleaseSafe)
 zig build test       # unit tests
 zig build --help     # all steps
@@ -472,7 +472,7 @@ scripts/test-file.sh src/ops/kv_quant.zig
 # in that file matches, because `zig test --test-filter` cannot see an imported
 # file's tests and would report "All 0 tests passed." and exit 0.
 scripts/test-file.sh src/ops/kv_quant.zig wht32
-# It writes a throwaway bridge root into src/ (Zig 0.16 modules reach only files
+# It writes a throwaway bridge root into src/ (Zig 0.17 modules reach only files
 # under their root's directory, so `zig test src/ops/kv_quant.zig` alone dies
 # with "import of file outside module path") and removes it on every exit.
 # Files outside src/ are already their own root: see the golden tests below.

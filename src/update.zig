@@ -20,7 +20,7 @@ pub const tool_name = "agave";
 const stdout_file = std.Io.File.stdout();
 const stderr_file = std.Io.File.stderr();
 
-const exec_mode: std.Io.File.Permissions = @enumFromInt(@as(std.posix.mode_t, 0o755));
+const exec_mode: std.Io.File.Permissions = @fromBackingInt(@intCast(@as(std.posix.mode_t, 0o755)));
 
 const max_api_bytes: usize = 10 * 1024 * 1024;
 const max_sidecar_bytes: usize = 64 * 1024;
@@ -346,7 +346,7 @@ fn fetchBody(
     var redirect_buf: [8 * 1024]u8 = undefined;
     var response = req.receiveHead(&redirect_buf) catch |err| return err;
 
-    const status_code = @intFromEnum(response.head.status);
+    const status_code = @backingInt(response.head.status);
     if (status_code >= 400) return error.HttpStatus;
 
     var transfer_buf: [64 * 1024]u8 = undefined;

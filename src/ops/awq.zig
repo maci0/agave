@@ -107,7 +107,7 @@ test "awqGemv GEMM order" {
     var scales = [_]u16{ 6794, 7247, 8252, 7744, 11327, 8329, 8451, 8314 };
 
     var x = [_]f32{1.0};
-    var y = [_]f32{0} ** 8;
+    var y: [8]f32 = @splat(0);
 
     awqGemvRows(&x, &qweight, &scales, &qzeros, &y, 0, n, n, k, gs);
 
@@ -170,7 +170,7 @@ test "awqGemvRows chunk uses full-n strides" {
         6794, 7247, 8252, 7744, 11327, 8329, 8451, 8314,
     };
     var x = [_]f32{1.0};
-    var y = [_]f32{0} ** 16;
+    var y: [16]f32 = @splat(0);
 
     awqGemvRows(&x, &qweight, &scales, &qzeros, &y, 8, 8, n, k, gs);
 
@@ -196,7 +196,7 @@ test "fuzz: all awq functions" {
             var scale_bits = smith.valueWithHash(u16, 1);
             const exp = (scale_bits >> 10) & 0x1F;
             if (exp == 0x1F) scale_bits &= 0x83FF;
-            var scales_arr = [_]u16{scale_bits} ** n;
+            var scales_arr: [n]u16 = @splat(scale_bits);
             var qzeros = [_]u32{smith.valueWithHash(u32, 2)};
 
             var x: [k]f32 = undefined;
@@ -206,11 +206,11 @@ test "fuzz: all awq functions" {
                 if (!std.math.isFinite(x[i])) x[i] = 0.0;
             }
 
-            var y1 = [_]f32{0.0} ** n;
+            var y1: [n]f32 = @splat(0.0);
             awqGemv(&x, &qweight, &scales_arr, &qzeros, &y1, n, k, group_size);
             for (y1) |v| if (!std.math.isFinite(v)) return error.TestUnexpectedResult;
 
-            var y2 = [_]f32{0.0} ** n;
+            var y2: [n]f32 = @splat(0.0);
             awqGemvRows(&x, &qweight, &scales_arr, &qzeros, &y2, 0, n, n, k, group_size);
             for (0..n) |i| if (y1[i] != y2[i]) return error.TestUnexpectedResult;
         }

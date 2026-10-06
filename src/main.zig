@@ -2131,14 +2131,14 @@ const supported_arch_help = blk: {
         if (acc.len > 0) acc = acc ++ ", ";
         acc = acc ++ a.buildFlag();
     }
-    for (@typeInfo(Arch).@"enum".fields) |f| {
-        const a: Arch = @field(Arch, f.name);
+    for (@typeInfo(Arch).@"enum".field_names) |f| {
+        const a: Arch = @field(Arch, f);
         if (a == .dflash2) continue;
         var found = false;
         for (order) |o| {
             if (o == a) found = true;
         }
-        if (!found) @compileError("supported_arch_help missing " ++ f.name);
+        if (!found) @compileError("supported_arch_help missing " ++ f);
     }
     break :blk acc;
 };

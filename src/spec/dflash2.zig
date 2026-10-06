@@ -204,7 +204,7 @@ test "groupedDynamicConv matches hand computation" {
     // base: tap0 scales by 1, tap1 scales by 10 (per channel identity-ish).
     const base = [_]f32{ 1, 1, 1, 1, 10, 10, 10, 10 };
     // dynamic corrections: tap0 adds 0.5 to group 0 only; tap1 adds 1 to group 1 only.
-    var dyn = [_]f32{0} ** (L * kernel * groups);
+    var dyn: [(L * kernel * groups)]f32 = @splat(0);
     for (0..L) |t| {
         dyn[(t * kernel + 0) * groups + 0] = 0.5;
         dyn[(t * kernel + 1) * groups + 1] = 1.0;

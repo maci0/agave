@@ -650,7 +650,7 @@ test "fuzz: all chat_template functions" {
 
             const roles = [_]Role{ .user, .assistant, .tool };
             const role = roles[smith.valueWithHash(u8, 9) % roles.len];
-            _ = @intFromEnum(role);
+            _ = @backingInt(role);
 
             const use_sys = smith.valueWithHash(u8, 10) % 2 == 0;
             const opt_sys: ?[]const u8 = if (use_sys) sys_str else null;

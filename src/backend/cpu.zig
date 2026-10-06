@@ -47,7 +47,7 @@ const sysfs_cache_level_buf_size: usize = 8;
 
 // ── CPU model detection ─────────────────────────────────────────
 
-var cpu_model_buf: [cpu_model_buf_size]u8 = .{0} ** cpu_model_buf_size;
+var cpu_model_buf: [cpu_model_buf_size]u8 = @splat(0);
 var cpu_model_len: usize = 0;
 /// Set only after the buffer is fully written (release). Readers use acquire.
 var cpu_model_detected: std.atomic.Value(bool) = .init(false);
@@ -377,7 +377,7 @@ pub fn detectPhysicalCores() usize {
 const os_version_buf_size: usize = 128;
 /// Length of the "macOS " / "Linux " prefix prepended to OS version strings.
 const os_prefix_len: usize = 6;
-var os_version_buf: [os_version_buf_size]u8 = .{0} ** os_version_buf_size;
+var os_version_buf: [os_version_buf_size]u8 = @splat(0);
 var os_version_len: usize = 0;
 var os_version_detected: std.atomic.Value(bool) = .init(false);
 var os_version_init_lock: std.atomic.Value(u8) = .init(0);
@@ -2047,7 +2047,7 @@ test "CpuBackend, sdpaTree nvfp4_ds_mla" {
     var tree_k: [hd]f32 = @splat(0.05);
     var tree_v: [hd]f32 = @splat(0.3);
     var output: [hd]f32 = undefined;
-    var masks = [_][8]u64{.{0} ** 8};
+    var masks = [_][8]u64{@splat(0)};
     be.sdpaTree(&q, &prefix_k, &prefix_v, &tree_k, &tree_v, &output, &masks, 1, 1, hd, 1, 1, 1.0, .nvfp4_ds_mla, .nvfp4_ds_mla);
     for (output) |v| try std.testing.expect(std.math.isFinite(v));
 }
@@ -2192,7 +2192,7 @@ test "fuzz: all cpu functions" {
             be.sdpaPrefill(&sq, &sk, &sv, &keys, &values, &s_out, nh, nkv, hd, 0, 1, 1.0, .f32, .f32);
 
             // sdpaTree (zero nodes, no-op)
-            be.sdpaTree(&sq, @as([*]const u8, @ptrCast(&keys)), @as([*]const u8, @ptrCast(&values)), &sq, &sq, &s_out, @as([*]const [8]u64, &.{.{0} ** 8}), 1, 1, 4, 0, 0, 1.0, .f32, .f32);
+            be.sdpaTree(&sq, @as([*]const u8, @ptrCast(&keys)), @as([*]const u8, @ptrCast(&values)), &sq, &sq, &s_out, @as([*]const [8]u64, &.{@splat(0)}), 1, 1, 4, 0, 0, 1.0, .f32, .f32);
 
             // sdpaPaged (CPU fallback)
             // Not easily callable without PagedKvView setup, verified via comptime ref

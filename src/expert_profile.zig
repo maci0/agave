@@ -82,7 +82,7 @@ pub const ExpertProfile = struct {
         const out_k = @min(actual_k, @as(u32, @intCast(out_ids.len)));
 
         // Simple selection sort for top-K (experts per layer is small, typically 64-256)
-        var used = [_]bool{false} ** max_experts;
+        var used: [max_experts]bool = @splat(false);
         var written: u32 = 0;
         while (written < out_k) {
             var best_id: u32 = 0;

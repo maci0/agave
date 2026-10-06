@@ -134,7 +134,7 @@ pub const ModelInfo = struct {
     kv_type_name: []const u8 = "F32",
     kv_bpe: f32 = 32.0,
     /// Buffer for asymmetric KV type display string (e.g. "Q8_0-K / TURBO4-V").
-    kv_asym_name_buf: [64]u8 = .{0} ** 64,
+    kv_asym_name_buf: [64]u8 = @splat(0),
     kv_asym_name_len: usize = 0,
     rope_theta: f32,
     n_params: u64,
@@ -1091,7 +1091,10 @@ test "sanitizeMetadata strips control characters" {
 test "sanitizeMetadata does not split a trailing UTF-8 character" {
     var buf: [max_meta_len]u8 = undefined;
     // 86 CJK chars = 258 bytes; max_meta_len is 256, which splits the last 世.
-    const input = "\xe4\xb8\x96" ** 86;
+    const input = comptime blk: {
+        const u: [86][3]u8 = @splat("\xe4\xb8\x96".*);
+        break :blk std.mem.sliceAsBytes(&u);
+    };
     const result = sanitizeMetadata(&buf, input);
     try std.testing.expect(std.unicode.utf8ValidateSlice(result));
     try std.testing.expectEqual(@as(usize, 255), result.len);
@@ -1220,7 +1223,7 @@ test "fuzz: all display functions" {
 
             // ── OutputMode enum ──
             const mode_idx = smith.valueWithHash(u8, 20) % 3;
-            const mode: OutputMode = @enumFromInt(mode_idx);
+            const mode: OutputMode = @fromBackingInt(@intCast(mode_idx));
             _ = mode;
 
             // ── FormattedSize struct ──

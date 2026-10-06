@@ -358,9 +358,9 @@ const VkMemoryHeap = extern struct {
 
 const VkPhysicalDeviceMemoryProperties = extern struct {
     memoryTypeCount: u32 = 0,
-    memoryTypes: [32]VkMemoryType = [_]VkMemoryType{.{}} ** 32,
+    memoryTypes: [32]VkMemoryType = @splat(.{}),
     memoryHeapCount: u32 = 0,
-    memoryHeaps: [16]VkMemoryHeap = [_]VkMemoryHeap{.{}} ** 16,
+    memoryHeaps: [16]VkMemoryHeap = @splat(.{}),
 };
 
 const VkQueueFamilyProperties = extern struct {
@@ -776,7 +776,7 @@ pub const VulkanBackend = struct {
     api_version: u32 = 0,
 
     /// Pre-formatted Vulkan version string (e.g., "Vulkan 1.3").
-    vk_ver_str: [24]u8 = .{0} ** 24,
+    vk_ver_str: [24]u8 = @splat(0),
 
     // Memory type index for host-visible coherent memory
     host_mem_type: u32 = 0,
@@ -859,7 +859,7 @@ pub const VulkanBackend = struct {
     vkCmdPushDescriptorSet: ?FnCmdPushDescriptorSet = null,
 
     // Activation buffer pool
-    act_pool: [act_pool_capacity]PoolEntry = [_]PoolEntry{.{}} ** act_pool_capacity,
+    act_pool: [act_pool_capacity]PoolEntry = @splat(.{}),
     act_pool_count: u32 = 0,
 
     /// Number of SPIR-V compute pipelines compiled at init.

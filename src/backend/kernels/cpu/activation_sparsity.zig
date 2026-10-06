@@ -83,37 +83,37 @@ pub fn blockMask(x: [*]const f32, nb: usize, block_elems: usize, k: usize) Block
 // ── Tests ────────────────────────────────────────────────────────
 
 test "isBlockSparse all zeros" {
-    var x = [_]f32{0.0} ** 32;
+    var x: [32]f32 = @splat(0.0);
     try std.testing.expect(isBlockSparse(&x, 0, 32));
 }
 
 test "isBlockSparse below threshold" {
-    var x = [_]f32{0.001} ** 32;
+    var x: [32]f32 = @splat(0.001);
     try std.testing.expect(isBlockSparse(&x, 0, 32));
 }
 
 test "isBlockSparse above threshold" {
-    var x = [_]f32{0.001} ** 32;
+    var x: [32]f32 = @splat(0.001);
     x[16] = 0.01;
     try std.testing.expect(!isBlockSparse(&x, 0, 32));
 }
 
 test "isBlockSparse negative values" {
-    var x = [_]f32{-0.004} ** 32;
+    var x: [32]f32 = @splat(-0.004);
     try std.testing.expect(isBlockSparse(&x, 0, 32));
     x[0] = -0.006;
     try std.testing.expect(!isBlockSparse(&x, 0, 32));
 }
 
 test "isBlockSparse partial block" {
-    var x = [_]f32{0.0} ** 13;
+    var x: [13]f32 = @splat(0.0);
     try std.testing.expect(isBlockSparse(&x, 0, 13));
     x[12] = 1.0;
     try std.testing.expect(!isBlockSparse(&x, 0, 13));
 }
 
 test "isBlockSparse offset" {
-    var x = [_]f32{1.0} ** 64;
+    var x: [64]f32 = @splat(1.0);
     // Fill second half with zeros
     for (32..64) |i| x[i] = 0.0;
     try std.testing.expect(!isBlockSparse(&x, 0, 32));
@@ -122,7 +122,7 @@ test "isBlockSparse offset" {
 
 test "isBlockSparse disabled when threshold is zero" {
     if (sparse_threshold != 0) return error.SkipZigTest;
-    var x = [_]f32{0.0} ** 32;
+    var x: [32]f32 = @splat(0.0);
     try std.testing.expect(!isBlockSparse(&x, 0, 32));
 }
 

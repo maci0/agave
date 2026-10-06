@@ -612,7 +612,7 @@ test "mlxGemvRaw 2-bit basic" {
     // 0xE4E4E4E4 = repeating pattern 0,1,2,3
     // scale=1.0 (bf16), bias=0.0 → dequant(val) = val
     // x = all ones → y[0] = 4*(0+1+2+3) = 24
-    var pw: [4]u32 = .{0} ** 4; // 1 group × 4 words (only 1 word used for k=16)
+    var pw: [4]u32 = @splat(0); // 1 group × 4 words (only 1 word used for k=16)
     pw[0] = 0xE4E4E4E4;
     const sc = [_]u16{0x3F80}; // bf16(1.0)
     const bi = [_]u16{0x0000}; // bf16(0.0)
@@ -627,7 +627,7 @@ test "mlxGemvRaw 2-bit basic" {
 
 test "mlxGemvRaw 2-bit with bias" {
     // Verify bias: all-zero weights + bias=1.0 → y = sum(x) * bias
-    var pw: [4]u32 = .{0} ** 4;
+    var pw: [4]u32 = @splat(0);
     const sc = [_]u16{0x4000}; // bf16(2.0), scale doesn't matter, weights are 0
     const bi = [_]u16{0x3F80}; // bf16(1.0)
     const x = [_]f32{ 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1 };
@@ -645,7 +645,7 @@ test "mlxGemvRaw 2-bit two rows" {
     // scale=2.0, bias=0.5, x = all ones, k=16
     // Row 0: sum(2.0*3 + 0.5) = 16 * 6.5 = 104.0
     // Row 1: sum(2.0*1 + 0.5) = 16 * 2.5 = 40.0
-    var pw: [8]u32 = .{0} ** 8; // 2 rows × 4 words
+    var pw: [8]u32 = @splat(0); // 2 rows × 4 words
     pw[0] = 0xFFFFFFFF; // row 0: all crumbs = 3
     pw[4] = 0x55555555; // row 1: all crumbs = 1
     const sc = [_]u16{ 0x4000, 0x4000 }; // bf16(2.0)
@@ -678,7 +678,7 @@ test "mlxGemvRaw 4-bit two rows" {
     // (only the first carries the k=8 weights; the rest stay zero).
     // Row 0: nibbles 0xF (all 15), Row 1: nibbles 0x1. scale=1.0, bias=0.0, x all ones, k=8.
     // Row 0: 8*15 = 120.0, Row 1: 8*1 = 8.0
-    var pw = [_]u32{0} ** 16;
+    var pw: [16]u32 = @splat(0);
     pw[0] = 0xFFFFFFFF;
     pw[8] = 0x11111111;
     const sc = [_]u16{ 0x3F80, 0x3F80 }; // bf16(1.0)
@@ -696,7 +696,7 @@ test "mlxGemvRaw 8-bit two rows" {
     // 8-bit packs 4 values per u32 word; gs=64 => 16 words per row.
     // Row 0: all bytes 0xFF (255), Row 1: all bytes 0x01. scale=0.5, bias=0.25, x all ones.
     // Row 0: 8 * (0.5*255 + 0.25) = 1022.0, Row 1: 8 * (0.5*1 + 0.25) = 6.0
-    var pw = [_]u32{0} ** 32;
+    var pw: [32]u32 = @splat(0);
     pw[0] = 0xFFFFFFFF;
     pw[1] = 0xFFFFFFFF;
     pw[16] = 0x01010101;
@@ -715,7 +715,7 @@ test "mlxGemvRaw 8-bit two rows" {
 test "mlxEmbLookup 2-bit basic" {
     // 2 rows of k=16, look up row 1 (all 2s)
     // Row 0: crumbs 0,1,2,3 repeating, Row 1: all 2s (0xAA...)
-    var pw: [8]u32 = .{0} ** 8; // 2 rows × 4 words per row
+    var pw: [8]u32 = @splat(0); // 2 rows × 4 words per row
     pw[0] = 0xE4E4E4E4; // row 0: 0,1,2,3 repeating
     pw[4] = 0xAAAAAAAA; // row 1: all crumbs = 2 (0b10 = 2, 0xAA = 10_10_10_10)
     const sc = [_]u16{ 0x3F80, 0x3F80 }; // bf16(1.0) per row
@@ -733,7 +733,7 @@ test "mlxEmbLookup 2-bit basic" {
 test "mlxEmbLookup 4-bit basic" {
     // 2 rows of k=8, look up row 1 (all 5s)
     // Row 0: nibbles 0..7, Row 1: all 5s
-    var pw: [16]u32 = .{0} ** 16; // 2 rows × 8 words per row
+    var pw: [16]u32 = @splat(0); // 2 rows × 8 words per row
     pw[0] = 0x76543210; // row 0
     pw[8] = 0x55555555; // row 1: all nibbles = 5
     const sc = [_]u16{ 0x3F80, 0x3F80 }; // bf16(1.0) per row

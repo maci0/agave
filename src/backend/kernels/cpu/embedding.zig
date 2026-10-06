@@ -537,7 +537,7 @@ test "embQ4_K dequantizes non-zero nibbles" {
 
 test "embLookup f32 smoke" {
     const dim = 4;
-    var dummy_data = [_]u8{0} ** 256;
+    var dummy_data: [256]u8 = @splat(0);
     var out = [_]f32{ 99, 99, 99, 99 };
     embLookup(&dummy_data, .f32, 0, &out, dim);
     // All-zero f32 bytes dequantize to 0.0.

@@ -205,7 +205,7 @@ test "fuzz: all sdpa_tree functions" {
             const empty: [0]u8 = .{};
             var masks: [0][8]u64 = undefined;
             _ = &masks;
-            sdpaTree(&q, &empty, &empty, &q, &q, &output, @as([*]const [8]u64, &.{.{0} ** 8}), 1, 1, 4, 0, 0, 1.0, .f32, .f32);
+            sdpaTree(&q, &empty, &empty, &q, &q, &output, @as([*]const [8]u64, &.{@splat(0)}), 1, 1, 4, 0, 0, 1.0, .f32, .f32);
         }
     }.f, .{});
 }

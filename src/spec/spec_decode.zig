@@ -44,14 +44,14 @@ pub const SpecState = struct {
 
     /// Profile-guided adaptive K: adjust draft length based on acceptance history.
     /// Tracks per-K acceptance rates to find optimal draft length.
-    k_accept_counts: [max_draft_tokens]u32 = .{0} ** max_draft_tokens,
-    k_total_counts: [max_draft_tokens]u32 = .{0} ** max_draft_tokens,
+    k_accept_counts: [max_draft_tokens]u32 = @splat(0),
+    k_total_counts: [max_draft_tokens]u32 = @splat(0),
     adaptive_k_enabled: bool = false,
     /// Adaptive V2: current per-request k (starts at configured k, adjusts within request).
     current_k: u32 = 5,
     /// Sliding window (last 8 rounds) for per-request acceptance rate tracking.
-    recent_accepted: [8]u32 = .{0} ** 8,
-    recent_drafted: [8]u32 = .{0} ** 8,
+    recent_accepted: [8]u32 = @splat(0),
+    recent_drafted: [8]u32 = @splat(0),
 
     /// FR-Spec token mask: if non-null, a boolean array of vocab_size where mask[id]=true
     /// means the token is in the high-frequency set. Draft logits for mask[id]=false tokens

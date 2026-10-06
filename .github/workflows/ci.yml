@@ -286,7 +286,7 @@ jobs:
   # kernel-source edit without regeneration ships stale GPU code (this has
   # already happened: committed all.ptx predates deltanet_recurrence.zig).
   # Blocking since the tree was regenerated (2026-08): PTX comes from the
-  # pinned zig 0.16.0 nvptx backend, so fresh builds are byte-identical on
+  # pinned zig 0.17.0 nvptx backend, so fresh builds are byte-identical on
   # any runner. SPIR-V checking is local-only for now (needs
   # glslangValidator, see scripts/check-shader-artifacts.sh) because runner
   # glslang versions are not pinned and its output embeds the generator

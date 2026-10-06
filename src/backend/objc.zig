@@ -41,18 +41,18 @@ pub fn getClass(name: [*:0]const u8) ?Class {
 /// Helper to build function pointer type at comptime. Switches on the argument
 /// count and appends the argument types as trailing parameters after SEL.
 fn MsgSendFn(comptime R: type, comptime T: type, comptime Args: type) type {
-    const fields = @typeInfo(Args).@"struct".fields;
+    const fields = @typeInfo(Args).@"struct".field_types;
 
     return switch (fields.len) {
         0 => *const fn (T, SEL) callconv(.c) R,
-        1 => *const fn (T, SEL, fields[0].type) callconv(.c) R,
-        2 => *const fn (T, SEL, fields[0].type, fields[1].type) callconv(.c) R,
-        3 => *const fn (T, SEL, fields[0].type, fields[1].type, fields[2].type) callconv(.c) R,
-        4 => *const fn (T, SEL, fields[0].type, fields[1].type, fields[2].type, fields[3].type) callconv(.c) R,
-        5 => *const fn (T, SEL, fields[0].type, fields[1].type, fields[2].type, fields[3].type, fields[4].type) callconv(.c) R,
-        6 => *const fn (T, SEL, fields[0].type, fields[1].type, fields[2].type, fields[3].type, fields[4].type, fields[5].type) callconv(.c) R,
-        7 => *const fn (T, SEL, fields[0].type, fields[1].type, fields[2].type, fields[3].type, fields[4].type, fields[5].type, fields[6].type) callconv(.c) R,
-        8 => *const fn (T, SEL, fields[0].type, fields[1].type, fields[2].type, fields[3].type, fields[4].type, fields[5].type, fields[6].type, fields[7].type) callconv(.c) R,
+        1 => *const fn (T, SEL, fields[0]) callconv(.c) R,
+        2 => *const fn (T, SEL, fields[0], fields[1]) callconv(.c) R,
+        3 => *const fn (T, SEL, fields[0], fields[1], fields[2]) callconv(.c) R,
+        4 => *const fn (T, SEL, fields[0], fields[1], fields[2], fields[3]) callconv(.c) R,
+        5 => *const fn (T, SEL, fields[0], fields[1], fields[2], fields[3], fields[4]) callconv(.c) R,
+        6 => *const fn (T, SEL, fields[0], fields[1], fields[2], fields[3], fields[4], fields[5]) callconv(.c) R,
+        7 => *const fn (T, SEL, fields[0], fields[1], fields[2], fields[3], fields[4], fields[5], fields[6]) callconv(.c) R,
+        8 => *const fn (T, SEL, fields[0], fields[1], fields[2], fields[3], fields[4], fields[5], fields[6], fields[7]) callconv(.c) R,
         else => @compileError("msgSend: too many arguments (max 8)"),
     };
 }
@@ -116,17 +116,17 @@ test "objc, public function signature contracts" {
     comptime {
         const SelFn = @TypeOf(sel);
         const sel_info = @typeInfo(SelFn).@"fn";
-        if (sel_info.params.len != 1) @compileError("sel: expected 1 param");
+        if (sel_info.param_types.len != 1) @compileError("sel: expected 1 param");
         if (sel_info.return_type != SEL) @compileError("sel: expected SEL return");
 
         const GetClassFn = @TypeOf(getClass);
         const gc_info = @typeInfo(GetClassFn).@"fn";
-        if (gc_info.params.len != 1) @compileError("getClass: expected 1 param");
+        if (gc_info.param_types.len != 1) @compileError("getClass: expected 1 param");
         if (gc_info.return_type != ?Class) @compileError("getClass: expected ?Class return");
 
         const CreateDevFn = @TypeOf(MTLCreateSystemDefaultDevice);
         const cd_info = @typeInfo(CreateDevFn).@"fn";
-        if (cd_info.params.len != 0) @compileError("MTLCreateSystemDefaultDevice: expected 0 params");
+        if (cd_info.param_types.len != 0) @compileError("MTLCreateSystemDefaultDevice: expected 0 params");
         if (cd_info.return_type != ?id) @compileError("MTLCreateSystemDefaultDevice: expected ?id return");
     }
 }

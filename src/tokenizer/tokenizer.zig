@@ -153,7 +153,7 @@ test "TokenizerKind enum variants" {
     try std.testing.expect(TokenizerKind.spm != TokenizerKind.spm_no_dummy);
     try std.testing.expect(TokenizerKind.bpe != TokenizerKind.spm_no_dummy);
     // Verify there are exactly 3 variants
-    const fields = @typeInfo(TokenizerKind).@"enum".fields;
+    const fields = @typeInfo(TokenizerKind).@"enum".field_names;
     try std.testing.expectEqual(@as(usize, 3), fields.len);
 }
 
@@ -212,8 +212,8 @@ test "fuzz: all tokenizer functions" {
             try std.testing.expectEqual(@as(usize, 0), texts.len);
 
             const kind_idx = smith.valueWithHash(u8, 5) % 3;
-            const kind: TokenizerKind = @enumFromInt(kind_idx);
-            try std.testing.expect(@intFromEnum(kind) < 3);
+            const kind: TokenizerKind = @fromBackingInt(@intCast(kind_idx));
+            try std.testing.expect(@backingInt(kind) < 3);
 
             comptime {
                 const info = @typeInfo(TokenizerError);

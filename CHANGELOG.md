@@ -12,6 +12,12 @@ must still appear under **Changed** or **Breaking** below. See
 ## [Unreleased]
 
 ### Fixed
+- The `kv_quant` fuzz test sized its KV buffer at 64 bytes from a comment that
+  worked out the widest format as int8's 36 bytes per 32 elements. `.f32` needs
+  128, and `.f16` 64, so the two widest of the 19 types it samples wrote past
+  the buffer. Zig 0.16's generator never picked them; 0.17's does, and it
+  aborted. The buffer is now sized for `.f32` with an assert against
+  `kvSliceBytes`.
 - A NaN or infinite NVFP4 `weight_global_scale` was used as a divisor, turning
   every element of the expert output buffer into NaN. Non-finite scales are now
   left alone, as a missing scale tensor already was.
@@ -81,6 +87,16 @@ must still appear under **Changed** or **Breaking** below. See
   the rule.
 
 ### Breaking
+- **Zig 0.17.0 is now required** (released 2026-10-01). `.zigversion`,
+  `build.zig.zon` `.minimum_zig_version` and the Dockerfile's Zig download
+  checksums all move to 0.17.0; `zig build` refuses any other compiler. The
+  language changes that reached this codebase: `**` is gone (array repeat is
+  `@splat`), `errdefer |err|` captures are gone, `@hasDecl` sees only `pub`
+  decls, and `@typeInfo` became struct-of-arrays. Build-system changes:
+  `findProgram` takes an options struct and no longer returns an error union,
+  `b.build_root` became `b.root`, `b.args` became `run.addPassthruArgs()`, and
+  `b.graph.zig_lib_directory` is gone, so the test artifacts that forced the
+  stock runner into `.simple` mode now use the default runner.
 - **Five model architectures removed: Gemma 3 (and Gemma 2), GLM-4 (and DeepSeek
   V2/V3), GPT-OSS, Nemotron-H, Nemotron-Nano.** Their arch strings no longer
   resolve, so those checkpoints are rejected at load with the supported list.

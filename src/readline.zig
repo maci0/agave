@@ -366,8 +366,8 @@ pub const LineEditor = struct {
         raw.lflag.IEXTEN = false;
         raw.iflag.IXON = false;
         raw.iflag.ICRNL = false;
-        raw.cc[@intFromEnum(posix.system.V.MIN)] = 1;
-        raw.cc[@intFromEnum(posix.system.V.TIME)] = 0;
+        raw.cc[@backingInt(posix.system.V.MIN)] = 1;
+        raw.cc[@backingInt(posix.system.V.TIME)] = 0;
         try posix.tcsetattr(self.fd, .FLUSH, raw);
     }
 

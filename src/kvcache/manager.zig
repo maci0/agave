@@ -239,7 +239,7 @@ const RadixNode = struct {
         node.* = .{
             .tokens = duped_tokens,
             .block_ids = duped_blocks,
-            .children = .{null} ** radix_fanout,
+            .children = @splat(null),
         };
         return node;
     }
@@ -690,7 +690,7 @@ test "RadixTree insert is bounded by radix_max_nodes" {
 test "tokenBucket distributes different IDs to different buckets" {
     // Sequential token IDs should not all map to the same bucket
     // (multiplicative hashing avoids clustering)
-    var buckets_seen: [256]bool = .{false} ** 256;
+    var buckets_seen: [256]bool = @splat(false);
     var unique: usize = 0;
     for (0..256) |i| {
         const b = tokenBucket(@intCast(i));

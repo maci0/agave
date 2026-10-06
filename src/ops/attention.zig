@@ -375,15 +375,15 @@ pub fn pagedAttention(
 
 test "sdpa single head single token" {
     // With seq_len=0 (first token), the attention should just return V
-    var kv_keys_f32 = [_]f32{0} ** 256;
-    var kv_values_f32 = [_]f32{0} ** 256;
+    var kv_keys_f32: [256]f32 = @splat(0);
+    var kv_values_f32: [256]f32 = @splat(0);
     const kv_keys = std.mem.sliceAsBytes(&kv_keys_f32);
     const kv_values = std.mem.sliceAsBytes(&kv_values_f32);
-    var k_buf = [_]f32{1.0} ** 4;
-    var v_buf = [_]f32{0.5} ** 4;
-    var q = [_]f32{1.0} ** 4;
-    var attn_out = [_]f32{0} ** 4;
-    var scores = [_]f32{0} ** 64;
+    var k_buf: [4]f32 = @splat(1.0);
+    var v_buf: [4]f32 = @splat(0.5);
+    var q: [4]f32 = @splat(1.0);
+    var attn_out: [4]f32 = @splat(0);
+    var scores: [64]f32 = @splat(0);
 
     const BackendState = @import("../backend/backend.zig").BackendState;
     var threaded = std.Io.Threaded.init(std.testing.allocator, .{});
@@ -422,12 +422,12 @@ test "sdpa single head single token" {
 test "sdpa multi-token with GQA" {
     // 2 query heads, 1 KV head (GQA), hd=4
     // Insert two tokens then verify weighted output
-    var kv_keys_f32 = [_]f32{0} ** 256;
-    var kv_values_f32 = [_]f32{0} ** 256;
+    var kv_keys_f32: [256]f32 = @splat(0);
+    var kv_values_f32: [256]f32 = @splat(0);
     const kv_keys = std.mem.sliceAsBytes(&kv_keys_f32);
     const kv_values = std.mem.sliceAsBytes(&kv_values_f32);
-    var attn_out = [_]f32{0} ** 8; // 2 heads × 4 dims
-    var scores = [_]f32{0} ** 64;
+    var attn_out: [8]f32 = @splat(0); // 2 heads × 4 dims
+    var scores: [64]f32 = @splat(0);
 
     const BackendState = @import("../backend/backend.zig").BackendState;
     var threaded = std.Io.Threaded.init(std.testing.allocator, .{});
@@ -473,11 +473,11 @@ test "paged attention single head single token" {
     const blk_id = paged.allocBlock() orelse return error.TestUnexpectedResult;
     var block_table = [_]u32{blk_id};
 
-    var q = [_]f32{1.0} ** 4;
-    var k_buf = [_]f32{1.0} ** 4;
-    var v_buf = [_]f32{0.5} ** 4;
-    var attn_out = [_]f32{0} ** 4;
-    var scores = [_]f32{0} ** 64;
+    var q: [4]f32 = @splat(1.0);
+    var k_buf: [4]f32 = @splat(1.0);
+    var v_buf: [4]f32 = @splat(0.5);
+    var attn_out: [4]f32 = @splat(0);
+    var scores: [64]f32 = @splat(0);
 
     const BackendState = @import("../backend/backend.zig").BackendState;
     var threaded = std.Io.Threaded.init(std.testing.allocator, .{});
@@ -520,15 +520,15 @@ test "sdpa asymmetric kv types" {
     // Allocate KV cache buffers: keys as f32, values as q8_0
     const k_bytes = comptime kv_quant.kvSliceBytes(.f32, max_sl * kvd);
     const v_bytes = comptime kv_quant.kvSliceBytes(.q8_0, max_sl * kvd);
-    var kv_keys_buf: [k_bytes]u8 = .{0} ** k_bytes;
-    var kv_values_buf: [v_bytes]u8 = .{0} ** v_bytes;
+    var kv_keys_buf: [k_bytes]u8 = @splat(0);
+    var kv_values_buf: [v_bytes]u8 = @splat(0);
 
-    var k_buf = [_]f32{1.0} ** hd;
+    var k_buf: [hd]f32 = @splat(1.0);
     var v_buf: [hd]f32 = undefined;
     for (0..hd) |i| v_buf[i] = @as(f32, @floatFromInt(i)) * 0.1;
-    var q = [_]f32{1.0} ** hd;
-    var attn_out: [hd]f32 = .{0} ** hd;
-    var scores = [_]f32{0} ** 64;
+    var q: [hd]f32 = @splat(1.0);
+    var attn_out: [hd]f32 = @splat(0);
+    var scores: [64]f32 = @splat(0);
 
     const BackendState = @import("../backend/backend.zig").BackendState;
     var threaded = std.Io.Threaded.init(std.testing.allocator, .{});
@@ -583,7 +583,7 @@ test "sdpa nvfp4_ds_mla 512-d generate path" {
         v_buf[i] = @as(f32, @floatFromInt(i % 7)) * 0.1 + 0.25;
     }
     var attn_out: [hd]f32 = @splat(0);
-    var scores = [_]f32{0} ** 8;
+    var scores: [8]f32 = @splat(0);
 
     const BackendState = @import("../backend/backend.zig").BackendState;
     var threaded = std.Io.Threaded.init(std.testing.allocator, .{});
@@ -632,12 +632,12 @@ test "sdpa exercises SIMD path with hd=16" {
     const nkv = 1;
     const max_sl = 4;
 
-    var kv_keys_f32 = [_]f32{0} ** (max_sl * hd);
-    var kv_values_f32 = [_]f32{0} ** (max_sl * hd);
+    var kv_keys_f32: [(max_sl * hd)]f32 = @splat(0);
+    var kv_values_f32: [(max_sl * hd)]f32 = @splat(0);
     const kv_keys = std.mem.sliceAsBytes(&kv_keys_f32);
     const kv_values = std.mem.sliceAsBytes(&kv_values_f32);
-    var attn_out = [_]f32{0} ** (nh * hd);
-    var scores = [_]f32{0} ** 64;
+    var attn_out: [(nh * hd)]f32 = @splat(0);
+    var scores: [64]f32 = @splat(0);
 
     const BackendState = @import("../backend/backend.zig").BackendState;
     var threaded = std.Io.Threaded.init(std.testing.allocator, .{});
@@ -654,7 +654,7 @@ test "sdpa exercises SIMD path with hd=16" {
         k0[i] = if (i < 8) 1.0 else 0.0;
         v0[i] = @as(f32, @floatFromInt(i)) * 0.1;
     }
-    var q0 = [_]f32{0} ** (nh * hd);
+    var q0: [(nh * hd)]f32 = @splat(0);
     for (0..nh) |h| {
         for (0..hd) |d| q0[h * hd + d] = k0[d];
     }
@@ -678,12 +678,12 @@ test "sdpa windowed attention excludes tokens outside window" {
     const nh = 1;
     const nkv = 1;
 
-    var kv_keys_f32 = [_]f32{0} ** 256;
-    var kv_values_f32 = [_]f32{0} ** 256;
+    var kv_keys_f32: [256]f32 = @splat(0);
+    var kv_values_f32: [256]f32 = @splat(0);
     const kv_keys = std.mem.sliceAsBytes(&kv_keys_f32);
     const kv_values = std.mem.sliceAsBytes(&kv_values_f32);
-    var attn_out = [_]f32{0} ** hd;
-    var scores = [_]f32{0} ** 64;
+    var attn_out: [hd]f32 = @splat(0);
+    var scores: [64]f32 = @splat(0);
 
     const BackendState = @import("../backend/backend.zig").BackendState;
     var threaded = std.Io.Threaded.init(std.testing.allocator, .{});
@@ -896,12 +896,12 @@ test "fuzz: all attention functions" {
 
             // --- 1. scaledDotProductAttention (fast path, no window) ---
             {
-                var kv_keys_f32 = [_]f32{0} ** (max_sl * kvd);
-                var kv_values_f32 = [_]f32{0} ** (max_sl * kvd);
+                var kv_keys_f32: [(max_sl * kvd)]f32 = @splat(0);
+                var kv_values_f32: [(max_sl * kvd)]f32 = @splat(0);
                 const kv_keys = std.mem.sliceAsBytes(&kv_keys_f32);
                 const kv_values = std.mem.sliceAsBytes(&kv_values_f32);
-                var attn_out = [_]f32{0} ** (nh * hd);
-                var scores = [_]f32{0} ** (max_sl + 4);
+                var attn_out: [(nh * hd)]f32 = @splat(0);
+                var scores: [(max_sl + 4)]f32 = @splat(0);
 
                 var threaded = std.Io.Threaded.init(std.testing.allocator, .{});
                 defer threaded.deinit();
@@ -936,13 +936,13 @@ test "fuzz: all attention functions" {
 
             // --- 2. scaledDotProductAttentionTiered (all-GPU partition fast path) ---
             {
-                var kv_keys_f32 = [_]f32{0} ** (max_sl * kvd);
-                var kv_values_f32 = [_]f32{0} ** (max_sl * kvd);
+                var kv_keys_f32: [(max_sl * kvd)]f32 = @splat(0);
+                var kv_values_f32: [(max_sl * kvd)]f32 = @splat(0);
                 const kv_keys = std.mem.sliceAsBytes(&kv_keys_f32);
                 const kv_values = std.mem.sliceAsBytes(&kv_values_f32);
-                var attn_out = [_]f32{0} ** (nh * hd);
-                var gpu_out = [_]f32{0} ** (nh * hd);
-                var cpu_out = [_]f32{0} ** (nh * hd);
+                var attn_out: [(nh * hd)]f32 = @splat(0);
+                var gpu_out: [(nh * hd)]f32 = @splat(0);
+                var cpu_out: [(nh * hd)]f32 = @splat(0);
 
                 var threaded = std.Io.Threaded.init(std.testing.allocator, .{});
                 defer threaded.deinit();
@@ -989,8 +989,8 @@ test "fuzz: all attention functions" {
 
                 const blk_id = paged.allocBlock() orelse return;
                 var block_table = [_]u32{blk_id};
-                var attn_out = [_]f32{0} ** (nh * hd);
-                var scores = [_]f32{0} ** (max_sl + 4);
+                var attn_out: [(nh * hd)]f32 = @splat(0);
+                var scores: [(max_sl + 4)]f32 = @splat(0);
 
                 var threaded = std.Io.Threaded.init(std.testing.allocator, .{});
                 defer threaded.deinit();

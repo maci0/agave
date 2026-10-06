@@ -47,7 +47,7 @@ pub const CompiledTree = struct {
     /// Per-node child token→index map for O(1) lookup.
     child_tokens: [max_budget + 1][max_children_per_node]u32 = undefined,
     child_indices: [max_budget + 1][max_children_per_node]u32 = undefined,
-    child_counts: [max_budget + 1]u8 = .{0} ** (max_budget + 1),
+    child_counts: [max_budget + 1]u8 = @splat(0),
     /// Number of nodes.
     n_nodes: u32 = 0,
     /// KV cache position where tree starts.

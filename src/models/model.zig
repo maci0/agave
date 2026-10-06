@@ -1514,10 +1514,10 @@ const MockModel = struct {
     fn getBlockTable(_: *MockModel) []const u32 {
         return &.{};
     }
-    fn restoreSsmState(self: *MockModel, _: []const u8) void {
+    pub fn restoreSsmState(self: *MockModel, _: []const u8) void {
         self.ssm_restore_count += 1;
     }
-    fn resetMtpCache(self: *MockModel) void {
+    pub fn resetMtpCache(self: *MockModel) void {
         self.mtp_reset_count += 1;
     }
 };
@@ -1550,12 +1550,12 @@ const MockKvTransferModel = struct {
     fn getBlockTable(_: *MockKvTransferModel) []const u32 {
         return &.{};
     }
-    fn exportKvPrefix(_: *MockKvTransferModel, dst: []u8, n_tokens: usize) usize {
+    pub fn exportKvPrefix(_: *MockKvTransferModel, dst: []u8, n_tokens: usize) usize {
         const bytes = @min(dst.len, n_tokens * @sizeOf(f32));
         @memset(dst[0..bytes], 0);
         return bytes;
     }
-    fn importKvPrefix(self: *MockKvTransferModel, _: []const u8, n_tokens: usize) bool {
+    pub fn importKvPrefix(self: *MockKvTransferModel, _: []const u8, n_tokens: usize) bool {
         self.exported_n_tokens = n_tokens;
         return true;
     }

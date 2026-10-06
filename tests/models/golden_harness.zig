@@ -43,7 +43,7 @@ fn isDegenerate(output: []const u8) bool {
     if (letter_count * min_letter_pct_inv < output.len) return true;
 
     // Check 2: any single character repeated >80% of output (e.g., "aaaaaaaaaa")
-    var char_counts = [_]usize{0} ** 256;
+    var char_counts: [256]usize = @splat(0);
     for (output) |c| char_counts[c] += 1;
     var max_char_count: usize = 0;
     for (char_counts) |cnt| max_char_count = @max(max_char_count, cnt);

@@ -338,7 +338,7 @@ test "Arch.isEnabled matches compile-time build flags" {
 test "fuzz: all arch functions" {
     try std.testing.fuzz({}, struct {
         fn f(_: void, smith: *std.testing.Smith) !void {
-            const num_archs = @typeInfo(Arch).@"enum".fields.len;
+            const num_archs = @typeInfo(Arch).@"enum".field_names.len;
 
             const detect_len = smith.valueWithHash(u4, 0);
             var detect_buf: [16]u8 = undefined;
@@ -346,7 +346,7 @@ test "fuzz: all arch functions" {
             _ = Arch.detect(detect_buf[0..detect_len]);
 
             const arch_idx = smith.valueWithHash(u8, 2) % num_archs;
-            const arch: Arch = @enumFromInt(arch_idx);
+            const arch: Arch = @fromBackingInt(@intCast(arch_idx));
 
             const dn = arch.displayName();
             try std.testing.expect(dn.len > 0);

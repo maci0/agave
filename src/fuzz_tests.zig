@@ -1628,7 +1628,7 @@ test "fuzz: GGMLType blockSize no crash" {
     try std.testing.fuzz({}, struct {
         fn f(_: void, smith: *Smith) !void {
             const raw: u32 = smith.valueWithHash(u32, 0) % 40;
-            const t: gguf.GGMLType = @enumFromInt(raw);
+            const t: gguf.GGMLType = @fromBackingInt(@intCast(raw));
             _ = t.blockSize();
             _ = t.bytesPerBlock();
         }
@@ -2227,7 +2227,7 @@ test "fuzz: kvMulAccum no crash" {
             const needed = kv_quant.kvSliceBytes(kv_type, n);
             if (needed > kv_buf.len) return;
             kv_quant.kvStore(&kv_buf, &src, n, kv_type);
-            var acc: [n]f32 = .{0} ** n;
+            var acc: [n]f32 = @splat(0);
             const weight: f32 = @as(f32, @floatFromInt(smith.valueWithHash(i8, 60))) / 10.0;
             kv_quant.kvMulAccum(&acc, weight, &kv_buf, n, kv_type);
             // All accumulator values must be finite
@@ -2932,10 +2932,10 @@ test "fuzz: GGMLType blockSize + bytesPerBlock exhaustive" {
         fn f(_: void, smith: *Smith) !void {
             // Test all valid enum values
             const types = [_]gguf.GGMLType{
-                @enumFromInt(0),  @enumFromInt(1),  @enumFromInt(2),
-                @enumFromInt(3),  @enumFromInt(6),  @enumFromInt(7),
-                @enumFromInt(8),  @enumFromInt(10), @enumFromInt(12),
-                @enumFromInt(14), @enumFromInt(15), @enumFromInt(16),
+                @fromBackingInt(@intCast(0)),  @fromBackingInt(@intCast(1)),  @fromBackingInt(@intCast(2)),
+                @fromBackingInt(@intCast(3)),  @fromBackingInt(@intCast(6)),  @fromBackingInt(@intCast(7)),
+                @fromBackingInt(@intCast(8)),  @fromBackingInt(@intCast(10)), @fromBackingInt(@intCast(12)),
+                @fromBackingInt(@intCast(14)), @fromBackingInt(@intCast(15)), @fromBackingInt(@intCast(16)),
             };
             const t = types[smith.indexWithHash(types.len, 0)];
             const bs = t.blockSize();

@@ -391,12 +391,12 @@ pub const WebGpuBackend = struct {
 
     // Buffer management
     buf_cache: std.AutoHashMap(usize, CachedBuf) = undefined,
-    act_pool: [act_pool_capacity]PoolEntry = [_]PoolEntry{.{}} ** act_pool_capacity,
+    act_pool: [act_pool_capacity]PoolEntry = @splat(.{}),
     act_pool_count: u32 = 0,
 
     // Deferred buffer destruction: params buffers can't be destroyed until
     // the command buffer that references them has been submitted + completed.
-    deferred_destroy: [max_deferred_destroy]WGPUBuffer = .{null} ** max_deferred_destroy,
+    deferred_destroy: [max_deferred_destroy]WGPUBuffer = @splat(null),
     deferred_count: u32 = 0,
 
     // Staging buffer for readbacks
@@ -672,10 +672,10 @@ pub const WebGpuBackend = struct {
         self.deferred_count = 0;
 
         // Release all compute pipelines and their bind group layouts.
-        inline for (@typeInfo(WebGpuBackend).@"struct".fields) |field| {
-            if (comptime std.mem.startsWith(u8, field.name, "pipe_")) {
-                if (field.type == PipelineInfo) {
-                    const info = @field(self, field.name);
+        inline for (@typeInfo(WebGpuBackend).@"struct".field_names, @typeInfo(WebGpuBackend).@"struct".field_types) |field_name, field_type| {
+            if (comptime std.mem.startsWith(u8, field_name, "pipe_")) {
+                if (field_type == PipelineInfo) {
+                    const info = @field(self, field_name);
                     if (info.pipeline != null) self.fn_pipeline_release(info.pipeline);
                     if (info.bind_group_layout != null) self.fn_bind_group_layout_release(info.bind_group_layout);
                 }
@@ -931,7 +931,7 @@ pub const WebGpuBackend = struct {
         const in_buf = self.getOrUpload(@ptrCast(input), size);
         const out_buf = self.createOutputBuf(size);
 
-        const Params = extern struct { n: u32, _pad: [12]u8 = .{0} ** 12 };
+        const Params = extern struct { n: u32, _pad: [12]u8 = @splat(0) };
         const params_buf = self.createUniformBuf(Params, .{ .n = @intCast(n) });
         self.deferDestroy(params_buf);
 
@@ -950,7 +950,7 @@ pub const WebGpuBackend = struct {
         const in_buf = self.getOrUpload(@ptrCast(input), size);
         const out_buf = self.createOutputBuf(size);
 
-        const Params = extern struct { n: u32, _pad: [12]u8 = .{0} ** 12 };
+        const Params = extern struct { n: u32, _pad: [12]u8 = @splat(0) };
         const params_buf = self.createUniformBuf(Params, .{ .n = @intCast(n) });
         self.deferDestroy(params_buf);
 
@@ -972,7 +972,7 @@ pub const WebGpuBackend = struct {
         const buf_b = self.getOrUpload(@ptrCast(b), size);
         const out_buf = self.createOutputBuf(size);
 
-        const Params = extern struct { n: u32, _pad: [12]u8 = .{0} ** 12 };
+        const Params = extern struct { n: u32, _pad: [12]u8 = @splat(0) };
         const params_buf = self.createUniformBuf(Params, .{ .n = @intCast(n) });
         self.deferDestroy(params_buf);
 
@@ -1021,7 +1021,7 @@ pub const WebGpuBackend = struct {
         const w_buf = self.getOrUpload(@ptrCast(weight), size);
         const out_buf = self.createOutputBuf(size);
 
-        const Params = extern struct { n: u32, eps: f32, _pad: [8]u8 = .{0} ** 8 };
+        const Params = extern struct { n: u32, eps: f32, _pad: [8]u8 = @splat(0) };
         const params = Params{ .n = @intCast(n), .eps = eps };
         const params_buf = self.createUniformBuf(Params, params);
         self.deferDestroy(params_buf);
@@ -1041,7 +1041,7 @@ pub const WebGpuBackend = struct {
         const size = n * @sizeOf(f32);
         const data_buf = self.getOrUpload(@ptrCast(data), size);
 
-        const Params = extern struct { n: u32, _pad: [12]u8 = .{0} ** 12 };
+        const Params = extern struct { n: u32, _pad: [12]u8 = @splat(0) };
         const params = Params{ .n = @intCast(n) };
         const params_buf = self.createUniformBuf(Params, params);
         self.deferDestroy(params_buf);
@@ -1066,7 +1066,7 @@ pub const WebGpuBackend = struct {
             head_dim: u32,
             rope_dim: u32,
             theta: f32,
-            _pad: [12]u8 = .{0} ** 12,
+            _pad: [12]u8 = @splat(0),
         };
         const params = Params{
             .pos = @intCast(pos),
@@ -1221,7 +1221,7 @@ pub const WebGpuBackend = struct {
         const size = n * @sizeOf(f32);
         const data_buf = self.getOrUpload(@ptrCast(data), size);
 
-        const Params = extern struct { n: u32, eps: f32, _pad: [8]u8 = .{0} ** 8 };
+        const Params = extern struct { n: u32, eps: f32, _pad: [8]u8 = @splat(0) };
         const params = Params{ .n = @intCast(n), .eps = eps };
         const params_buf = self.createUniformBuf(Params, params);
         self.deferDestroy(params_buf);
@@ -1243,7 +1243,7 @@ pub const WebGpuBackend = struct {
         const w_buf = self.getOrUpload(@ptrCast(weight), size);
         const out_buf = self.createOutputBuf(size);
 
-        const Params = extern struct { n: u32, eps: f32, _pad: [8]u8 = .{0} ** 8 };
+        const Params = extern struct { n: u32, eps: f32, _pad: [8]u8 = @splat(0) };
         const params = Params{ .n = @intCast(n), .eps = eps };
         const params_buf = self.createUniformBuf(Params, params);
         self.deferDestroy(params_buf);
@@ -1267,7 +1267,7 @@ pub const WebGpuBackend = struct {
         const a_buf = self.getOrUpload(@ptrCast(a), size);
         const w_buf = self.getOrUpload(@ptrCast(weight), size);
         const b_buf = self.getOrUpload(@ptrCast(b), size);
-        const Params = extern struct { n: u32, eps: f32, _pad: [8]u8 = .{0} ** 8 };
+        const Params = extern struct { n: u32, eps: f32, _pad: [8]u8 = @splat(0) };
         const p = Params{ .n = @intCast(n), .eps = eps };
         const params_buf = self.createUniformBuf(Params, p);
         self.deferDestroy(params_buf);
@@ -1306,7 +1306,7 @@ pub const WebGpuBackend = struct {
         const data_buf = self.getOrUpload(@ptrCast(data), size);
         const gate_buf = self.getOrUpload(@ptrCast(gate), size);
 
-        const Params = extern struct { n: u32, _pad: [12]u8 = .{0} ** 12 };
+        const Params = extern struct { n: u32, _pad: [12]u8 = @splat(0) };
         const params = Params{ .n = @intCast(n) };
         const params_buf = self.createUniformBuf(Params, params);
         self.deferDestroy(params_buf);
@@ -1327,7 +1327,7 @@ pub const WebGpuBackend = struct {
         const out_a_buf = self.createOutputBuf(out_size);
         const out_b_buf = self.createOutputBuf(out_size);
 
-        const Params = extern struct { stride: u32, n_pairs: u32, _pad: [8]u8 = .{0} ** 8 };
+        const Params = extern struct { stride: u32, n_pairs: u32, _pad: [8]u8 = @splat(0) };
         const params = Params{ .stride = @intCast(stride), .n_pairs = @intCast(n_pairs) };
         const params_buf = self.createUniformBuf(Params, params);
         self.deferDestroy(params_buf);
@@ -1352,7 +1352,7 @@ pub const WebGpuBackend = struct {
         const q_buf = self.createOutputBuf(out_size);
         const g_buf = self.createOutputBuf(out_size);
 
-        const Params = extern struct { hd: u32, nh: u32, _pad: [8]u8 = .{0} ** 8 };
+        const Params = extern struct { hd: u32, nh: u32, _pad: [8]u8 = @splat(0) };
         const params = Params{ .hd = @intCast(head_dim), .nh = @intCast(n_heads) };
         const params_buf = self.createUniformBuf(Params, params);
         self.deferDestroy(params_buf);
@@ -1591,7 +1591,7 @@ pub const WebGpuBackend = struct {
             const o_buf = self.createOutputBuf(q_sz);
             const m_buf = self.getOrUpload(@ptrCast(ancestor_masks), mask_sz);
 
-            const Params = extern struct { nh_v: u32, nkv_v: u32, hd_v: u32, prefix_len_v: u32, n_nodes_v: u32, scale_v: f32, _pad: [8]u8 = .{0} ** 8 };
+            const Params = extern struct { nh_v: u32, nkv_v: u32, hd_v: u32, prefix_len_v: u32, n_nodes_v: u32, scale_v: f32, _pad: [8]u8 = @splat(0) };
             const p = Params{ .nh_v = @intCast(nh), .nkv_v = @intCast(nkv), .hd_v = @intCast(hd), .prefix_len_v = @intCast(prefix_len), .n_nodes_v = n_nodes, .scale_v = scale };
             const params_buf = self.createUniformBuf(Params, p);
             self.deferDestroy(params_buf);
@@ -2336,35 +2336,35 @@ test "WebGPU deferred_destroy capacity matches max_deferred_destroy" {
 test "WebGPU comptime struct layout verification" {
     comptime {
         // CachedBuf must contain buffer handle, size, and generation counter
-        const cached_fields = @typeInfo(CachedBuf).@"struct".fields;
+        const cached_fields = @typeInfo(CachedBuf).@"struct".field_names;
         var has_buffer = false;
         var has_size = false;
         var has_generation = false;
         for (cached_fields) |f| {
-            if (std.mem.eql(u8, f.name, "buffer")) has_buffer = true;
-            if (std.mem.eql(u8, f.name, "size")) has_size = true;
-            if (std.mem.eql(u8, f.name, "generation")) has_generation = true;
+            if (std.mem.eql(u8, f, "buffer")) has_buffer = true;
+            if (std.mem.eql(u8, f, "size")) has_size = true;
+            if (std.mem.eql(u8, f, "generation")) has_generation = true;
         }
         if (!has_buffer) @compileError("CachedBuf missing 'buffer' field");
         if (!has_size) @compileError("CachedBuf missing 'size' field");
         if (!has_generation) @compileError("CachedBuf missing 'generation' field");
 
         // PipelineInfo must contain pipeline and bind_group_layout
-        const pipe_fields = @typeInfo(PipelineInfo).@"struct".fields;
+        const pipe_fields = @typeInfo(PipelineInfo).@"struct".field_names;
         var has_pipeline = false;
         var has_bgl = false;
         for (pipe_fields) |f| {
-            if (std.mem.eql(u8, f.name, "pipeline")) has_pipeline = true;
-            if (std.mem.eql(u8, f.name, "bind_group_layout")) has_bgl = true;
+            if (std.mem.eql(u8, f, "pipeline")) has_pipeline = true;
+            if (std.mem.eql(u8, f, "bind_group_layout")) has_bgl = true;
         }
         if (!has_pipeline) @compileError("PipelineInfo missing 'pipeline' field");
         if (!has_bgl) @compileError("PipelineInfo missing 'bind_group_layout' field");
 
         // PoolEntry must have buffer, size, and in_use fields
-        const pool_fields = @typeInfo(PoolEntry).@"struct".fields;
+        const pool_fields = @typeInfo(PoolEntry).@"struct".field_names;
         var has_in_use = false;
         for (pool_fields) |f| {
-            if (std.mem.eql(u8, f.name, "in_use")) has_in_use = true;
+            if (std.mem.eql(u8, f, "in_use")) has_in_use = true;
         }
         if (!has_in_use) @compileError("PoolEntry missing 'in_use' field");
 

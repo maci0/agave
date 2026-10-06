@@ -78,7 +78,7 @@ const Candidate = struct {
 /// Output of the hardware-aware prefix scheduler.
 pub const SchedulerResult = struct {
     /// Selected verification length per request (0 = skip this request's drafts).
-    lengths: [256]u32 = .{0} ** 256,
+    lengths: [256]u32 = @splat(0),
     /// Total token batch size sent to target for verification.
     batch_size: u32 = 0,
     /// Expected accepted tokens (sum of survival probabilities of admitted tokens).
@@ -140,7 +140,7 @@ pub fn scheduleVerification(
     @memset(result.lengths[0..R_clamped], 0);
 
     // State: current verification length per request.
-    var cur_len: [256]u32 = .{0} ** 256;
+    var cur_len: [256]u32 = @splat(0);
     // Starting point: baseline batch = R_clamped (one anchor token per request, no drafts).
     var batch_size: u32 = @intCast(R_clamped);
     // Expected accepts at baseline = R_clamped (each request gets its target bonus token).

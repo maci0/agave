@@ -110,12 +110,12 @@ test "gemvF16 dense matrix" {
 test "gemvF16 SIMD path with k=16" {
     // k=16 exercises the V8 SIMD inner loop (2 iterations) + 4-row batch (n=4).
     // W is diagonal-ish: W[row][row*4] = 2.0, rest 0 → y[row] = 2.0 * x[row*4].
-    var w: [4 * 16]f16 = .{0.0} ** (4 * 16);
+    var w: [4 * 16]f16 = @splat(0.0);
     w[0 * 16 + 0] = 2.0;
     w[1 * 16 + 4] = 2.0;
     w[2 * 16 + 8] = 2.0;
     w[3 * 16 + 12] = 2.0;
-    var x: [16]f32 = .{0.0} ** 16;
+    var x: [16]f32 = @splat(0.0);
     x[0] = 1.0;
     x[4] = 3.0;
     x[8] = 5.0;

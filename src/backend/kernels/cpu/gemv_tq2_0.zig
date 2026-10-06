@@ -92,7 +92,7 @@ test "TQ2_0 gemv all positive (+1)" {
     var block: [block_bytes]u8 align(2) = undefined;
     @as(*f16, @ptrCast(@alignCast(&block[0]))).* = @as(f16, 1.0);
     @memset(block[2..], 0xAA);
-    const x = [_]f32{1.0} ** 256;
+    const x: [256]f32 = @splat(1.0);
     var y: [1]f32 = .{0.0};
     gemvTQ2_0(&x, &block, &y, 1, 256);
     try std.testing.expectApproxEqAbs(@as(f32, 256.0), y[0], 0.5);
@@ -103,7 +103,7 @@ test "TQ2_0 gemv all zero (0)" {
     var block: [block_bytes]u8 align(2) = undefined;
     @as(*f16, @ptrCast(@alignCast(&block[0]))).* = @as(f16, 1.0);
     @memset(block[2..], 0x55);
-    const x = [_]f32{3.14} ** 256;
+    const x: [256]f32 = @splat(3.14);
     var y: [1]f32 = .{99.0};
     gemvTQ2_0(&x, &block, &y, 1, 256);
     try std.testing.expectApproxEqAbs(@as(f32, 0.0), y[0], 1e-4);
@@ -114,7 +114,7 @@ test "TQ2_0 gemv all negative (-1)" {
     var block: [block_bytes]u8 align(2) = undefined;
     @as(*f16, @ptrCast(@alignCast(&block[0]))).* = @as(f16, 0.5);
     @memset(block[2..], 0x00);
-    const x = [_]f32{1.0} ** 256;
+    const x: [256]f32 = @splat(1.0);
     var y: [1]f32 = .{0.0};
     gemvTQ2_0(&x, &block, &y, 1, 256);
     try std.testing.expectApproxEqAbs(@as(f32, -128.0), y[0], 0.5);
@@ -127,7 +127,7 @@ test "TQ2_0 gemv multi-row" {
     @memset(w[2..block_bytes], 0xAA); // row0: +1
     @as(*f16, @ptrCast(@alignCast(&w[block_bytes]))).* = @as(f16, 1.0);
     @memset(w[block_bytes + 2 ..], 0x00); // row1: -1
-    const x = [_]f32{1.0} ** 256;
+    const x: [256]f32 = @splat(1.0);
     var y: [2]f32 = .{ 0.0, 0.0 };
     gemvTQ2_0(&x, &w, &y, 2, 256);
     try std.testing.expectApproxEqAbs(@as(f32, 256.0), y[0], 0.5);

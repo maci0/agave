@@ -279,8 +279,8 @@ pub const ExpertCache = struct {
     /// Does NOT issue any madvise/prefetch, just returns the IDs.
     pub fn getTopResidents(self: *ExpertCache, layer: u32, out_ids: []u32) u32 {
         const k = @min(@as(u32, @intCast(out_ids.len)), max_prefetch_k);
-        var best_slots: [max_prefetch_k]u32 = .{0} ** max_prefetch_k;
-        var best_access: [max_prefetch_k]u64 = .{0} ** max_prefetch_k;
+        var best_slots: [max_prefetch_k]u32 = @splat(0);
+        var best_access: [max_prefetch_k]u64 = @splat(0);
         var found: u32 = 0;
 
         for (self.slots[0..self.n_slots], 0..) |slot, idx| {

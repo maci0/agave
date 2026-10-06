@@ -462,7 +462,7 @@ test "mamba2Recurrence exercises SIMD path" {
     const d_state = 16;
 
     var y = [_]f32{0};
-    var state = [_]f32{0} ** (head_dim * d_state);
+    var state: [(head_dim * d_state)]f32 = @splat(0);
     const x = [_]f32{1.0};
     var B: [d_state]f32 = undefined;
     var C: [d_state]f32 = undefined;

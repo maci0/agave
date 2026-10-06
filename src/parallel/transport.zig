@@ -154,7 +154,7 @@ const FnNcclGroupEnd = *const fn () callconv(.c) NcclResult;
 const ShmHeader = extern struct {
     ready: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
     size: u32 = 0,
-    _pad: [56]u8 = [_]u8{0} ** 56,
+    _pad: [56]u8 = @splat(0),
 };
 
 /// Errors the collective and point-to-point entry points can return.
@@ -189,7 +189,7 @@ pub const Transport = struct {
     rank: u32,
     world_size: u32,
     allocator: Allocator,
-    tcp_fds: [max_peers]c_int = .{-1} ** max_peers,
+    tcp_fds: [max_peers]c_int = @splat(-1),
     tcp_connected: u32 = 0,
     recv_buf: ?[]f32 = null,
     // Shared memory regions: send_region for outgoing, recv_region for incoming
@@ -197,8 +197,8 @@ pub const Transport = struct {
     shm_recv: ?[*]align(64) u8 = null,
     shm_send_fd: c_int = -1,
     shm_recv_fd: c_int = -1,
-    shm_name_send: [32:0]u8 = [_:0]u8{0} ** 32,
-    shm_name_recv: [32:0]u8 = [_:0]u8{0} ** 32,
+    shm_name_send: [32:0]u8 = @splat(0),
+    shm_name_recv: [32:0]u8 = @splat(0),
     // NCCL communicator + function pointers
     nccl_comm: NcclComm = null,
     nccl_lib: ?std.DynLib = null,
@@ -881,16 +881,17 @@ test "poll wait times out on virtual time" {
 
 test "TransportKind enum has all expected variants" {
     // Tag names must match the public transport surface (not tautological self-equality).
-    const fields = @typeInfo(TransportKind).@"enum".fields;
+    const info = @typeInfo(TransportKind).@"enum";
+    const fields = info.field_names;
     try std.testing.expectEqual(@as(usize, 4), fields.len);
     try std.testing.expectEqualStrings("tcp", @tagName(TransportKind.tcp));
     try std.testing.expectEqualStrings("shm", @tagName(TransportKind.shm));
     try std.testing.expectEqualStrings("nccl", @tagName(TransportKind.nccl));
     try std.testing.expectEqualStrings("rccl", @tagName(TransportKind.rccl));
     // Every declared field name must be one of the known kinds.
-    inline for (fields) |field| {
-        const kind: TransportKind = @enumFromInt(field.value);
-        try std.testing.expectEqualStrings(field.name, @tagName(kind));
+    inline for (info.field_names, info.field_values) |field_name, field_value| {
+        const kind: TransportKind = @fromBackingInt(@intCast(field_value));
+        try std.testing.expectEqualStrings(field_name, @tagName(kind));
     }
 }
 
@@ -958,7 +959,7 @@ test "fuzz: all transport functions" {
 
             // ── TransportKind enum coverage ──
             const kind_idx = smith.valueWithHash(u8, 0) % 4;
-            const kind: TransportKind = @enumFromInt(kind_idx);
+            const kind: TransportKind = @fromBackingInt(@intCast(kind_idx));
             _ = @tagName(kind);
 
             // ── Transport.init ──
@@ -996,7 +997,7 @@ test "fuzz: all transport functions" {
             t.sendBuf(@ptrCast(&buf), @intCast(send_n)) catch {};
 
             // ── recvBuf (no peers, error path) ──
-            var recv_area: [32]f32 = [_]f32{0.0} ** 32;
+            var recv_area: [32]f32 = @splat(0.0);
             const recv_n = smith.valueWithHash(u8, 11) % 16 + 1;
             t.recvBuf(@ptrCast(&recv_area), @intCast(recv_n)) catch {};
 

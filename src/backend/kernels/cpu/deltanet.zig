@@ -236,13 +236,13 @@ test "deltaNetHead zero state, zero input produces zero output" {
     const head_v: u32 = 8;
     const p = testParams(num_heads, head_k, head_v);
 
-    var q = [_]f32{0.0} ** head_k;
-    var k = [_]f32{0.0} ** head_k;
-    var v = [_]f32{0.0} ** head_v;
-    var output = [_]f32{999.0} ** head_v;
-    var ssm_state = [_]f32{0.0} ** (head_v * head_k);
-    var z_buf = [_]f32{1.0} ** head_v; // nonzero gate to avoid 0*0 ambiguity
-    var norm_w = [_]f32{1.0} ** head_v;
+    var q: [head_k]f32 = @splat(0.0);
+    var k: [head_k]f32 = @splat(0.0);
+    var v: [head_v]f32 = @splat(0.0);
+    var output: [head_v]f32 = @splat(999.0);
+    var ssm_state: [(head_v * head_k)]f32 = @splat(0.0);
+    var z_buf: [head_v]f32 = @splat(1.0); // nonzero gate to avoid 0*0 ambiguity
+    var norm_w: [head_v]f32 = @splat(1.0);
     var gate_vals: [max_deltanet_v_heads]f32 = undefined;
     var beta_vals: [max_deltanet_v_heads]f32 = undefined;
     gate_vals[0] = 0.0; // decay = exp(0) = 1
@@ -266,19 +266,19 @@ test "deltaNetHead identity-like recurrence stores value in state" {
     const p = testParams(num_heads, head_k, head_v);
 
     // Q and K are unit vectors along dim 0
-    var q = [_]f32{0.0} ** head_k;
-    var k = [_]f32{0.0} ** head_k;
+    var q: [head_k]f32 = @splat(0.0);
+    var k: [head_k]f32 = @splat(0.0);
     q[0] = 1.0;
     k[0] = 1.0;
 
-    var v = [_]f32{0.0} ** head_v;
+    var v: [head_v]f32 = @splat(0.0);
     v[0] = 1.0;
 
-    var output = [_]f32{0.0} ** head_v;
-    var ssm_state = [_]f32{0.0} ** (head_v * head_k);
+    var output: [head_v]f32 = @splat(0.0);
+    var ssm_state: [(head_v * head_k)]f32 = @splat(0.0);
     // Use z=10 so SiLU(z)≈z and gating doesn't squash much.
-    var z_buf = [_]f32{10.0} ** head_v;
-    var norm_w = [_]f32{1.0} ** head_v;
+    var z_buf: [head_v]f32 = @splat(10.0);
+    var norm_w: [head_v]f32 = @splat(1.0);
     var gate_vals: [max_deltanet_v_heads]f32 = undefined;
     var beta_vals: [max_deltanet_v_heads]f32 = undefined;
     gate_vals[0] = 0.0; // decay = exp(0) = 1
@@ -307,20 +307,20 @@ test "deltaNetHead decay shrinks state" {
     const head_v: u32 = 8;
     const p = testParams(num_heads, head_k, head_v);
 
-    var q = [_]f32{0.0} ** head_k;
-    var k = [_]f32{0.0} ** head_k;
+    var q: [head_k]f32 = @splat(0.0);
+    var k: [head_k]f32 = @splat(0.0);
     q[0] = 1.0;
     k[0] = 1.0;
 
-    var v = [_]f32{0.0} ** head_v;
-    var output = [_]f32{0.0} ** head_v;
+    var v: [head_v]f32 = @splat(0.0);
+    var output: [head_v]f32 = @splat(0.0);
 
     // Pre-load state: row 0 of state has 5.0 at position 0
-    var ssm_state = [_]f32{0.0} ** (head_v * head_k);
+    var ssm_state: [(head_v * head_k)]f32 = @splat(0.0);
     ssm_state[0] = 5.0;
 
-    var z_buf = [_]f32{10.0} ** head_v;
-    var norm_w = [_]f32{1.0} ** head_v;
+    var z_buf: [head_v]f32 = @splat(10.0);
+    var norm_w: [head_v]f32 = @splat(1.0);
     var gate_vals: [max_deltanet_v_heads]f32 = undefined;
     var beta_vals: [max_deltanet_v_heads]f32 = undefined;
     gate_vals[0] = -1.0; // decay = exp(-1) ≈ 0.368
@@ -476,19 +476,19 @@ test "deltaNet full pipeline runs without crash" {
         .rms_eps = 1e-6,
     };
 
-    var conv_in = [_]f32{0.1} ** conv_ch;
-    var conv_out = [_]f32{0.0} ** conv_ch;
-    var z_buf = [_]f32{1.0} ** (num_heads * head_v);
-    var alpha_buf = [_]f32{0.0} ** num_heads;
-    var beta_buf = [_]f32{0.0} ** num_heads;
-    var output = [_]f32{0.0} ** (num_heads * head_v);
-    var conv_state = [_]f32{0.0} ** (conv_ch * (d_conv - 1));
-    var ssm_state_arr = [_]f32{0.0} ** (num_heads * head_v * head_k);
+    var conv_in: [conv_ch]f32 = @splat(0.1);
+    var conv_out: [conv_ch]f32 = @splat(0.0);
+    var z_buf: [(num_heads * head_v)]f32 = @splat(1.0);
+    var alpha_buf: [num_heads]f32 = @splat(0.0);
+    var beta_buf: [num_heads]f32 = @splat(0.0);
+    var output: [(num_heads * head_v)]f32 = @splat(0.0);
+    var conv_state: [(conv_ch * (d_conv - 1))]f32 = @splat(0.0);
+    var ssm_state_arr: [(num_heads * head_v * head_k)]f32 = @splat(0.0);
     const ssm_state: []f32 = &ssm_state_arr;
-    var ssm_a = [_]f32{-1.0} ** num_heads;
-    var dt_bias = [_]f32{0.0} ** num_heads;
-    var conv_w = [_]f32{0.25} ** (conv_ch * d_conv);
-    var ssm_norm_w = [_]f32{1.0} ** head_v;
+    var ssm_a: [num_heads]f32 = @splat(-1.0);
+    var dt_bias: [num_heads]f32 = @splat(0.0);
+    var conv_w: [(conv_ch * d_conv)]f32 = @splat(0.25);
+    var ssm_norm_w: [head_v]f32 = @splat(1.0);
 
     deltaNet(&conv_in, &conv_out, &z_buf, &alpha_buf, &beta_buf, &output, &conv_state, ssm_state, &ssm_a, &dt_bias, &conv_w, &ssm_norm_w, p);
 

@@ -193,10 +193,10 @@ pub const RocmBackend = struct {
     device_name_len: usize = 0,
 
     /// Pre-formatted HIP runtime version string (e.g., "HIP 6.2").
-    hip_ver_str: [16]u8 = .{0} ** 16,
+    hip_ver_str: [16]u8 = @splat(0),
 
     /// Pre-formatted GCN architecture string (e.g., "gfx1100").
-    gcn_arch_str: [16]u8 = .{0} ** 16,
+    gcn_arch_str: [16]u8 = @splat(0),
 
     /// Allocator for buffer caches.
     allocator: std.mem.Allocator = undefined,
@@ -1990,7 +1990,7 @@ test "ROCm internal type sizes" {
         try testing.expect(@sizeOf(RocmBackend.ActBuf) >= @sizeOf(DevicePtr) + @sizeOf(usize));
 
         // BufState enum has exactly 3 variants
-        try testing.expectEqual(@as(usize, 3), @typeInfo(RocmBackend.BufState).@"enum".fields.len);
+        try testing.expectEqual(@as(usize, 3), @typeInfo(RocmBackend.BufState).@"enum".field_names.len);
 
         // KvDevCache must hold device pointer + capacity
         try testing.expect(@sizeOf(RocmBackend.KvDevCache) >= @sizeOf(DevicePtr) + @sizeOf(usize));

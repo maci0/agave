@@ -60,7 +60,7 @@ pub fn build(b: *std.Build) void {
     // A bare `python3` in addSystemCommand surfaces as an exec failure with no
     // name in the message. Resolve it up front so a missing interpreter names
     // itself and the step that wanted it.
-    const python3 = b.findProgram(&.{"python3"}, &.{}) catch null;
+    const python3 = b.findProgram(.{ .names = &.{"python3"} });
 
     // A Run step inherits the process working directory unless told otherwise,
     // so `zig build --build-file <path>/build.zig` from anywhere else ran
@@ -154,7 +154,7 @@ pub fn build(b: *std.Build) void {
                         .os_tag = .cuda,
                         .cpu_model = .{ .explicit = sm_model },
                     }),
-                    .optimize = .ReleaseFast,
+                    .optimize = .fast,
                 }),
             });
             ptx.root_module.strip = true;
@@ -184,7 +184,7 @@ pub fn build(b: *std.Build) void {
     // zig-out/rocm/kernels.o, a relocatable ELF for manual linking, not the HSACO.
     const amdgcn_step = b.step("amdgcn", "Compile ROCm kernels to AMDGCN ISA");
     // The HSACO link needs lld (ROCm ships it at /opt/rocm/lib/llvm/bin/ld.lld).
-    const ld_lld = b.findProgram(&.{"ld.lld"}, &.{}) catch null;
+    const ld_lld = b.findProgram(.{ .names = &.{"ld.lld"} });
     if (python3 == null) {
         amdgcn_step.dependOn(&b.addFail("python3 not found; zig build amdgcn runs src/backend/kernels/rocm/fix_kd_isa.py").step);
     }
@@ -201,7 +201,7 @@ pub fn build(b: *std.Build) void {
                     .os_tag = .amdhsa,
                     .cpu_model = .{ .explicit = gfx_model },
                 }),
-                .optimize = .ReleaseFast,
+                .optimize = .fast,
             }),
         });
         obj.root_module.strip = true;
@@ -269,7 +269,7 @@ pub fn build(b: *std.Build) void {
     const mod_rel = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
         .target = target,
-        .optimize = .ReleaseFast,
+        .optimize = .fast,
         .strip = true,
     });
     mod_rel.addImport("build_options", backend_options.createModule());
@@ -290,7 +290,7 @@ pub fn build(b: *std.Build) void {
     const mod_dbg = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
         .target = target,
-        .optimize = .ReleaseSafe,
+        .optimize = .safe,
     });
     mod_dbg.addImport("build_options", backend_options.createModule());
 
@@ -301,7 +301,7 @@ pub fn build(b: *std.Build) void {
     // ── Run step (uses the optimized binary) ─────────────────────
     const run_cmd = b.addRunArtifact(exe_rel);
     run_cmd.step.dependOn(b.getInstallStep());
-    if (b.args) |args| run_cmd.addArgs(args);
+    run_cmd.addPassthruArgs();
     b.step("run", "Run agave (ReleaseFast)").dependOn(&run_cmd.step);
 
     // ── Test step ────────────────────────────────────────────────
@@ -320,7 +320,7 @@ pub fn build(b: *std.Build) void {
     // Test modules use ReleaseSafe so std.debug.assert / unreachable fire.
     // Reusing mod_rel (ReleaseFast) silently no-ops ~400 assert-based checks
     // in fuzz and unit tests (see std.debug.assert docs).
-    const test_optimize: std.builtin.OptimizeMode = .ReleaseSafe;
+    const test_optimize: std.lang.Optimize = .safe;
 
     // AddressSanitizer + UndefinedBehaviorSanitizer for the test build. The
     // engine parses attacker-controlled GGUF headers, mmap-backed weight
@@ -353,15 +353,12 @@ pub fn build(b: *std.Build) void {
     // Exception: the main suite runs in server mode so its fuzz tests register
     // with the build runner, without the protocol, `zig build test --fuzz`
     // aborts with "no fuzz tests found" and CI's fuzz-smoke never fuzzes.
-    const zig_lib = b.graph.zig_lib_directory.path orelse ".";
-    const simple_test_runner: std.Build.Step.Compile.TestRunner = .{
-        .path = .{ .cwd_relative = b.pathJoin(&.{ zig_lib, "compiler", "test_runner.zig" }) },
-        .mode = .simple,
-    };
-    const fuzz_test_runner: std.Build.Step.Compile.TestRunner = .{
-        .path = simple_test_runner.path,
-        .mode = .server,
-    };
+    // 0.17 removed `b.graph.zig_lib_directory`, so the stock runner file can no
+    // longer be named to force `.simple` mode. Both of these used the stock
+    // runner already, only picking a mode, so they fall back to the default
+    // runner the compiler selects.
+    const simple_test_runner: ?std.Build.Step.Compile.TestRunner = null;
+    const fuzz_test_runner: ?std.Build.Step.Compile.TestRunner = null;
 
     // Main test suite (inline tests from src/)
     {
@@ -497,7 +494,7 @@ pub fn build(b: *std.Build) void {
     const mod_bench = b.createModule(.{
         .root_source_file = b.path("src/micro_bench.zig"),
         .target = target,
-        .optimize = .ReleaseFast,
+        .optimize = .fast,
         .strip = true,
     });
     mod_bench.addImport("build_options", backend_options.createModule());
@@ -508,7 +505,7 @@ pub fn build(b: *std.Build) void {
 
     const bench_run = b.addRunArtifact(exe_bench);
     bench_run.step.dependOn(b.getInstallStep());
-    if (b.args) |args| bench_run.addArgs(args);
+    bench_run.addPassthruArgs();
     b.step("bench", "Run micro-benchmarks (ReleaseFast)").dependOn(&bench_run.step);
 
     // ── GPU kernel correctness sweep ────────────────────────────
@@ -584,7 +581,7 @@ pub fn build(b: *std.Build) void {
     const wasm_mod = b.createModule(.{
         .root_source_file = b.path("src/wasm_entry.zig"),
         .target = wasm_target,
-        .optimize = .ReleaseSmall,
+        .optimize = .small,
         .strip = true,
     });
     wasm_mod.addImport("build_options", wasm_options.createModule());
@@ -762,9 +759,9 @@ const BackendTest = struct {
     test_step: *std.Build.Step,
     backend_mod: *std.Build.Module,
     target: std.Build.ResolvedTarget,
-    optimize: std.builtin.OptimizeMode,
+    optimize: std.lang.Optimize,
     filters: []const []const u8,
-    test_runner: std.Build.Step.Compile.TestRunner,
+    test_runner: ?std.Build.Step.Compile.TestRunner,
     link_metal: bool,
     /// Mirrors the -Dsanitize-c option, so the GPU-gated hardware tests get
     /// the same instrumentation as the rest of `zig build test`.
@@ -850,7 +847,7 @@ fn rejectEmptyTestFilters(b: *std.Build, filters: []const []const u8) ?void {
     @memset(matched, false);
 
     for ([_][]const u8{ "src", "tests" }) |root| {
-        var dir = b.build_root.handle.openDir(io, root, .{ .iterate = true }) catch continue;
+        var dir = b.root.openDir(io, root, .{ .iterate = true }) catch continue;
         defer dir.close(io);
         var walker = dir.walk(arena) catch @panic("out of memory");
         defer walker.deinit();

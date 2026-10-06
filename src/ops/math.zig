@@ -423,8 +423,8 @@ pub fn topLogProbs(logits: []const f32, n: u32, out_ids: []u32, out_logprobs: []
     };
 
     // Find top-N by min-replacement scan
-    var top_vals: [max_top_logprobs]f32 = .{-std.math.inf(f32)} ** max_top_logprobs;
-    var top_ids: [max_top_logprobs]u32 = .{0} ** max_top_logprobs;
+    var top_vals: [max_top_logprobs]f32 = @splat(-std.math.inf(f32));
+    var top_ids: [max_top_logprobs]u32 = @splat(0);
     var mi: usize = 0;
     // Slots actually claimed by a logit. A slot keeps its -inf sentinel when no
     // logit beat it, so emitting 0..limit would report token id 0 repeatedly
@@ -811,7 +811,7 @@ test "topKExperts basic" {
     topKExperts(&scores, 3, indices[0..3], values[0..3]);
 
     // Top 3 should be indices 1 (0.9), 4 (0.7), 2 (0.5)
-    var found = [_]bool{false} ** 6;
+    var found: [6]bool = @splat(false);
     for (0..3) |i| {
         found[indices[i]] = true;
         // Verify score values match the original scores
@@ -922,7 +922,7 @@ test "sampleToken deterministic with seed" {
 test "sampleToken top_k filters" {
     // top_k=2 keeps only the two highest logits (indices 1=3.0 and 3=2.5)
     // Close values + temp=1.0 ensure both get sampled across many seeds
-    var seen = [_]bool{false} ** 4;
+    var seen: [4]bool = @splat(false);
     for (0..500) |seed| {
         var l = [_]f32{ 0.1, 3.0, 0.2, 2.5 };
         var p = std.Random.DefaultPrng.init(seed);
@@ -938,7 +938,7 @@ test "sampleToken top_p nucleus sampling" {
     // top_p=0.5 should keep only the highest-probability token(s) until
     // cumulative probability >= 0.5. With logits [0.1, 5.0, 0.2, 0.3],
     // index 1 dominates after softmax and should be the only token sampled.
-    var seen = [_]bool{false} ** 4;
+    var seen: [4]bool = @splat(false);
     for (0..500) |seed| {
         var l = [_]f32{ 0.1, 5.0, 0.2, 0.3 };
         var p = std.Random.DefaultPrng.init(seed);
@@ -955,7 +955,7 @@ test "sampleToken top_p nucleus sampling" {
 test "sampleToken top_p allows multiple tokens" {
     // With close logits and top_p=0.9, multiple tokens should be sampled.
     // logits [2.0, 2.1, 2.0, 2.1] are close → softmax near uniform.
-    var seen = [_]bool{false} ** 4;
+    var seen: [4]bool = @splat(false);
     for (0..500) |seed| {
         var l = [_]f32{ 2.0, 2.1, 2.0, 2.1 };
         var p = std.Random.DefaultPrng.init(seed);
@@ -1082,7 +1082,7 @@ test "applyRepeatPenalty repeat count does not compound" {
     var once = [_]f32{ 1.0, 10.0 };
     applyRepeatPenalty(&once, &[_]u32{1}, 1.2);
     var many = [_]f32{ 1.0, 10.0 };
-    const recent = [_]u32{1} ** 500;
+    const recent: [500]u32 = @splat(1);
     applyRepeatPenalty(&many, &recent, 1.2);
     try std.testing.expectApproxEqAbs(once[1], many[1], 1e-6);
 }
@@ -1116,7 +1116,7 @@ test "topKExperts bias-corrected selection vs raw weighting" {
     topKExperts(&biased, 2, &top_idx, &top_unused);
 
     // Expert 2 (biased=1.0) and expert 1 (biased=0.7) should be selected
-    var selected = [_]bool{false} ** 5;
+    var selected: [5]bool = @splat(false);
     for (0..2) |i| selected[top_idx[i]] = true;
     try std.testing.expect(selected[2]); // boosted by bias
     try std.testing.expect(selected[1]); // naturally high
@@ -1157,7 +1157,7 @@ test "topKExperts k equals n" {
     var indices: [3]usize = undefined;
     var values: [3]f32 = undefined;
     topKExperts(&scores, 3, &indices, &values);
-    var found = [_]bool{false} ** 3;
+    var found: [3]bool = @splat(false);
     for (0..3) |i| {
         found[indices[i]] = true;
         try std.testing.expectApproxEqAbs(scores[indices[i]], values[i], 1e-6);
@@ -1172,7 +1172,7 @@ test "topKExperts negative scores" {
     var indices: [2]usize = undefined;
     var values: [2]f32 = undefined;
     topKExperts(&scores, 2, &indices, &values);
-    var found = [_]bool{false} ** 4;
+    var found: [4]bool = @splat(false);
     for (0..2) |i| found[indices[i]] = true;
     try std.testing.expect(found[1]); // -0.1 (highest)
     try std.testing.expect(found[3]); // -0.3 (second highest)
@@ -1322,7 +1322,7 @@ test "topLogProbs reports only real candidates when all logits tie" {
     var probs: [3]f32 = undefined;
     const n = topLogProbs(&logits, 3, &ids, &probs);
     try std.testing.expectEqual(@as(u32, 3), n);
-    var seen = [_]bool{false} ** 4;
+    var seen: [4]bool = @splat(false);
     for (ids[0..n]) |id| {
         try std.testing.expect(id < 4);
         try std.testing.expect(!seen[id]);

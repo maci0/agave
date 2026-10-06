@@ -950,7 +950,10 @@ test "utf8BytePrefix does not split multi-byte characters" {
     try std.testing.expectEqualStrings(cafe, utf8BytePrefix(cafe, 64));
 
     // 16 CJK chars = 48 bytes; a 47-byte cap must drop the split last char.
-    const cjk = "\xe4\xb8\x96" ** 16;
+    const cjk = comptime blk: {
+        const u: [16][3]u8 = @splat("\xe4\xb8\x96".*);
+        break :blk std.mem.sliceAsBytes(&u);
+    };
     const clipped = utf8BytePrefix(cjk, 47);
     try std.testing.expect(std.unicode.utf8ValidateSlice(clipped));
     try std.testing.expectEqual(@as(usize, 45), clipped.len);

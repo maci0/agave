@@ -27,7 +27,7 @@ export fn gemv_tq2_0_kernel(
     const nb = (k + tq2_0_block_elems - 1) / tq2_0_block_elems;
     const row_bytes = nb * tq2_0_block_bytes;
 
-    var sums: [nr]f32 = [_]f32{0.0} ** nr;
+    var sums: [nr]f32 = @splat(0.0);
 
     var wi = tid;
     while (wi < nb) : (wi += bdim) {

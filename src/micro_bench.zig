@@ -372,9 +372,9 @@ fn parseBackendName(name: []const u8) ?BackendChoice {
 /// so the printed list cannot drift from what `parseKernelName` accepts.
 const kernel_names_joined = blk: {
     var acc: []const u8 = "";
-    for (@typeInfo(Kernel).@"enum".fields) |f| {
+    for (@typeInfo(Kernel).@"enum".field_names) |f| {
         if (acc.len > 0) acc = acc ++ " ";
-        acc = acc ++ f.name;
+        acc = acc ++ f;
     }
     break :blk acc;
 };
@@ -2329,8 +2329,8 @@ test "parseKernelName invalid" {
 }
 
 test "kernel_names_joined lists every Kernel" {
-    inline for (@typeInfo(Kernel).@"enum".fields) |f| {
-        try std.testing.expect(std.mem.indexOf(u8, kernel_names_joined, f.name) != null);
+    inline for (@typeInfo(Kernel).@"enum".field_names) |f| {
+        try std.testing.expect(std.mem.indexOf(u8, kernel_names_joined, f) != null);
     }
     try std.testing.expect(std.mem.indexOf(u8, kernel_names_joined, "rms_norm_multi") != null);
     try std.testing.expect(std.mem.indexOf(u8, kernel_names_joined, "add_aliased") != null);

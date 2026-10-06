@@ -74,7 +74,7 @@ const InferenceContext = struct {
 };
 
 fn writeErr(ctx: *InferenceContext, code: WasmError, comptime fmt: []const u8, args: anytype) void {
-    ctx.last_error = @intFromEnum(code);
+    ctx.last_error = @backingInt(code);
     const msg = std.fmt.bufPrint(&ctx.output_buf, fmt, args) catch "";
     ctx.output_len = msg.len;
 }
@@ -229,7 +229,7 @@ export fn agave_get_output(ctx_ptr: usize, buf_ptr: [*]u8, buf_len: usize) usize
 /// succeeded. Null handle returns `invalid_handle` so the host can distinguish
 /// "no context" from "ok" without string-matching the output buffer.
 export fn agave_last_error(ctx_ptr: usize) i32 {
-    if (ctx_ptr == 0) return @intFromEnum(WasmError.invalid_handle);
+    if (ctx_ptr == 0) return @backingInt(WasmError.invalid_handle);
     const ctx: *InferenceContext = @ptrFromInt(ctx_ptr);
     return ctx.last_error;
 }
@@ -297,7 +297,7 @@ test "agave_dealloc zero ptr is safe" {
 
 test "agave_last_error null handle is invalid_handle" {
     try std.testing.expectEqual(
-        @intFromEnum(WasmError.invalid_handle),
+        @backingInt(WasmError.invalid_handle),
         agave_last_error(0),
     );
 }
@@ -306,7 +306,7 @@ test "agave_generate null handle returns 0" {
     const dummy: [1]u8 = .{0};
     try std.testing.expectEqual(@as(u32, 0), agave_generate(0, &dummy, dummy.len, 8));
     try std.testing.expectEqual(
-        @intFromEnum(WasmError.invalid_handle),
+        @backingInt(WasmError.invalid_handle),
         agave_last_error(0),
     );
 }
@@ -327,10 +327,10 @@ test "agave_generate on unready context sets not_ready" {
     defer ctx.tok.deinit();
     const dummy: [1]u8 = .{0};
     try std.testing.expectEqual(@as(u32, 0), agave_generate(@intFromPtr(ctx), &dummy, dummy.len, 8));
-    try std.testing.expectEqual(@intFromEnum(WasmError.not_ready), agave_last_error(@intFromPtr(ctx)));
+    try std.testing.expectEqual(@backingInt(WasmError.not_ready), agave_last_error(@intFromPtr(ctx)));
     const null_ptr: [*]allowzero const u8 = @ptrFromInt(0);
     try std.testing.expectEqual(@as(u32, 0), agave_generate(@intFromPtr(ctx), null_ptr, 0, 8));
-    try std.testing.expectEqual(@intFromEnum(WasmError.not_ready), agave_last_error(@intFromPtr(ctx)));
+    try std.testing.expectEqual(@backingInt(WasmError.not_ready), agave_last_error(@intFromPtr(ctx)));
     var out: [64]u8 = undefined;
     const n = agave_get_output(@intFromPtr(ctx), &out, out.len);
     try std.testing.expectEqualStrings("Model not initialized", out[0..n]);
@@ -343,7 +343,7 @@ test "agave_init parse failure is recoverable and agave_free owns the buffer" {
     @memset(slice[0..64], 0);
     const ctx = agave_init(slice, 64);
     try std.testing.expect(ctx != 0);
-    try std.testing.expectEqual(@intFromEnum(WasmError.gguf_parse), agave_last_error(ctx));
+    try std.testing.expectEqual(@backingInt(WasmError.gguf_parse), agave_last_error(ctx));
     var out: [64]u8 = undefined;
     const n = agave_get_output(ctx, &out, out.len);
     try std.testing.expect(std.mem.startsWith(u8, out[0..n], "GGUF parse error:"));

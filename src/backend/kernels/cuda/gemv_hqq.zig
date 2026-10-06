@@ -29,7 +29,7 @@ export fn gemv_hqq_kernel(
     // Number of quantization groups per output row.
     const n_groups = (k + group_size - 1) / group_size;
 
-    var sums: [nr]f32 = [_]f32{0.0} ** nr;
+    var sums: [nr]f32 = @splat(0.0);
 
     // Each thread iterates over a strided slice of k-groups.
     var gi = tid;

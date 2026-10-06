@@ -83,12 +83,12 @@ pub const ModelDesc = struct {
     layer_types: [max_layers]LayerKind,
 
     // ── Per-layer overrides (0 = use default) ────────────────
-    layer_n_head: [max_layers]u32 = [_]u32{0} ** max_layers,
-    layer_n_kv: [max_layers]u32 = [_]u32{0} ** max_layers,
-    layer_head_dim: [max_layers]u32 = [_]u32{0} ** max_layers,
-    layer_n_ff: [max_layers]u32 = [_]u32{0} ** max_layers,
-    layer_rope_theta: [max_layers]f32 = [_]f32{0} ** max_layers,
-    layer_sliding_window: [max_layers]u32 = [_]u32{0} ** max_layers,
+    layer_n_head: [max_layers]u32 = @splat(0),
+    layer_n_kv: [max_layers]u32 = @splat(0),
+    layer_head_dim: [max_layers]u32 = @splat(0),
+    layer_n_ff: [max_layers]u32 = @splat(0),
+    layer_rope_theta: [max_layers]f32 = @splat(0),
+    layer_sliding_window: [max_layers]u32 = @splat(0),
 
     // ── Model-specific flags ──────────────────────────────────
     /// Q projection includes interleaved gate (Qwen 3.5 only).

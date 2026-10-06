@@ -775,12 +775,12 @@ test "load clips an over-long non-ASCII title on a character boundary" {
 
     // 47 ASCII bytes then a 3-byte "世": the cap of 48 lands inside it.
     const raw = "{\"version\":1,\"active_id\":0,\"next_id\":1,\"conversations\":" ++
-        "[{\"id\":0,\"title\":\"" ++ ("a" ** 47) ++ "\\u4e16 extra\",\"messages\":[]}]}";
+        "[{\"id\":0,\"title\":\"" ++ (&@as([47]u8, @splat(0x61))) ++ "\\u4e16 extra\",\"messages\":[]}]}";
     try durable.replacePrivate(path, raw);
 
     var snap = try load(allocator, path);
     defer snap.deinit();
-    try std.testing.expectEqualStrings("a" ** 47, snap.conversations[0].title);
+    try std.testing.expectEqualStrings(&@as([47]u8, @splat(0x61)), snap.conversations[0].title);
     try std.testing.expect(std.unicode.utf8ValidateSlice(snap.conversations[0].title));
 }
 

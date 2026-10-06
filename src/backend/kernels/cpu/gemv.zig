@@ -126,7 +126,7 @@ test "gemvSeq q8_0 roundtrip" {
     @as(*f16, @ptrCast(@alignCast(&block[0]))).* = @as(f16, 0.5);
     @memset(block[2..34], 2); // quant=2, dequant = 2 * 0.5 = 1.0
 
-    const x = [_]f32{1.0} ** 32;
+    const x: [32]f32 = @splat(1.0);
     var y: [1]f32 = undefined;
     gemvSeq(&x, &block, .q8_0, &y, 1, 32);
     // 32 × (2 × 0.5) × 1.0 = 32.0

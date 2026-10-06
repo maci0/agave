@@ -69,7 +69,7 @@ const fault_disarmed: u8 = 0;
 var fault_armed = std.atomic.Value(u8).init(fault_disarmed);
 
 fn encodeFault(step: Step, mode: Mode) u8 {
-    return 1 + @as(u8, @intFromEnum(step)) * 2 + @as(u8, @intFromEnum(mode));
+    return 1 + @as(u8, @backingInt(step)) * 2 + @as(u8, @backingInt(mode));
 }
 
 /// Arm `mode` at `step` for the next `replace` that reaches it. One-shot:
@@ -175,35 +175,44 @@ fn replaceWithMode(path: []const u8, data: []const u8, file_mode: std.posix.mode
         .TRUNC = true,
     }, file_mode);
     var fd_open = true;
-    errdefer |e| {
+    // Zig 0.17 removed the `errdefer |err|` capture, so the crash case is
+    // recorded as it is raised instead of being inspected during unwind.
+    var injected_crash = false;
+    const fault = struct {
+        fn raise(mode: Mode, crashed: *bool) error{ InjectedFault, InjectedCrash }!void {
+            if (mode == .crash) crashed.* = true;
+            return faultError(mode);
+        }
+    }.raise;
+    errdefer {
         // Whether or not the process is faulting, the descriptor is released;
         // only a recoverable fault removes the tmp. A `crash` leaves the
         // partially-written tmp on disk, as process death would.
         if (fd_open) closeFd(fd);
-        if (e != error.InjectedCrash) deletePath(tmp_path);
+        if (!injected_crash) deletePath(tmp_path);
     }
 
-    if (injectIfArmed(.write)) |mode| return faultError(mode);
+    if (injectIfArmed(.write)) |mode| return fault(mode, &injected_crash);
     // A full disk stops the write partway, so the bytes already on disk stay
     // there: a `crash` leaves a torn tmp, `fail` removes it.
     if (injectIfArmed(.write_partial)) |mode| {
         try writeAll(fd, data[0 .. data.len / 2]);
-        return faultError(mode);
+        return fault(mode, &injected_crash);
     }
     try writeAll(fd, data);
 
-    if (injectIfArmed(.file_sync)) |mode| return faultError(mode);
+    if (injectIfArmed(.file_sync)) |mode| return fault(mode, &injected_crash);
     try syncFd(fd);
     // A failed close on a write path means the data may never reach disk, so
     // the rename must not publish the file. The descriptor is released even on
     // a close error, so clear `fd_open` first and let the errdefer drop the tmp.
-    if (injectIfArmed(.file_close)) |mode| return faultError(mode);
+    if (injectIfArmed(.file_close)) |mode| return fault(mode, &injected_crash);
     fd_open = false;
     try closeFdChecked(fd);
     try renameOver(tmp_path, path);
-    if (injectIfArmed(.rename)) |mode| return faultError(mode);
+    if (injectIfArmed(.rename)) |mode| return fault(mode, &injected_crash);
     syncParent(path);
-    if (injectIfArmed(.dir_sync)) |mode| return faultError(mode);
+    if (injectIfArmed(.dir_sync)) |mode| return fault(mode, &injected_crash);
 }
 
 /// Write every byte, tolerating a short write from the kernel.

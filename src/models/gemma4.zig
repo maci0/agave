@@ -163,22 +163,22 @@ pub const Gemma4Model = struct {
     /// Dense FFN intermediate dimension (scalar default or max of per-layer array).
     dense_ff_dim: u32,
     /// Per-layer FFN intermediate dimensions (from metadata array, or all same).
-    per_layer_ff_dim: [max_layers]u32 = [_]u32{0} ** max_layers,
+    per_layer_ff_dim: [max_layers]u32 = @splat(0),
 
     // ── Layer map ────────────────────────────────────────────────
     /// Every global_layer_interval-th layer (1-indexed) is a global attention layer.
     global_layer_interval: u32,
     /// Per-layer flag: true = global attention, false = sliding-window.
-    layer_is_global: [max_layers]bool = [_]bool{false} ** max_layers,
+    layer_is_global: [max_layers]bool = @splat(false),
     /// Per-layer KV head count (from metadata array, or defaults).
-    per_layer_n_kv_head: [max_layers]u32 = [_]u32{0} ** max_layers,
+    per_layer_n_kv_head: [max_layers]u32 = @splat(0),
 
     // ── Shared KV ────────────────────────────────────────────────
     /// Number of trailing shared-KV layers.
     n_kv_shared_layers: u32 = 0,
     /// Per-layer KV source: kv_source[i] = layer that owns the KV cache for layer i.
     /// For non-shared layers, kv_source[i] == i.
-    kv_source: [max_layers]u32 = [_]u32{0} ** max_layers,
+    kv_source: [max_layers]u32 = @splat(0),
 
     // ── PLE (Per-Layer Embeddings) config ────────────────────────
     /// Per-layer embedding dimension (0 = PLE disabled).
@@ -200,7 +200,7 @@ pub const Gemma4Model = struct {
     mlx_bits: u32 = 4,
     norm_cache: [max_norm_entries]NormCacheEntry = undefined,
     norm_cache_len: usize = 0,
-    mlx_cc_keys: [mlx_companion_cache_size]usize = [_]usize{0} ** mlx_companion_cache_size,
+    mlx_cc_keys: [mlx_companion_cache_size]usize = @splat(0),
     mlx_cc_vals: [mlx_companion_cache_size]MlxCompanion = undefined,
 
     // ── Working buffers (allocated once, reused every token) ─────
@@ -265,7 +265,7 @@ pub const Gemma4Model = struct {
     /// Per-layer value cache: values[layer][max_seq_len * layer_kvd].
     layer_values: [][]f32 = &.{},
     /// Per-layer KV dimension (nkv * hd for that layer).
-    layer_kvd: [max_layers]usize = [_]usize{0} ** max_layers,
+    layer_kvd: [max_layers]usize = @splat(0),
 
     // These fields are kept for Model vtable compatibility (ensureKvBlock, resetKvCache)
     paged_cache: PagedKvCache = undefined,
@@ -439,7 +439,7 @@ pub const Gemma4Model = struct {
 
         // Dense FFN intermediate dimension, can be scalar or per-layer array.
         // Read per-layer array first; if absent, try scalar; if absent, infer from tensor shape.
-        var per_layer_ff_dim: [max_layers]u32 = [_]u32{0} ** max_layers;
+        var per_layer_ff_dim: [max_layers]u32 = @splat(0);
         var dense_ff_dim: u32 = 0;
         {
             const nli: usize = n_layers;
@@ -509,7 +509,7 @@ pub const Gemma4Model = struct {
         const nl: usize = n_layers;
 
         // Build layer type map, use per-layer sliding_window_pattern array if available
-        var layer_is_global: [max_layers]bool = [_]bool{false} ** max_layers;
+        var layer_is_global: [max_layers]bool = @splat(false);
         {
             // Try to read per-layer sliding_window_pattern array from GGUF metadata.
             // Format: arch_key e.g. "gemma4.attention.sliding_window_pattern"
@@ -629,7 +629,7 @@ pub const Gemma4Model = struct {
         }
 
         // Build per-layer KV head count map
-        var per_layer_n_kv_head: [max_layers]u32 = [_]u32{0} ** max_layers;
+        var per_layer_n_kv_head: [max_layers]u32 = @splat(0);
         {
             var key_buf: [format_mod.arch_key_buf_size]u8 = undefined;
             // Try arch prefix then "gemma4" base (handles "gemma4_text" QAT variants).
@@ -2795,7 +2795,7 @@ test "Gemma4 layer type detection" {
     // With interval=6 (default): layers 5,11,17,23,29 (0-indexed) are global.
     const interval: u32 = 6;
     const n_layers: usize = 30;
-    var layer_is_global: [max_layers]bool = [_]bool{false} ** max_layers;
+    var layer_is_global: [max_layers]bool = @splat(false);
     for (0..n_layers) |i| {
         layer_is_global[i] = ((i + 1) % interval == 0);
     }
@@ -2825,7 +2825,7 @@ test "Gemma4 shared KV mapping" {
     const n_kv_shared: usize = 4;
     const interval: u32 = 6;
 
-    var layer_is_global: [max_layers]bool = [_]bool{false} ** max_layers;
+    var layer_is_global: [max_layers]bool = @splat(false);
     for (0..n_layers) |i| {
         layer_is_global[i] = ((i + 1) % interval == 0);
     }
@@ -2871,8 +2871,8 @@ test "Gemma4 per-layer KV head count defaults" {
     const sl_kv: u32 = 8;
     const gl_kv: u32 = 2;
 
-    var layer_is_global: [max_layers]bool = [_]bool{false} ** max_layers;
-    var per_layer_n_kv_head: [max_layers]u32 = [_]u32{0} ** max_layers;
+    var layer_is_global: [max_layers]bool = @splat(false);
+    var per_layer_n_kv_head: [max_layers]u32 = @splat(0);
 
     for (0..n_layers) |i| {
         layer_is_global[i] = ((i + 1) % interval == 0);

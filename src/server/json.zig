@@ -57,7 +57,7 @@ pub const ToolDef = struct {
 
 /// Tool definitions extracted from request.
 pub const ToolParams = struct {
-    tools: [max_tools]?ToolDef = .{null} ** max_tools,
+    tools: [max_tools]?ToolDef = @splat(null),
     tool_count: u32 = 0,
     tool_choice: []const u8 = "auto",
 
@@ -94,8 +94,8 @@ pub const SamplingParams = struct {
     logprobs: bool = false,
     top_logprobs: u32 = 0,
     /// Logit bias: up to max_logit_bias token_id→bias pairs from {"logit_bias": {"123": 5.0}}
-    logit_bias_ids: [max_logit_bias]u32 = .{0} ** max_logit_bias,
-    logit_bias_vals: [max_logit_bias]f32 = .{0} ** max_logit_bias,
+    logit_bias_ids: [max_logit_bias]u32 = @splat(0),
+    logit_bias_vals: [max_logit_bias]f32 = @splat(0),
     logit_bias_count: u32 = 0,
     stream_include_usage: bool = true,
     user: ?[]const u8 = null,
@@ -106,11 +106,11 @@ pub const SamplingParams = struct {
     truncation_side: enum { right, left } = .right,
     grammar_string: ?[]const u8 = null,
     json_schema: ?[]const u8 = null,
-    stop: [max_stop_sequences]?[]const u8 = .{null} ** max_stop_sequences,
+    stop: [max_stop_sequences]?[]const u8 = @splat(null),
     /// Inline storage for JSON-decoded stop sequences. Slices in `stop` may
     /// point here; `out: *SamplingParams` parse style keeps storage and slices
     /// in one caller-owned value.
-    stop_storage: [max_stop_sequences][stop_seq_max_len]u8 = .{.{0} ** stop_seq_max_len} ** max_stop_sequences,
+    stop_storage: [max_stop_sequences][stop_seq_max_len]u8 = @splat(@splat(0)),
     n_stop: u32 = 0,
     /// Anthropic-style thinking budget: max tokens for <think>...</think> reasoning.
     /// 0 = unlimited. When exceeded, model is nudged out of thinking with </think>.
