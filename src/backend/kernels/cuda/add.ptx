@@ -6,12 +6,13 @@
 .target sm_120
 .address_size 64
 
+	// .globl	add_kernel
 
-.entry add_kernel(
-	.param .b64 add_$_add_kernel_param_0,
-	.param .b64 add_$_add_kernel_param_1,
-	.param .b64 add_$_add_kernel_param_2,
-	.param .b32 add_$_add_kernel_param_3
+.visible .func add_kernel(
+	.param .b64 add_kernel_param_0,
+	.param .b64 add_kernel_param_1,
+	.param .b64 add_kernel_param_2,
+	.param .b32 add_kernel_param_3
 )
 {
 	.reg .pred 	%p<2>;
@@ -24,7 +25,7 @@
 	// begin inline asm
 	mov.u32 %r2, %ntid.x;
 	// end inline asm
-	ld.param.b32 	%r4, [add_$_add_kernel_param_3];
+	ld.param.b32 	%r4, [add_kernel_param_3];
 	// begin inline asm
 	mov.u32 %r3, %tid.x;
 	// end inline asm
@@ -33,9 +34,9 @@
 	@%p1 bra 	$L__BB0_2;
 	bra.uni 	$L__BB0_1;
 $L__BB0_2:
-	ld.param.b64 	%rd4, [add_$_add_kernel_param_0];
-	ld.param.b64 	%rd5, [add_$_add_kernel_param_1];
-	ld.param.b64 	%rd6, [add_$_add_kernel_param_2];
+	ld.param.b64 	%rd4, [add_kernel_param_0];
+	ld.param.b64 	%rd5, [add_kernel_param_1];
+	ld.param.b64 	%rd6, [add_kernel_param_2];
 	mul.wide.u32 	%rd7, %r5, 4;
 	add.s64 	%rd1, %rd5, %rd7;
 	add.s64 	%rd2, %rd4, %rd7;

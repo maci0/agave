@@ -54,7 +54,6 @@ BUILD_FLAGS=(
     -Denable-bench=false
     -Denable-qwen35=false
     -Denable-qwen4-exp=false
-    -Denable-gpt-oss=false
     -Denable-gemma4=false
     -Denable-diffusion-gemma=false
     -Denable-deepseek4=false
@@ -74,11 +73,18 @@ trap 'rm -rf "$SCRATCH"' EXIT
 # download cache and the plaintext conversation history in a temp tree.
 SRC_B="$SCRATCH/src"
 mkdir -p "$SRC_B"
-tar -C "$ROOT" -cf - \
-    --exclude=./.git --exclude=./.zig-cache --exclude=./zig-out \
-    --exclude=./node_modules --exclude=./models \
-    --exclude=./.agave-cache --exclude=./.venv --exclude=./zig-out-linux \
-    . | tar -C "$SRC_B" -xf -
+# Top-level entries are listed instead of excluded: bsdtar (macOS) matches
+# `--exclude=./models` against `./src/models` as well, so the exclude form
+# silently dropped every model source and the copy failed to build. Naming the
+# roots to copy is anchored on both bsdtar and GNU tar.
+copy_roots=()
+while IFS= read -r entry; do
+    case "$entry" in
+        .git | .zig-cache | zig-out | zig-out-linux | node_modules | models | .agave-cache | .venv) continue ;;
+    esac
+    copy_roots+=("$entry")
+done < <(ls -A "$ROOT")
+tar -C "$ROOT" -cf - "${copy_roots[@]}" | tar -C "$SRC_B" -xf -
 
 echo "== Build A: $ROOT"
 SOURCE_DATE_EPOCH=1600000000 TZ=UTC LC_ALL=C \

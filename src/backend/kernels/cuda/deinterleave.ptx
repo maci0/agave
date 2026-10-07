@@ -6,27 +6,28 @@
 .target sm_120
 .address_size 64
 
+	// .globl	deinterleave_kernel
 
-.entry deinterleave_kernel(
-	.param .b64 deinterleave_$_deinterleave_kernel_param_0,
-	.param .b64 deinterleave_$_deinterleave_kernel_param_1,
-	.param .b64 deinterleave_$_deinterleave_kernel_param_2,
-	.param .b32 deinterleave_$_deinterleave_kernel_param_3,
-	.param .b32 deinterleave_$_deinterleave_kernel_param_4
+.visible .func deinterleave_kernel(
+	.param .b64 deinterleave_kernel_param_0,
+	.param .b64 deinterleave_kernel_param_1,
+	.param .b64 deinterleave_kernel_param_2,
+	.param .b32 deinterleave_kernel_param_3,
+	.param .b32 deinterleave_kernel_param_4
 )
 {
 	.reg .pred 	%p<2>;
 	.reg .b32 	%r<16>;
 	.reg .b64 	%rd<11>;
 
-	ld.param.b32 	%r2, [deinterleave_$_deinterleave_kernel_param_3];
+	ld.param.b32 	%r2, [deinterleave_kernel_param_3];
 	// begin inline asm
 	mov.u32 %r3, %ctaid.x;
 	// end inline asm
 	// begin inline asm
 	mov.u32 %r4, %ntid.x;
 	// end inline asm
-	ld.param.b32 	%r6, [deinterleave_$_deinterleave_kernel_param_4];
+	ld.param.b32 	%r6, [deinterleave_kernel_param_4];
 	// begin inline asm
 	mov.u32 %r5, %tid.x;
 	// end inline asm
@@ -36,9 +37,9 @@
 	@%p1 bra 	$L__BB0_2;
 	bra.uni 	$L__BB0_1;
 $L__BB0_2:
-	ld.param.b64 	%rd3, [deinterleave_$_deinterleave_kernel_param_2];
-	ld.param.b64 	%rd2, [deinterleave_$_deinterleave_kernel_param_1];
-	ld.param.b64 	%rd1, [deinterleave_$_deinterleave_kernel_param_0];
+	ld.param.b64 	%rd3, [deinterleave_kernel_param_2];
+	ld.param.b64 	%rd2, [deinterleave_kernel_param_1];
+	ld.param.b64 	%rd1, [deinterleave_kernel_param_0];
 	div.u32 	%r8, %r1, %r2;
 	mul.lo.s32 	%r9, %r8, %r2;
 	sub.s32 	%r10, %r1, %r9;

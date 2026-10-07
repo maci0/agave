@@ -6,11 +6,12 @@
 .target sm_120
 .address_size 64
 
+	// .globl	sigmoid_mul_kernel
 
-.entry sigmoid_mul_kernel(
-	.param .b64 sigmoid_mul_$_sigmoid_mul_kernel_param_0,
-	.param .b64 sigmoid_mul_$_sigmoid_mul_kernel_param_1,
-	.param .b32 sigmoid_mul_$_sigmoid_mul_kernel_param_2
+.visible .func sigmoid_mul_kernel(
+	.param .b64 sigmoid_mul_kernel_param_0,
+	.param .b64 sigmoid_mul_kernel_param_1,
+	.param .b32 sigmoid_mul_kernel_param_2
 )
 {
 	.reg .pred 	%p<2>;
@@ -20,7 +21,7 @@
 	// begin inline asm
 	mov.u32 %r2, %ctaid.x;
 	// end inline asm
-	ld.param.b32 	%r5, [sigmoid_mul_$_sigmoid_mul_kernel_param_2];
+	ld.param.b32 	%r5, [sigmoid_mul_kernel_param_2];
 	// begin inline asm
 	mov.u32 %r3, %ntid.x;
 	// end inline asm
@@ -32,8 +33,8 @@
 	@%p1 bra 	$L__BB0_2;
 	bra.uni 	$L__BB0_1;
 $L__BB0_2:
-	ld.param.b64 	%rd2, [sigmoid_mul_$_sigmoid_mul_kernel_param_1];
-	ld.param.b64 	%rd1, [sigmoid_mul_$_sigmoid_mul_kernel_param_0];
+	ld.param.b64 	%rd2, [sigmoid_mul_kernel_param_1];
+	ld.param.b64 	%rd1, [sigmoid_mul_kernel_param_0];
 	mul.wide.u32 	%rd3, %r1, 4;
 	add.s64 	%rd4, %rd1, %rd3;
 	ld.b32 	%r10, [%rd4];

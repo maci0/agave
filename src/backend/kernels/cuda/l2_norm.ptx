@@ -6,160 +6,162 @@
 .target sm_120
 .address_size 64
 
+	// .globl	l2_norm_kernel
 
-.entry l2_norm_kernel(
-	.param .b64 l2_norm_$_l2_norm_kernel_param_0,
-	.param .b32 l2_norm_$_l2_norm_kernel_param_1,
-	.param .b32 l2_norm_$_l2_norm_kernel_param_2
+.visible .func l2_norm_kernel(
+	.param .b64 l2_norm_kernel_param_0,
+	.param .b32 l2_norm_kernel_param_1,
+	.param .b32 l2_norm_kernel_param_2
 )
 {
-	.reg .pred 	%p<9>;
-	.reg .b32 	%r<70>;
-	.reg .b64 	%rd<26>;
+	.reg .pred 	%p<8>;
+	.reg .b32 	%r<49>;
+	.reg .b64 	%rd<16>;
 
-	ld.param.b32 	%r17, [l2_norm_$_l2_norm_kernel_param_1];
-	ld.param.b64 	%rd11, [l2_norm_$_l2_norm_kernel_param_0];
+	ld.param.b32 	%r3, [l2_norm_kernel_param_1];
+	ld.param.b64 	%rd3, [l2_norm_kernel_param_0];
 	// begin inline asm
-	mov.u32 %r69, %tid.x;
+	mov.u32 %r48, %tid.x;
 	// end inline asm
 	// begin inline asm
-	mov.u32 %r20, %ntid.x;
+	mov.u32 %r5, %ntid.x;
 	// end inline asm
-	setp.ge.u32 	%p1, %r69, %r17;
-	mov.b32 	%r66, 0f00000000;
-	mul.wide.u32 	%rd23, %r20, 4;
+	setp.ge.u32 	%p1, %r48, %r3;
+	mov.b32 	%r46, 0f00000000;
+	mul.wide.u32 	%rd13, %r5, 4;
 	@%p1 bra 	$L__BB0_3;
-	mul.wide.u32 	%rd12, %r69, 4;
-	add.s64 	%rd24, %rd11, %rd12;
-	mov.b32 	%r66, 0f00000000;
-	mov.b32 	%r64, %r69;
+	mul.wide.u32 	%rd4, %r48, 4;
+	add.s64 	%rd14, %rd3, %rd4;
+	mov.b32 	%r46, 0f00000000;
+	mov.b32 	%r45, %r48;
 $L__BB0_2:
-	ld.b32 	%r23, [%rd24];
-	mul.rn.f32 	%r24, %r23, %r23;
-	add.rn.f32 	%r66, %r66, %r24;
-	add.s32 	%r64, %r64, %r20;
-	add.s64 	%rd24, %rd24, %rd23;
-	setp.lt.u32 	%p2, %r64, %r17;
+	ld.b32 	%r6, [%rd14];
+	mul.rn.f32 	%r7, %r6, %r6;
+	add.rn.f32 	%r46, %r46, %r7;
+	add.s32 	%r45, %r45, %r5;
+	add.s64 	%rd14, %rd14, %rd13;
+	setp.lt.u32 	%p2, %r45, %r3;
 	@%p2 bra 	$L__BB0_2;
 $L__BB0_3:
-	and.b32 	%r40, %r69, 31;
-	mov.b32 	%r27, 16;
+	and.b32 	%r22, %r48, 31;
+	shr.u32 	%r23, %r48, 5;
+	mov.b32 	%r9, 16;
 	// begin inline asm
-	shfl.sync.down.b32 %r25, %r66, %r27, 31, 0xFFFFFFFF;
+	shfl.sync.down.b32 %r8, %r46, %r9, 31, 0xFFFFFFFF;
 	// end inline asm
-	add.rn.f32 	%r29, %r66, %r25;
-	mov.b32 	%r30, 8;
+	add.rn.f32 	%r11, %r46, %r8;
+	mov.b32 	%r12, 8;
 	// begin inline asm
-	shfl.sync.down.b32 %r28, %r29, %r30, 31, 0xFFFFFFFF;
+	shfl.sync.down.b32 %r10, %r11, %r12, 31, 0xFFFFFFFF;
 	// end inline asm
-	add.rn.f32 	%r32, %r29, %r28;
-	mov.b32 	%r33, 4;
+	add.rn.f32 	%r14, %r11, %r10;
+	mov.b32 	%r15, 4;
 	// begin inline asm
-	shfl.sync.down.b32 %r31, %r32, %r33, 31, 0xFFFFFFFF;
+	shfl.sync.down.b32 %r13, %r14, %r15, 31, 0xFFFFFFFF;
 	// end inline asm
-	add.rn.f32 	%r35, %r32, %r31;
-	mov.b32 	%r36, 2;
+	add.rn.f32 	%r17, %r14, %r13;
+	mov.b32 	%r18, 2;
 	// begin inline asm
-	shfl.sync.down.b32 %r34, %r35, %r36, 31, 0xFFFFFFFF;
+	shfl.sync.down.b32 %r16, %r17, %r18, 31, 0xFFFFFFFF;
 	// end inline asm
-	add.rn.f32 	%r38, %r35, %r34;
-	mov.b32 	%r39, 1;
+	add.rn.f32 	%r20, %r17, %r16;
+	mov.b32 	%r21, 1;
 	// begin inline asm
-	shfl.sync.down.b32 %r37, %r38, %r39, 31, 0xFFFFFFFF;
+	shfl.sync.down.b32 %r19, %r20, %r21, 31, 0xFFFFFFFF;
 	// end inline asm
-	setp.eq.b32 	%p3, %r40, 0;
+	setp.eq.b32 	%p3, %r22, 0;
+	cvt.u64.u32 	%rd1, %r23;
 	@%p3 bra 	$L__BB0_12;
 	bra.uni 	$L__BB0_4;
 $L__BB0_12:
-	add.rn.f32 	%r8, %r38, %r37;
-	shr.u32 	%r41, %r69, 5;
-	cvt.u64.u32 	%rd5, %r41;
+	add.rn.f32 	%r1, %r20, %r19;
 	// begin inline asm
-	cvta.shared.u64 %rd13, 0;
+	cvta.shared.u64 %rd5, 0;
 	// end inline asm
-	shl.b64 	%rd14, %rd5, 2;
-	add.s64 	%rd15, %rd13, %rd14;
-	st.volatile.shared.b32 	[%rd15], %r8;
+	shl.b64 	%rd6, %rd1, 2;
+	add.s64 	%rd7, %rd5, %rd6;
+	st.volatile.shared.b32 	[%rd7], %r1;
 $L__BB0_4:
 	// begin inline asm
 	bar.sync 0;
 	// end inline asm
-	add.s32 	%r43, %r20, 31;
-	shr.u32 	%r44, %r43, 5;
-	setp.lt.u32 	%p4, %r69, %r44;
-	cvt.u64.u32 	%rd6, %r69;
-	mov.b32 	%r67, 0f00000000;
-	shl.b64 	%rd22, %rd6, 2;
+	add.s32 	%r24, %r5, 31;
+	shr.u32 	%r25, %r24, 5;
+	setp.lt.u32 	%p4, %r48, %r25;
+	cvt.u64.u32 	%rd2, %r48;
+	mov.b32 	%r47, 0f00000000;
+	shl.b64 	%rd12, %rd2, 2;
 	@%p4 bra 	$L__BB0_13;
 	bra.uni 	$L__BB0_5;
 $L__BB0_13:
 	// begin inline asm
-	cvta.shared.u64 %rd16, 0;
+	cvta.shared.u64 %rd8, 0;
 	// end inline asm
-	add.s64 	%rd18, %rd16, %rd22;
-	ld.volatile.shared.b32 	%r67, [%rd18];
+	add.s64 	%rd9, %rd8, %rd12;
+	ld.volatile.shared.b32 	%r47, [%rd9];
 $L__BB0_5:
-	setp.lt.u32 	%p5, %r69, 32;
+	cvt.u32.u64 	%r26, %rd1;
+	setp.eq.b32 	%p5, %r26, 0;
 	@%p5 bra 	$L__BB0_6;
 	bra.uni 	$L__BB0_7;
 $L__BB0_6:
-	mov.b32 	%r47, 16;
+	mov.b32 	%r28, 16;
 	// begin inline asm
-	shfl.sync.down.b32 %r45, %r67, %r47, 31, 0xFFFFFFFF;
+	shfl.sync.down.b32 %r27, %r47, %r28, 31, 0xFFFFFFFF;
 	// end inline asm
-	add.rn.f32 	%r49, %r67, %r45;
-	mov.b32 	%r50, 8;
+	add.rn.f32 	%r30, %r47, %r27;
+	mov.b32 	%r31, 8;
 	// begin inline asm
-	shfl.sync.down.b32 %r48, %r49, %r50, 31, 0xFFFFFFFF;
+	shfl.sync.down.b32 %r29, %r30, %r31, 31, 0xFFFFFFFF;
 	// end inline asm
-	add.rn.f32 	%r52, %r49, %r48;
-	mov.b32 	%r53, 4;
+	add.rn.f32 	%r33, %r30, %r29;
+	mov.b32 	%r34, 4;
 	// begin inline asm
-	shfl.sync.down.b32 %r51, %r52, %r53, 31, 0xFFFFFFFF;
+	shfl.sync.down.b32 %r32, %r33, %r34, 31, 0xFFFFFFFF;
 	// end inline asm
-	add.rn.f32 	%r55, %r52, %r51;
-	mov.b32 	%r56, 2;
+	add.rn.f32 	%r36, %r33, %r32;
+	mov.b32 	%r37, 2;
 	// begin inline asm
-	shfl.sync.down.b32 %r54, %r55, %r56, 31, 0xFFFFFFFF;
+	shfl.sync.down.b32 %r35, %r36, %r37, 31, 0xFFFFFFFF;
 	// end inline asm
-	add.rn.f32 	%r58, %r55, %r54;
-	mov.b32 	%r59, 1;
+	add.rn.f32 	%r39, %r36, %r35;
+	mov.b32 	%r40, 1;
 	// begin inline asm
-	shfl.sync.down.b32 %r57, %r58, %r59, 31, 0xFFFFFFFF;
+	shfl.sync.down.b32 %r38, %r39, %r40, 31, 0xFFFFFFFF;
 	// end inline asm
-	add.rn.f32 	%r67, %r58, %r57;
+	add.rn.f32 	%r47, %r39, %r38;
 $L__BB0_7:
-	setp.eq.b32 	%p6, %r69, 0;
+	setp.eq.b32 	%p6, %r48, 0;
 	@%p6 bra 	$L__BB0_14;
 	bra.uni 	$L__BB0_8;
 $L__BB0_14:
-	ld.param.b32 	%r18, [l2_norm_$_l2_norm_kernel_param_2];
-	add.rn.f32 	%r61, %r18, %r67;
+	ld.param.b32 	%r4, [l2_norm_kernel_param_2];
+	add.rn.f32 	%r42, %r4, %r47;
 	// begin inline asm
-	rsqrt.approx.f32 %r60, %r61;
+	rsqrt.approx.f32 %r41, %r42;
 	// end inline asm
 	// begin inline asm
-	cvta.shared.u64 %rd19, 0;
+	cvta.shared.u64 %rd10, 0;
 	// end inline asm
-	st.volatile.shared.b32 	[%rd19], %r60;
+	st.volatile.shared.b32 	[%rd10], %r41;
 $L__BB0_8:
 	// begin inline asm
 	bar.sync 0;
 	// end inline asm
 	// begin inline asm
-	cvta.shared.u64 %rd20, 0;
+	cvta.shared.u64 %rd11, 0;
 	// end inline asm
-	ld.volatile.shared.b32 	%r14, [%rd20];
+	ld.volatile.shared.b32 	%r2, [%rd11];
 	@%p1 bra 	$L__BB0_11;
-	add.s64 	%rd25, %rd11, %rd22;
+	add.s64 	%rd15, %rd3, %rd12;
 $L__BB0_10:
-	ld.b32 	%r62, [%rd25];
-	mul.rn.f32 	%r63, %r14, %r62;
-	st.b32 	[%rd25], %r63;
-	add.s32 	%r69, %r69, %r20;
-	add.s64 	%rd25, %rd25, %rd23;
-	setp.lt.u32 	%p8, %r69, %r17;
-	@%p8 bra 	$L__BB0_10;
+	ld.b32 	%r43, [%rd15];
+	mul.rn.f32 	%r44, %r2, %r43;
+	st.b32 	[%rd15], %r44;
+	add.s32 	%r48, %r48, %r5;
+	add.s64 	%rd15, %rd15, %rd13;
+	setp.lt.u32 	%p7, %r48, %r3;
+	@%p7 bra 	$L__BB0_10;
 $L__BB0_11:
 	ret;
 
