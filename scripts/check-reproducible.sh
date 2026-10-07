@@ -81,10 +81,16 @@ copy_roots=()
 while IFS= read -r entry; do
     case "$entry" in
         .git | .zig-cache | zig-out | zig-out-linux | node_modules | models | .agave-cache | .venv) continue ;;
+        # These names reach tar as positional arguments. A dash-leading entry
+        # would be read as a flag, so refuse rather than smuggle one in.
+        -*)
+            echo "error: refusing to copy build root entry with a leading dash: $entry" >&2
+            exit 1
+            ;;
     esac
     copy_roots+=("$entry")
 done < <(ls -A "$ROOT")
-tar -C "$ROOT" -cf - "${copy_roots[@]}" | tar -C "$SRC_B" -xf -
+tar -C "$ROOT" -cf - -- "${copy_roots[@]}" | tar -C "$SRC_B" -xf -
 
 echo "== Build A: $ROOT"
 SOURCE_DATE_EPOCH=1600000000 TZ=UTC LC_ALL=C \
