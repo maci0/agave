@@ -64,4 +64,4 @@ Start here: **[Chapter 0: Getting Started](tutorial/00-getting-started.md)** (or
 - **[Research Ideas](RESEARCH_IDEAS.md)**: unbuilt optimization proposals with expected gains
 - **[Parallelism](PARALLELISM.md)**: distributed inference: TP, PP, NCCL, transports
 - **[TODO & Roadmap](TODO.md)**: bugs, roadmap, design notes
-- **[Changelog](../CHANGELOG.md)**: user-facing release history (product version 0.11.0)
+- **[Changelog](../CHANGELOG.md)**: user-facing release history (product version 0.12.0)
