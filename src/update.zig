@@ -10,6 +10,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const config = @import("config.zig");
 const display_mod = @import("display.zig");
+const clispec = @import("clispec.zig");
 const test_stdout = @import("test_stdout.zig");
 
 const version = @import("build_options").version;
@@ -398,8 +399,7 @@ pub fn printUsage() void {
 /// Returns exit code (0 = success/current, 2 = usage error, 1 = operational failure).
 pub fn run(allocator: std.mem.Allocator, process_args: std.process.Args, io: std.Io) u8 {
     var args_iter = process_args.iterate();
-    _ = args_iter.skip(); // argv[0]
-    _ = args_iter.skip(); // "update"
+    clispec.skipThrough(&args_iter, "update");
 
     var check_only = false;
     var repo_arg: ?[]const u8 = null;

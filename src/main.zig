@@ -17,6 +17,7 @@ const tok_mod = @import("tokenizer/tokenizer.zig");
 const server = @import("server/server.zig");
 const lora_mod = @import("lora.zig");
 const display_mod = @import("display.zig");
+const clispec = @import("clispec.zig");
 const Display = display_mod.Display;
 const chat_tmpl_mod = @import("chat_template.zig");
 const ChatTemplate = chat_tmpl_mod.ChatTemplate;
@@ -124,12 +125,12 @@ fn readStdinAll(allocator: std.mem.Allocator, max_size: usize) ?[]const u8 {
         if (buf.items.len + n > max_size) {
             eprint("Error: piped input exceeds {d} MB limit\n", .{max_size / (1024 * 1024)});
             buf.deinit(allocator);
-            std.process.exit(1);
+            failureExit();
         }
         buf.appendSlice(allocator, read_buf[0..n]) catch {
             eprint("Error: out of memory reading piped input ({d} bytes read)\n", .{buf.items.len});
             buf.deinit(allocator);
-            std.process.exit(1);
+            failureExit();
         };
     }
     if (buf.items.len == 0) {
@@ -139,7 +140,7 @@ fn readStdinAll(allocator: std.mem.Allocator, max_size: usize) ?[]const u8 {
     return buf.toOwnedSlice(allocator) catch {
         eprint("Error: out of memory finalizing piped input ({d} bytes)\n", .{buf.items.len});
         buf.deinit(allocator);
-        std.process.exit(1);
+        failureExit();
     };
 }
 
@@ -280,7 +281,7 @@ fn colorModeOrExit(mode: []const u8) void {
     if (isColorMode(mode)) return;
     eprint("Error: unknown --color value '{s}'\n", .{mode});
     eprint("  Valid options: auto, always, never\n", .{});
-    std.process.exit(2);
+    usageExit();
 }
 
 /// True when `s` is one of the accepted `--color` modes.
@@ -296,7 +297,7 @@ fn kvTypeOrExit(s: []const u8, flag_name: []const u8) KvQuantType {
     return KvQuantType.fromString(s) orelse {
         eprint("Error: unknown {s} value '{s}'\n", .{ flag_name, s });
         eprint("  Valid options: " ++ kv_valid_types ++ "\n", .{});
-        std.process.exit(2);
+        usageExit();
     };
 }
 
@@ -565,7 +566,8 @@ const cli_specs = [_]cli_mod.ArgSpec{
     // Diagnostics
     .{ .long = "verbose", .short = 'V', .help = "Show technical details (params, load times, EOG)." },
     .{ .long = "debug", .short = 'd', .help = "Enable debug logging (token IDs, layer timing); implies --verbose." },
-    .{ .long = "json", .help = "Output results as JSON (implies --quiet)." },
+    .{ .long = "json", .help = "Output results as JSON (implies --quiet). Same as --output json." },
+    .{ .long = "output", .short = 'o', .kind = .option, .help = "Output format: auto, text, or json [default: auto]. auto stays text when piped. Place it before the command." },
     .{ .long = "model-info", .help = "Print model metadata and exit (supports --json)." },
     .{ .long = "megakernel", .help = "Enable fused FFN megakernels (3→1 dispatch per layer)." },
     .{ .long = "profile", .help = "Profile per-op timing (halves throughput)." },
@@ -757,32 +759,69 @@ fn helpTopicPrintUsage(sub: []const u8) bool {
     return false;
 }
 
+fn usageExit() noreturn {
+    clispec.writeError(init_args, "usage", "invalid arguments");
+    std.process.exit(2);
+}
+
+fn failureExit() noreturn {
+    clispec.writeError(init_args, "failure", "command failed");
+    std.process.exit(1);
+}
+
+fn outputSelectsJson(res: *const cli_mod.ParseResult) bool {
+    if (res.option("output")) |value| {
+        if (!std.mem.eql(u8, value, "auto") and !std.mem.eql(u8, value, "text") and !std.mem.eql(u8, value, "json")) {
+            eprint("agave: --output requires auto, text, or json\n", .{});
+            usageExit();
+        }
+        return std.mem.eql(u8, value, "json");
+    }
+    return res.flag("json");
+}
+
 /// Check if the first positional arg is a subcommand (e.g. "pull").
 /// Returns true if a subcommand was handled (caller should return).
 fn checkSubcommand(allocator: std.mem.Allocator) bool {
-    var args_iter = init_args.iterate();
-    _ = args_iter.next(); // skip argv[0]
-
-    const first = args_iter.next() orelse return false;
+    if (clispec.badOutput(init_args)) |msg| {
+        eprint("{s}\n", .{msg});
+        usageExit();
+    }
+    const first = clispec.commandWord(init_args) orelse return false;
+    if (std.mem.eql(u8, first, "schema")) {
+        const code = clispec.schemaMain(init_args);
+        if (code == 2) usageExit();
+        if (code != 0) failureExit();
+        return true;
+    }
+    if (std.mem.eql(u8, first, "version") or std.mem.eql(u8, first, "--version") or std.mem.eql(u8, first, "-v")) {
+        clispec.printVersionCommand(init_args);
+        return true;
+    }
     if (std.mem.eql(u8, first, "pull")) {
         const exit_code = pull.run(allocator, init_args, g_io);
-        if (exit_code != 0) std.process.exit(exit_code);
+        if (exit_code == 2) usageExit();
+        if (exit_code != 0) failureExit();
         return true;
     }
     if (std.mem.eql(u8, first, "calibrate")) {
         const calibrate = @import("calibrate.zig");
         const exit_code = calibrate.run(allocator, init_args, g_io);
-        if (exit_code != 0) std.process.exit(exit_code);
+        if (exit_code == 2) usageExit();
+        if (exit_code != 0) failureExit();
         return true;
     }
     if (std.mem.eql(u8, first, "update")) {
         const update = @import("update.zig");
         const exit_code = update.run(allocator, init_args, g_io);
-        if (exit_code != 0) std.process.exit(exit_code);
+        if (exit_code == 2) usageExit();
+        if (exit_code != 0) failureExit();
         return true;
     }
     // Support `agave help [subcommand]` (git convention)
     if (std.mem.eql(u8, first, "help")) {
+        var args_iter = init_args.iterate();
+        clispec.skipThrough(&args_iter, "help");
         const sub = args_iter.next() orelse {
             printUsage();
             return true;
@@ -797,7 +836,7 @@ fn checkSubcommand(allocator: std.mem.Allocator) bool {
             return true;
         }
         if (std.mem.eql(u8, sub, "--version") or std.mem.eql(u8, sub, "-v")) {
-            display_mod.printVersion();
+            clispec.printVersionCommand(init_args);
             return true;
         }
         eprint("Error: no help available for '{s}'\n", .{sub});
@@ -814,7 +853,7 @@ fn checkSubcommand(allocator: std.mem.Allocator) bool {
         }
         eprint("\n", .{});
         eprint("Run 'agave --help' for more information.\n", .{});
-        std.process.exit(2);
+        usageExit();
     }
     return false;
 }
@@ -830,6 +869,10 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
     }
 
     if (res.flag("version")) {
+        if (outputSelectsJson(&res)) {
+            clispec.printVersionCommand(init_args);
+            return null;
+        }
         const decorate = blk: {
             if (res.flag("no-color")) break :blk false;
             if (res.option("color")) |cm| {
@@ -851,7 +894,7 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
     if (res.missing_value) |name| {
         eprint("Error: --{s} requires a value\n", .{name});
         eprint("Run 'agave --help' for more information.\n", .{});
-        std.process.exit(2);
+        usageExit();
     }
 
     // Reject --flag=value on boolean flags (parser stores them in options).
@@ -879,7 +922,7 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
         if (res.option("color") != null and res.flag("no-color")) {
             eprint("Error: conflicting --color and --no-color; use only one\n", .{});
             eprint("Run 'agave --help' for more information.\n", .{});
-            std.process.exit(2);
+            usageExit();
         }
         // --color=always|never|auto takes precedence
         if (res.option("color")) |cm| {
@@ -900,7 +943,7 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
     g_debug = res.flag("debug");
     g_verbose = res.flag("verbose") or g_debug;
 
-    const json_mode = res.flag("json");
+    const json_mode = outputSelectsJson(&res);
     if (json_mode) {
         g_quiet = true;
     }
@@ -920,12 +963,12 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
         break :blk std.meta.stringToEnum(BackendChoice, be_str) orelse {
             eprint("Error: unknown backend '{s}'\n", .{be_str});
             eprint("  Valid options: auto, cpu, metal, vulkan, cuda, rocm, webgpu\n", .{});
-            std.process.exit(2);
+            usageExit();
         };
     };
     const device_id: u32 = if (res.option("device")) |d| std.fmt.parseInt(u32, d, 10) catch {
         eprint("Error: invalid value for --device: '{s}' is not a valid integer\n", .{d});
-        std.process.exit(2);
+        usageExit();
     } else 0;
 
     const temperature = parseF32(res.option("temperature"), "temperature") orelse 0.0;
@@ -938,45 +981,45 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
     // Validate sampling parameter ranges
     if (temperature < 0) {
         eprint("Error: --temperature must be >= 0 (got {d:.2})\n", .{temperature});
-        std.process.exit(2);
+        usageExit();
     }
     if (top_p <= 0 or top_p > 1.0) {
         eprint("Error: --top-p must be in (0, 1.0] (got {d:.2})\n", .{top_p});
-        std.process.exit(2);
+        usageExit();
     }
     if (repeat_penalty <= 0) {
         eprint("Error: --repeat-penalty must be > 0 (got {d:.2})\n", .{repeat_penalty});
-        std.process.exit(2);
+        usageExit();
     }
     const min_p = parseF32(res.option("min-p"), "min-p") orelse 0.0;
     if (min_p < 0 or min_p > 1.0) {
         eprint("Error: --min-p must be in [0, 1.0] (got {d:.2})\n", .{min_p});
-        std.process.exit(2);
+        usageExit();
     }
     const dry_multiplier = parseF32(res.option("dry-multiplier"), "dry-multiplier") orelse 0;
     if (dry_multiplier < 0) {
         eprint("Error: --dry-multiplier must be >= 0 (got {d:.2})\n", .{dry_multiplier});
-        std.process.exit(2);
+        usageExit();
     }
     const xtc_probability = parseF32(res.option("xtc-probability"), "xtc-probability") orelse 0;
     if (xtc_probability < 0 or xtc_probability > 1.0) {
         eprint("Error: --xtc-probability must be in [0, 1.0] (got {d:.2})\n", .{xtc_probability});
-        std.process.exit(2);
+        usageExit();
     }
     const xtc_threshold = parseF32(res.option("xtc-threshold"), "xtc-threshold") orelse 0.1;
     if (xtc_threshold < 0 or xtc_threshold > 1.0) {
         eprint("Error: --xtc-threshold must be in [0, 1.0] (got {d:.2})\n", .{xtc_threshold});
-        std.process.exit(2);
+        usageExit();
     }
     const mirostat_tau = parseF32(res.option("mirostat-tau"), "mirostat-tau") orelse 5.0;
     if (mirostat_tau <= 0) {
         eprint("Error: --mirostat-tau must be > 0 (got {d:.2})\n", .{mirostat_tau});
-        std.process.exit(2);
+        usageExit();
     }
     const mirostat_eta = parseF32(res.option("mirostat-eta"), "mirostat-eta") orelse 0.1;
     if (mirostat_eta <= 0) {
         eprint("Error: --mirostat-eta must be > 0 (got {d:.2})\n", .{mirostat_eta});
-        std.process.exit(2);
+        usageExit();
     }
 
     // Validate --kv-tiers value (mutable copy needed for "off" → null conversion)
@@ -988,7 +1031,7 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
         } else if (!std.mem.eql(u8, tiers_str, "vram+ram") and !std.mem.eql(u8, tiers_str, "vram+ram+ssd")) {
             eprint("Error: unknown --kv-tiers value '{s}'\n", .{tiers_str});
             eprint("  Valid options: off, vram+ram, vram+ram+ssd\n", .{});
-            std.process.exit(2);
+            usageExit();
         }
     }
 
@@ -1015,7 +1058,7 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
         if (!std.mem.eql(u8, ev_str, "none") and !std.mem.eql(u8, ev_str, "norm") and !std.mem.eql(u8, ev_str, "tri")) {
             eprint("Error: unknown --kv-eviction value '{s}'\n", .{ev_str});
             eprint("  Valid options: none, norm, tri\n", .{});
-            std.process.exit(2);
+            usageExit();
         }
     }
 
@@ -1038,7 +1081,7 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
     if (parseU32(res.option("max-tokens"), "max-tokens")) |mt| {
         if (mt == 0) {
             eprint("Error: --max-tokens must be >= 1\n", .{});
-            std.process.exit(2);
+            usageExit();
         }
     }
 
@@ -1046,7 +1089,7 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
     if (parseU32(res.option("prefill-batch-size"), "prefill-batch-size")) |pbs| {
         if (pbs == 0) {
             eprint("Error: --prefill-batch-size must be >= 1\n", .{});
-            std.process.exit(2);
+            usageExit();
         }
     }
 
@@ -1054,7 +1097,7 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
     if (parseU32(res.option("mirostat-mode"), "mirostat-mode")) |mm| {
         if (mm != 0 and mm != 2) {
             eprint("Error: --mirostat-mode must be 0 (disabled) or 2 (Mirostat 2.0), got {d}\n", .{mm});
-            std.process.exit(2);
+            usageExit();
         }
     }
 
@@ -1062,7 +1105,7 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
     if (parseU32(res.option("dry-length"), "dry-length")) |dl| {
         if (dl == 0) {
             eprint("Error: --dry-length must be >= 1\n", .{});
-            std.process.exit(2);
+            usageExit();
         }
     }
 
@@ -1070,27 +1113,27 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
     if (parseU32(res.option("tp"), "tp")) |tp| {
         if (tp == 0) {
             eprint("Error: --tp must be >= 1\n", .{});
-            std.process.exit(2);
+            usageExit();
         }
         // Transport is a fixed rank-0 ↔ rank-1 pair (NCCL unique-id exchange,
         // shm names, tcp_fds[0]). Same cap as --pp.
         if (tp > 2) {
             eprint("Error: --tp > 2 is not supported yet (transport is a 2-rank pair only)\n", .{});
             eprint("  Use --tp 2 with --transport nccl (CUDA) or tcp/shm, or run a single rank.\n", .{});
-            std.process.exit(2);
+            usageExit();
         }
     }
     if (parseU32(res.option("pp"), "pp")) |pp| {
         if (pp == 0) {
             eprint("Error: --pp must be >= 1\n", .{});
-            std.process.exit(2);
+            usageExit();
         }
         // Transport is a fixed rank-0 ↔ rank-1 pair (shm names, tcp_fds[0],
         // sendBuf peer). Multi-stage rings are not implemented yet.
         if (pp > 2) {
             eprint("Error: --pp > 2 is not supported yet (transport is a 2-rank pair only)\n", .{});
             eprint("  Use --pp 2, or run a single stage (--pp 1).\n", .{});
-            std.process.exit(2);
+            usageExit();
         }
     }
     {
@@ -1106,7 +1149,7 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
         const world = @max(pp, tp);
         if (world > 1 and rank >= world) {
             eprint("Error: --rank {d} is out of range for world size {d} (valid: 0..{d})\n", .{ rank, world, world - 1 });
-            std.process.exit(2);
+            usageExit();
         }
     }
 
@@ -1114,13 +1157,13 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
     if (parseU32(res.option("spec-tokens"), "spec-tokens")) |st| {
         if (st == 0) {
             eprint("Error: --spec-tokens must be >= 1\n", .{});
-            std.process.exit(2);
+            usageExit();
         }
     }
     if (parseU32(res.option("tree-budget"), "tree-budget")) |tb| {
         if (tb == 0) {
             eprint("Error: --tree-budget must be >= 1\n", .{});
-            std.process.exit(2);
+            usageExit();
         }
     }
 
@@ -1134,7 +1177,7 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
         const p = parseUintLabel(u16, port_raw, port_label) orelse break :blk default_port;
         if (p == 0) {
             eprint("Error: {s} must be in range 1-65535\n", .{port_label});
-            std.process.exit(2);
+            usageExit();
         }
         break :blk p;
     };
@@ -1155,7 +1198,7 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
     if (parseU32(res.option("max-batch-size"), "max-batch-size")) |mbs| {
         if (mbs == 0) {
             eprint("Error: --max-batch-size must be >= 1\n", .{});
-            std.process.exit(2);
+            usageExit();
         }
     }
 
@@ -1163,7 +1206,7 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
     if (parseF32(res.option("video-fps"), "video-fps")) |v| {
         if (v <= 0) {
             eprint("Error: --video-fps must be > 0 (got {d:.2})\n", .{v});
-            std.process.exit(2);
+            usageExit();
         }
     }
 
@@ -1173,7 +1216,7 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
         eprint("Error: missing model path\n", .{});
         eprint("Usage: agave <model.gguf|model-dir/> [prompt]\n", .{});
         eprint("Run 'agave --help' for more information.\n", .{});
-        std.process.exit(2);
+        usageExit();
     }
 
     // Warn about extra positional arguments (e.g. unquoted multi-word prompt)
@@ -1352,7 +1395,7 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
     )) {
         if ((stdin_file.isTty(g_io) catch false)) {
             eprintJsonRequiresPrompt();
-            std.process.exit(2);
+            usageExit();
         }
     }
 
@@ -1367,7 +1410,7 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
         if (!peer_link.parseIpv4(host_str, &parts)) {
             const host_label: []const u8 = if (res.option("host") != null) "--host" else "AGAVE_HOST";
             eprint("Error: invalid host address '{s}' from {s} (expected IPv4, 'localhost', '0.0.0.0', or '0')\n", .{ host_str, host_label });
-            std.process.exit(2);
+            usageExit();
         }
         break :blk parts;
     };
@@ -1383,14 +1426,14 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
             const host_str = res.option("host") orelse config.nonemptyEnv(g_environ.get("AGAVE_HOST")) orelse "127.0.0.1";
             eprint("Error: --host {s} requires --api-key (or AGAVE_API_KEY) for non-loopback binds\n", .{host_str});
             eprint("  Use --host 127.0.0.1 for local-only access without auth.\n", .{});
-            std.process.exit(2);
+            usageExit();
         }
         // Empty/whitespace --api-key would satisfy "key present" checks while accepting any empty header.
         if (key) |k| {
             const trimmed = std.mem.trim(u8, k, " \t\r\n");
             if (trimmed.len == 0) {
                 eprint("Error: --api-key (or AGAVE_API_KEY) must be non-empty\n", .{});
-                std.process.exit(2);
+                usageExit();
             }
             break :blk trimmed;
         }
@@ -1430,7 +1473,7 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
             if (std.mem.eql(u8, raw, "auto")) break :blk std.math.maxInt(u32);
             break :blk std.fmt.parseInt(u32, raw, 10) catch {
                 eprint("Error: --ctx-size must be a non-negative integer or 'auto', got '{s}'\n", .{raw});
-                std.process.exit(2);
+                usageExit();
             };
         },
         .no_kv_cache = res.flag("no-kv-cache"),
@@ -1480,11 +1523,11 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
             const choice = std.meta.stringToEnum(TransportChoice, t) orelse {
                 eprint("Error: unknown transport '{s}'\n", .{t});
                 eprint("  Valid options: auto, tcp, shm, nccl\n", .{});
-                std.process.exit(2);
+                usageExit();
             };
             if (choice == .rdma or choice == .udp or choice == .grpc) {
                 eprint("Error: transport '{s}' is not implemented (use auto, tcp, shm, or nccl)\n", .{t});
-                std.process.exit(2);
+                usageExit();
             }
             break :blk choice;
         } else .auto,
@@ -1535,7 +1578,7 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
                 if (std.mem.eql(u8, s, "dflash")) break :blk SpecMode.dflash2;
                 if (std.mem.eql(u8, s, "auto")) break :blk if (dm != null) SpecMode.ddtree else SpecMode.ngram;
                 eprint("Error: unknown --spec-mode '{s}' (expected: auto, standard, ddtree, self, ngram, suffix, lookahead, mtp, medusa, eagle, eagle3, mlp, pflash, dspark, dflash2, dflash)\n", .{s});
-                std.process.exit(2);
+                usageExit();
             }
             break :blk if (dm != null) SpecMode.ddtree else SpecMode.none;
         },
@@ -1545,7 +1588,7 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
             const v = parseU32(res.option("pflash-block-size"), "pflash-block-size") orelse 64;
             if (v == 0) {
                 eprint("Error: --pflash-block-size must be >= 1\n", .{});
-                std.process.exit(2);
+                usageExit();
             }
             break :blk v;
         },
@@ -1566,18 +1609,18 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
             if (std.mem.eql(u8, raw, "mru")) break :blk .mru;
             if (std.mem.eql(u8, raw, "lru")) break :blk .lru;
             eprint("Error: --vram-budget-policy must be 'mru' or 'lru', got '{s}'\n", .{raw});
-            std.process.exit(2);
+            usageExit();
         },
         .vram_budget_bytes = blk: {
             const raw = res.option("vram-budget") orelse break :blk 0;
             if (std.mem.eql(u8, raw, "auto")) break :blk 0;
             const gib = std.fmt.parseFloat(f64, raw) catch {
                 eprint("Error: --vram-budget must be a number of GiB, got '{s}'\n", .{raw});
-                std.process.exit(2);
+                usageExit();
             };
             if (!(gib >= 0) or gib > 1024) { // NaN fails the >= test
                 eprint("Error: --vram-budget must be between 0 and 1024 GiB, got '{s}'\n", .{raw});
-                std.process.exit(2);
+                usageExit();
             }
             // Floor before the int cast: `@intFromFloat` is only defined for an
             // integral value, and gib * 2^30 is fractional for almost every
@@ -1599,7 +1642,7 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
             const v = parseU32(res.option("power"), "power") orelse 100;
             if (v == 0 or v > 100) {
                 eprint("Error: --power must be 1-100 (got {d})\n", .{v});
-                std.process.exit(2);
+                usageExit();
             }
             break :blk v;
         },
@@ -1619,7 +1662,7 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
         if (p == .draft) {
             eprint("Error: --spec-mode {s} waiting for {s}\n", .{ @tagName(parsed_cli.spec_mode), spec_caps.providerName(p) });
             eprint("  {s}\n", .{spec_caps.howToProvide(p)});
-            std.process.exit(2);
+            usageExit();
         }
     }
     return parsed_cli;
@@ -1664,7 +1707,7 @@ fn parseUintLabel(comptime T: type, s: ?[]const u8, label: []const u8) ?T {
     return std.fmt.parseInt(T, str, 10) catch {
         eprint("Error: invalid value for {s}: '{s}' is not a valid integer\n", .{ label, str });
         eprint("Run 'agave --help' for more information.\n", .{});
-        std.process.exit(2);
+        usageExit();
     };
 }
 
@@ -1718,12 +1761,12 @@ fn applySimClockOverride(raw: ?[]const u8) void {
     const ms = std.fmt.parseInt(i64, str, 10) catch {
         eprint("Error: invalid value for --sim-clock-ms: '{s}' is not an integer number of milliseconds since epoch\n", .{str});
         eprint("Run 'agave --help' for more information.\n", .{});
-        std.process.exit(2);
+        usageExit();
     };
     if (ms < 0) {
         eprint("Error: --sim-clock-ms must not be negative (got {d})\n", .{ms});
         eprint("Run 'agave --help' for more information.\n", .{});
-        std.process.exit(2);
+        usageExit();
     }
     sim_clock.setOverrideMs(ms);
     std.log.info("sim clock: virtual time pinned at {d} ms since epoch", .{ms});
@@ -1786,7 +1829,7 @@ fn rejectEqualsOnFlag(res: *const cli_mod.ParseResult) void {
             eprint("Error: --{s} does not take a value (got '--{s}={s}')\n", .{ spec.long, spec.long, val });
             eprint("  Use --{s} alone, without '=...'\n", .{spec.long});
             eprint("Run 'agave --help' for more information.\n", .{});
-            std.process.exit(2);
+            usageExit();
         }
     }
 }
@@ -1817,7 +1860,7 @@ fn rejectUnknownOptions(res: *const cli_mod.ParseResult) void {
     }
     if (found) {
         eprint("Run 'agave --help' for more information.\n", .{});
-        std.process.exit(2);
+        usageExit();
     }
 }
 
@@ -1831,12 +1874,12 @@ fn rejectFlagAsValue(res: *const cli_mod.ParseResult) void {
         if (val.len > 2 and val[0] == '-' and val[1] == '-' and isKnownSpec(val[2..])) {
             eprint("Error: --{s} has value '{s}' which looks like a flag (missing value for --{s}?)\n", .{ entry.key_ptr.*, val, entry.key_ptr.* });
             eprint("Run 'agave --help' for more information.\n", .{});
-            std.process.exit(2);
+            usageExit();
         } else if (val.len == 2 and val[0] == '-' and val[1] != '-') {
             if (isKnownShort(val[1])) {
                 eprint("Error: --{s} has value '{s}' which looks like a flag (missing value for --{s}?)\n", .{ entry.key_ptr.*, val, entry.key_ptr.* });
                 eprint("Run 'agave --help' for more information.\n", .{});
-                std.process.exit(2);
+                usageExit();
             }
         }
     }
@@ -1861,7 +1904,7 @@ fn rejectUnknownShortPositionals(res: *const cli_mod.ParseResult) void {
             var buf: [short_list_buf_size]u8 = undefined;
             eprint("  Valid short options: {s}\n", .{shortOptionList(&buf)});
             eprint("Run 'agave --help' for more information.\n", .{});
-            std.process.exit(2);
+            usageExit();
         }
     }
 }
@@ -1898,12 +1941,12 @@ fn parseF32(s: ?[]const u8, comptime flag: []const u8) ?f32 {
     const val = std.fmt.parseFloat(f32, str) catch {
         eprint("Error: invalid value for --" ++ flag ++ ": '{s}' is not a valid number\n", .{str});
         eprint("Run 'agave --help' for more information.\n", .{});
-        std.process.exit(2);
+        usageExit();
     };
     if (!std.math.isFinite(val)) {
         eprint("Error: --" ++ flag ++ " must be a finite number, got '{s}'\n", .{str});
         eprint("Run 'agave --help' for more information.\n", .{});
-        std.process.exit(2);
+        usageExit();
     }
     return val;
 }
@@ -1917,7 +1960,7 @@ fn floatOrExit(s: ?[]const u8, comptime flag: []const u8, default: f32, lo: f32,
     if (!inFloatRange(val, lo, hi)) {
         eprint("Error: --" ++ flag ++ " must be in [{d:.1}, {d:.1}] (got {d:.2})\n", .{ lo, hi, val });
         eprint("Run 'agave --help' for more information.\n", .{});
-        std.process.exit(2);
+        usageExit();
     }
     return val;
 }
@@ -1933,7 +1976,7 @@ fn countOrExit(s: ?[]const u8, comptime flag: []const u8, default: u32) u32 {
     if (val == 0) {
         eprint("Error: --" ++ flag ++ " must be >= 1\n", .{});
         eprint("Run 'agave --help' for more information.\n", .{});
-        std.process.exit(2);
+        usageExit();
     }
     return val;
 }
@@ -1942,7 +1985,7 @@ fn countOrExit(s: ?[]const u8, comptime flag: []const u8, default: u32) u32 {
 fn validateFileExists(path: []const u8, comptime flag: []const u8) void {
     const file = Io.Dir.cwd().openFile(g_io, path, .{}) catch {
         eprint("Error: " ++ flag ++ " file not found: '{s}'\n", .{path});
-        std.process.exit(2);
+        usageExit();
     };
     file.close(g_io);
 }
@@ -2281,7 +2324,10 @@ const usage_text =
     \\DIAGNOSTICS:
     \\  -V, --verbose          Show technical details (params, load times, EOG)
     \\  -d, --debug            Enable debug logging (token IDs, layer timing); implies --verbose
-    \\      --json             Output results as JSON (implies --quiet)
+    \\      --json             Output results as JSON (implies --quiet). Same as --output json
+    \\  -o, --output <FMT>     Output format: auto, text, or json [default: auto].
+    \\                         auto stays text on a pipe. Place it before the command.
+    \\                         agave calibrate --output is still the .cal path
     \\      --model-info       Print model metadata and exit (supports --json)
     \\      --profile          Profile per-op timing (halves throughput)
     \\      --benchmark        Run decode benchmark: prefill + decode, print stats (supports --json)
@@ -2337,6 +2383,9 @@ const usage_text =
     \\  agave pull <org/repo> --list             List available model files
     \\  agave calibrate <model.gguf|model-dir/>   Generate TriAttention calibration data
     \\  agave update [--check]                   Replace this binary with the latest release
+    \\  agave schema [command]                   Print the CLI spec document (no model)
+    \\  agave version                            Print the version (JSON with -o json)
+    \\  agave -- schema                          Run a model file named schema
     \\  agave help <topic>                       Show help for a subcommand (e.g. pull, calibrate, update)
     \\
     \\SUPPORTED ARCHITECTURES:
@@ -2434,7 +2483,7 @@ pub fn main(init: std.process.Init) !void {
                 eprint("  Directory does not exist or is not a valid SafeTensors directory.\n", .{})
             else if (e == error.OutOfMemory)
                 eprint("  Not enough memory to load model metadata.\n", .{});
-            std.process.exit(1);
+            failureExit();
         };
         fmt = st_dir.?.format();
         if (cli.lora_path != null) eprint("Warning: --lora is only supported for GGUF models; ignored for SafeTensors\n", .{});
@@ -2463,13 +2512,13 @@ pub fn main(init: std.process.Init) !void {
                 eprint("  GGUF version not supported. Agave supports v2 and v3.\n", .{})
             else if (e == error.FileTooSmall)
                 eprint("  File is too small to be a valid GGUF model.\n", .{});
-            std.process.exit(1);
+            failureExit();
         };
         // Apply LoRA adapter (load-time merge into base weights as F32).
         if (cli.lora_path) |lp| {
             lora_handle = lora_mod.applyLoraGguf(allocator, &gguf_file.?, lp) catch |e| {
                 eprint("Error: failed to apply LoRA '{s}': {}\n", .{ lp, e });
-                std.process.exit(1);
+                failureExit();
             };
             eprint("lora: merged adapter '{s}' ({d} tensors overridden)\n", .{ lp, gguf_file.?.lora_overrides.count() });
         }
@@ -2486,13 +2535,13 @@ pub fn main(init: std.process.Init) !void {
     const arch = Arch.detect(arch_str) orelse {
         eprint("Error: unsupported architecture '{s}'\n", .{arch_str});
         eprint("  Supported: {s}\n", .{supported_arch_help});
-        std.process.exit(1);
+        failureExit();
     };
 
     if (!arch.isEnabled()) {
         eprint("Error: {s} model support disabled at compile time\n", .{arch.displayName()});
         eprint("  Rebuild with -Denable-{s}=true to enable.\n", .{arch.buildFlag()});
-        std.process.exit(1);
+        failureExit();
     }
 
     // qwen4exp PLE table is tens of GB: never fault it in at load.
@@ -2756,11 +2805,11 @@ pub fn main(init: std.process.Init) !void {
         switch (tok_kind) {
             .spm, .spm_no_dummy => tok.loadFromGGUFSpm(v, eos_id) catch |e| {
                 eprint("Error: failed to load {s} tokenizer: {}\n", .{ @tagName(tok_kind), e });
-                std.process.exit(1);
+                failureExit();
             },
             .bpe => tok.loadFromGGUF(v, merges.?, eos_id) catch |e| {
                 eprint("Error: failed to load {s} tokenizer: {}\n", .{ @tagName(tok_kind), e });
-                std.process.exit(1);
+                failureExit();
             },
         }
         tok.bos_token_id = bos_id;
@@ -2778,7 +2827,7 @@ pub fn main(init: std.process.Init) !void {
         }
     } else {
         eprint("Error: no embedded tokenizer found (expected vocab in GGUF or tokenizer.json)\n", .{});
-        std.process.exit(1);
+        failureExit();
     }
 
     if (!g_quiet and !cli.json and !cli.model_info) {
@@ -2813,13 +2862,13 @@ pub fn main(init: std.process.Init) !void {
         const stdin_tty = stdin_file.isTty(g_io) catch false;
         if (cli.json) {
             eprintJsonRequiresPrompt();
-            std.process.exit(2);
+            usageExit();
         }
         if (!stdin_tty) {
             eprint("Error: missing prompt (stdin is not a TTY)\n", .{});
             eprint("Usage: agave <model.gguf|model-dir/> [prompt]\n", .{});
             eprint("Run 'agave --help' for more information.\n", .{});
-            std.process.exit(2);
+            usageExit();
         }
     }
 
@@ -2846,7 +2895,7 @@ pub fn main(init: std.process.Init) !void {
     };
 
     if (!initAndRun(arch, allocator, fmt, be, &tok, &cli, tok_kind, eog, effective_prompt, disp_info, display, if (bs.pool) |*p| p else null, load_info))
-        std.process.exit(1);
+        failureExit();
 }
 
 /// Load a PNG or PPM P6 image and resize to target_size x target_size.
@@ -3240,7 +3289,7 @@ fn initAndRun(
                 else => {
                     eprint("Error: cannot read {s}: {s}\n", .{ cp, @errorName(err) });
                     eprint("  Regenerate it with: agave calibrate {s}\n", .{cli.model_path});
-                    std.process.exit(2);
+                    usageExit();
                 },
             }
         }
@@ -5629,6 +5678,7 @@ test {
     // Zig 0.16 uses lazy test discovery, files imported at the top level
     // but not referenced by any test block are silently excluded.
     _ = @import("cli.zig");
+    _ = @import("clispec.zig");
     _ = @import("display.zig");
     _ = @import("ops/split_attention.zig");
     _ = @import("ops/sparse_attn.zig");

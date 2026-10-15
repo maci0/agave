@@ -44,7 +44,7 @@ zig build ptx [-Dcuda-sm=sm_120] # CUDA kernels to zig-out/ptx/*.ptx (see Build:
 zig build amdgcn -Drocm-arch=gfx1100  # ROCm kernels to zig-out/rocm/kernels.hsaco (see Build). Both sm/arch defaults must match the committed artifacts or CI's PTX freshness job fails.
 ```
 
-Every flag, including `--spec-mode`: `agave --help`, or the `cli_specs` table in `src/main.zig`.
+Every flag, including `--spec-mode`: `agave --help`, or the `cli_specs` table in `src/main.zig`. `agave schema` prints the CLI Spec 0.3 document and loads no model. `-o` / `--output` is `auto`, `text`, or `json` and goes before the command; `auto` stays text on a pipe. `--json` is `--output json`. `agave calibrate --output` is still the `.cal` path.
 
 After backend or model interface changes run `zig build`, not only `zig build test`.
 

@@ -20,6 +20,7 @@ const durable = @import("durable_file.zig");
 const sim_clock = @import("sim_clock.zig");
 const config = @import("config.zig");
 const version = display_mod.version;
+const clispec = @import("clispec.zig");
 
 // ── Named constants ──────────────────────────────────────────────────────────
 
@@ -1830,8 +1831,7 @@ fn writeRefsMain(pa: Allocator, refs_dir: []const u8, commit_sha: []const u8) vo
 pub fn run(allocator: Allocator, process_args: std.process.Args, io: Io) u8 {
     mod_io = io;
     var args_iter = process_args.iterate();
-    _ = args_iter.skip(); // Skip program name (argv[0]).
-    _ = args_iter.skip(); // Skip "pull" subcommand (already verified by main.zig).
+    clispec.skipThrough(&args_iter, "pull");
 
     // Both parse-time failures are usage errors: the message is already on
     // stderr, and scripts distinguish a bad invocation from a failed download.

@@ -15,6 +15,7 @@ const backend_mod = @import("backend/backend.zig");
 const format_mod = @import("format/format.zig");
 const model_mod = @import("models/model.zig");
 const display_mod = @import("display.zig");
+const clispec = @import("clispec.zig");
 const kv_evict = @import("ops/kv_evict.zig");
 const durable = @import("durable_file.zig");
 
@@ -632,8 +633,7 @@ pub fn readCalFile(allocator: Allocator, io: Io, path: []const u8) ![]kv_evict.T
 pub fn run(allocator: Allocator, process_args: std.process.Args, io: Io) u8 {
     mod_io = io;
     var args_iter = process_args.iterate();
-    _ = args_iter.skip(); // Skip program name (argv[0]).
-    _ = args_iter.skip(); // Skip "calibrate" subcommand.
+    clispec.skipThrough(&args_iter, "calibrate");
 
     const maybe_args = parseArgs(&args_iter);
     var args = maybe_args orelse return 0; // --help or --version shown

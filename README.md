@@ -121,6 +121,10 @@ zig build
 # Update to latest GitHub release
 ./zig-out/bin/agave update
 
+# CLI spec (no model) and version as JSON
+./zig-out/bin/agave schema
+./zig-out/bin/agave -o json version
+
 # Vision: describe an image (requires mmproj or built-in vision encoder)
 ./zig-out/bin/agave model.gguf --image photo.png "Describe this image"
 
@@ -463,7 +467,8 @@ agave [OPTIONS] <model> [prompt]
   -V, --verbose            Show technical details (params, load times, EOG)
       --allow-cpu-fallback Not implemented; GPU backends fail closed (flag only warns)
   -d, --debug              Enable debug logging (token IDs, layer timing); implies --verbose
-      --json               Output results as JSON (implies --quiet)
+      --json               Output results as JSON (implies --quiet). Same as --output json
+  -o, --output <FMT>       Output format: auto, text, or json [default: auto]. auto stays text on a pipe
       --model-info         Print model metadata and exit (combine with --json)
       --profile            Profile per-op timing (halves throughput)
       --benchmark          Run decode benchmark with built-in prompt
@@ -689,7 +694,7 @@ zig build -Dtarget=aarch64-linux-musl \
 - **[Kernel Status](docs/KERNELS.md)**: Per-backend kernel implementation status
 - **[Distributed Inference](docs/PARALLELISM.md)**: TP, PP, disaggregated prefill/decode
 - **[Contributing](docs/CONTRIBUTING.md)**: How to add backends, models, quantization; [versioning & releases](docs/CONTRIBUTING.md#versioning--releases)
-- **[Changelog](CHANGELOG.md)**: User-facing history (product version `0.12.0`, 0.x SemVer)
+- **[Changelog](CHANGELOG.md)**: User-facing history (product version `0.13.0`, 0.x SemVer)
 - **[API Reference](docs/API.md)**: HTTP API endpoints, request/response formats
 - **[Observability](docs/OBSERVABILITY.md)**: `--serve` Prometheus metrics, health endpoints, request log correlation
 - **[Durability and recovery](docs/DURABILITY.md)**: On-disk state, RPO/RTO, conversation-store backup and restore
