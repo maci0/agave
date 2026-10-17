@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 # Pin to a dated Debian tag for reproducible builds (bump with dependabot/docker).
-FROM --platform=$BUILDPLATFORM debian:bookworm-20260918-slim AS build
+FROM --platform=$BUILDPLATFORM debian:bookworm-20261005-slim AS build
 
 # Empty default: install the version pinned in .zigversion (single source of truth).
 # Override with --build-arg ZIG_VERSION=x.y.z and matching ZIG_SHA256_* args.
@@ -159,7 +159,7 @@ RUN --mount=type=cache,target=/src/.zig-cache \
 # Musl static binaries also run fine on Debian.
 # No --platform needed: under BuildKit each stage defaults to its own
 # TARGETPLATFORM, regardless of the build stage's BUILDPLATFORM pin above.
-FROM debian:bookworm-20260918-slim
+FROM debian:bookworm-20261005-slim
 
 # Keep in sync with the build stage (same FROM day / snapshot).
 ARG DEBIAN_SNAPSHOT=20260918T000000Z
