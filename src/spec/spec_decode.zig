@@ -586,6 +586,62 @@ pub const Penalties = struct {
     }
 };
 
+/// The mask chain the non-speculative sampler applies to the target's logits.
+///
+/// Verification has to accept a draft token against the distribution the
+/// sampler would have drawn from, so these travel with the round. Dropping
+/// them leaves `--top-k`, `--top-p`, `--min-p` and `--xtc-*` doing nothing
+/// whenever `--spec-mode` is on.
+pub const Sampling = struct {
+    temperature: f32 = 0,
+    top_k: u32 = 0,
+    top_p: f32 = 1.0,
+    min_p: f32 = 0,
+    xtc_probability: f32 = 0,
+    xtc_threshold: f32 = 0.1,
+};
+
+/// Normalized target distribution for one verify step, in `state.sampling_buf`.
+/// Order matches the non-speculative path: penalties, min-p, XTC, then
+/// temperature with top-k and top-p.
+fn targetProbs(state: *SpecState, target_model: *Model, pen: Penalties, samp: Sampling, rng: std.Random) []f32 {
+    const vs = state.vocab_size;
+    const logits = applyPenalties(target_model, pen);
+    const tp = state.sampling_buf[0..vs];
+    @memcpy(tp, logits[0..vs]);
+    if (samp.min_p > 0) math_ops.applyMinP(tp, samp.min_p);
+    if (samp.xtc_probability > 0) math_ops.applyXtc(tp, samp.xtc_probability, samp.xtc_threshold, rng);
+
+    if (samp.temperature == 0) {
+        const best = math_ops.argmax(tp);
+        @memset(tp, 0);
+        tp[best] = 1.0;
+        return tp;
+    }
+
+    const dist = math_ops.truncatedDist(tp, samp.temperature, samp.top_k, samp.top_p);
+    if (dist.sum > 0 and std.math.isFinite(dist.sum)) {
+        const inv = 1.0 / dist.sum;
+        for (tp) |*p| p.* *= inv;
+    } else {
+        // Filtering left nothing. Collapse onto the token `sampleToken` would
+        // have returned, so accept/reject still sees a real distribution.
+        @memset(tp, 0);
+        tp[dist.fallback] = 1.0;
+    }
+    return tp;
+}
+
+/// Draw one token from the target with the full mask chain, for the bonus
+/// token after a fully accepted round. Mutates the model's logits buffer, the
+/// same way the non-speculative path does.
+fn sampleTarget(target_model: *Model, pen: Penalties, samp: Sampling, rng: std.Random) u32 {
+    const logits = applyPenalties(target_model, pen);
+    if (samp.min_p > 0) math_ops.applyMinP(logits, samp.min_p);
+    if (samp.xtc_probability > 0) math_ops.applyXtc(logits, samp.xtc_probability, samp.xtc_threshold, rng);
+    return math_ops.sampleToken(logits, samp.temperature, samp.top_k, samp.top_p, rng);
+}
+
 /// Mask the freshly computed target logits, then argmax. Falls back to the
 /// forward return value when no mask is configured, so the default path is
 /// unchanged and allocation free.
@@ -657,7 +713,7 @@ pub fn verifySampling(
     draft_model: *Model,
     last_accepted_token: u32,
     pre_draft_pos: usize,
-    temperature: f32,
+    samp: Sampling,
     pen: Penalties,
     rng: std.Random,
 ) SpecResult {
@@ -678,10 +734,8 @@ pub fn verifySampling(
 
         // p is the target distribution we sample from, so the masks belong on it.
         // q stays unpenalized: it is only a proposal.
-        const target_logits = applyPenalties(target_model, pen);
         const draft_lp = state.draft_log_probs[i * vs ..][0..vs];
-        const tp = state.sampling_buf[0..vs];
-        softmaxWithTemp(target_logits, tp, temperature);
+        const tp = targetProbs(state, target_model, pen, samp, rng);
 
         const draft_tok = state.draft_tokens[i];
         const q_tok = @exp(draft_lp[draft_tok]);
@@ -703,7 +757,7 @@ pub fn verifySampling(
         std.log.warn("spec sampling: bonus forward failed: {s}", .{@errorName(err)});
         return finishRound(state, target_model, draft_model, accepted, pre_draft_pos, last_draft);
     };
-    const bonus = math_ops.sampleToken(applyPenalties(target_model, pen), temperature, 0, 1.0, rng);
+    const bonus = sampleTarget(target_model, pen, samp, rng);
     return finishRound(state, target_model, draft_model, accepted, pre_draft_pos, bonus);
 }
 
@@ -900,56 +954,29 @@ fn finishRound(state: *SpecState, target_model: *Model, draft_model: *Model, acc
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-fn softmaxWithTemp(logits: []const f32, out: []f32, temperature: f32) void {
-    if (logits.len == 0) return;
-    const V8 = @Vector(8, f32);
-    const n = logits.len;
-    const safe_temp = if (temperature > 0) temperature else 1.0;
-    const inv_t = 1.0 / safe_temp;
-
-    const inv_tv: V8 = @splat(inv_t);
-    var max_v: V8 = @splat(-std.math.inf(f32));
-    var i: usize = 0;
-    while (i + 8 <= n) : (i += 8) {
-        max_v = @max(max_v, @as(V8, logits[i..][0..8].*) * inv_tv);
-    }
-    var max_val = @reduce(.Max, max_v);
-    while (i < n) : (i += 1) max_val = @max(max_val, logits[i] * inv_t);
-
-    const mv: V8 = @splat(max_val);
-    var sum_v: V8 = @splat(@as(f32, 0.0));
-    i = 0;
-    while (i + 8 <= n) : (i += 8) {
-        const exp_v = @exp(@as(V8, logits[i..][0..8].*) * inv_tv - mv);
-        out[i..][0..8].* = exp_v;
-        sum_v += exp_v;
-    }
-    var sum = @reduce(.Add, sum_v);
-    while (i < n) : (i += 1) {
-        out[i] = @exp(logits[i] * inv_t - max_val);
-        sum += out[i];
-    }
-
-    if (sum > 0) {
-        const inv_sum = 1.0 / sum;
-        const isv: V8 = @splat(inv_sum);
-        i = 0;
-        while (i + 8 <= n) : (i += 8) {
-            out[i..][0..8].* = @as(V8, out[i..][0..8].*) * isv;
-        }
-        while (i < n) : (i += 1) out[i] *= inv_sum;
-    }
-}
-
 /// Sample from norm(max(0, p_target - p_draft)).
 fn sampleResidual(target_probs: []const f32, draft_log_probs: []const f32, vs: u32, rng: std.Random, buf: []f32) u32 {
     const V8 = @Vector(8, f32);
     const zero: V8 = @splat(@as(f32, 0.0));
     const n: usize = vs;
     var sum_v: V8 = zero;
+    // `buf` aliases `target_probs` in every caller, so the most likely target
+    // token is tracked as the residual is written. Reading it back afterwards
+    // would argmax the residual instead.
+    var best: u32 = 0;
+    var best_p: f32 = -1.0;
     var i: usize = 0;
     while (i + 8 <= n) : (i += 8) {
         const p: V8 = target_probs[i..][0..8].*;
+        const chunk_max = @reduce(.Max, p);
+        if (chunk_max > best_p) {
+            for (0..8) |j| {
+                if (target_probs[i + j] > best_p) {
+                    best_p = target_probs[i + j];
+                    best = @intCast(i + j);
+                }
+            }
+        }
         const q = @exp(@as(V8, draft_log_probs[i..][0..8].*));
         const diff = @max(zero, p - q);
         buf[i..][0..8].* = diff;
@@ -957,11 +984,15 @@ fn sampleResidual(target_probs: []const f32, draft_log_probs: []const f32, vs: u
     }
     var sum = @reduce(.Add, sum_v);
     while (i < n) : (i += 1) {
+        if (target_probs[i] > best_p) {
+            best_p = target_probs[i];
+            best = @intCast(i);
+        }
         const diff = @max(0.0, target_probs[i] - @exp(draft_log_probs[i]));
         buf[i] = diff;
         sum += diff;
     }
-    if (sum <= 0) return math_ops.argmax(target_probs);
+    if (sum <= 0) return best;
     var r = rng.float(f32) * sum;
     for (0..n) |j| {
         r -= buf[j];
@@ -1124,6 +1155,41 @@ test "verify leaves attention-only models untouched by the rewind" {
     try std.testing.expectApproxEqAbs(@as(f32, 6.0), mock.ssm_state, 1e-6);
 }
 
+test "target distribution carries the sampler truncation" {
+    // Without this, `--spec-mode` silently dropped --top-k/--top-p/--min-p:
+    // verification compared the draft against an untruncated softmax, so
+    // tokens the sampler had filtered out could still be accepted.
+    const model_mod = @import("../models/model.zig");
+    var mock = RecurrentMock{};
+    var logits = [_]f32{ 0.0, 1.0, 2.0, 8.0, 0.0, 0.0, 0.0, 0.0 };
+    mock.logits_buf = &logits;
+    var model = model_mod.Model.from(RecurrentMock, &mock);
+
+    var s = try SpecState.init(std.testing.allocator, 4, mock.vocab_size);
+    defer s.deinit(std.testing.allocator);
+    var prng = std.Random.DefaultPrng.init(1);
+
+    // top_k = 1 leaves only the argmax with any mass.
+    const one = targetProbs(&s, &model, .{}, .{ .temperature = 1.0, .top_k = 1 }, prng.random());
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0), one[3], 1e-5);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.0), one[2], 1e-5);
+
+    // Untruncated: every token keeps mass and the vector sums to one.
+    @memcpy(&logits, &[_]f32{ 0.0, 1.0, 2.0, 8.0, 0.0, 0.0, 0.0, 0.0 });
+    const all = targetProbs(&s, &model, .{}, .{ .temperature = 1.0 }, prng.random());
+    var sum: f32 = 0;
+    for (all) |p| {
+        try std.testing.expect(p > 0);
+        sum += p;
+    }
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0), sum, 1e-5);
+
+    // temperature 0 is greedy: one-hot on the argmax.
+    @memcpy(&logits, &[_]f32{ 0.0, 1.0, 2.0, 8.0, 0.0, 0.0, 0.0, 0.0 });
+    const greedy = targetProbs(&s, &model, .{}, .{ .temperature = 0 }, prng.random());
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0), greedy[3], 1e-5);
+}
+
 test "SpecState init and stats" {
     var s = try SpecState.init(std.testing.allocator, 5, 100);
     defer s.deinit(std.testing.allocator);
@@ -1211,24 +1277,6 @@ test "logSoftmax produces valid log-probabilities" {
     try std.testing.expectApproxEqAbs(3.0 - log_sum_exp, logits[2], 1e-5);
 }
 
-test "softmaxWithTemp concentrates on max at low temperature" {
-    const logits = [_]f32{ 1.0, 2.0, 5.0 };
-    var out: [3]f32 = undefined;
-
-    softmaxWithTemp(&logits, &out, 0.1);
-
-    // At very low temperature, nearly all mass on the maximum (index 2)
-    try std.testing.expect(out[2] > 0.99);
-    // Max logit must produce highest probability; others must be ordered
-    try std.testing.expect(out[2] > out[1]);
-    try std.testing.expect(out[1] > out[0]);
-
-    // Sum should be 1.0
-    var sum: f32 = 0;
-    for (out) |v| sum += v;
-    try std.testing.expectApproxEqAbs(@as(f32, 1.0), sum, 1e-5);
-}
-
 test "SpecState recordRound with adaptive K profiling" {
     var s = try SpecState.init(std.testing.allocator, 5, 100);
     defer s.deinit(std.testing.allocator);
@@ -1296,49 +1344,6 @@ test "logSoftmax empty is no-op" {
     logSoftmax(&empty);
     // Empty input must remain empty (early return before SIMD reductions).
     try std.testing.expectEqual(@as(usize, 0), empty.len);
-}
-
-test "softmaxWithTemp temperature=1 is standard softmax" {
-    const logits = [_]f32{ 1.0, 2.0, 3.0 };
-    var out: [3]f32 = undefined;
-
-    softmaxWithTemp(&logits, &out, 1.0);
-
-    // Standard softmax
-    var sum: f32 = 0;
-    for (out) |v| sum += v;
-    try std.testing.expectApproxEqAbs(@as(f32, 1.0), sum, 1e-5);
-
-    // p(3) > p(2) > p(1)
-    try std.testing.expect(out[2] > out[1]);
-    try std.testing.expect(out[1] > out[0]);
-}
-
-test "softmaxWithTemp zero temperature uses temp=1 fallback" {
-    const logits = [_]f32{ 1.0, 2.0, 3.0 };
-    var out: [3]f32 = undefined;
-
-    // Zero temperature should fallback to 1.0 (safe_temp guard)
-    softmaxWithTemp(&logits, &out, 0.0);
-
-    var sum: f32 = 0;
-    for (out) |v| sum += v;
-    try std.testing.expectApproxEqAbs(@as(f32, 1.0), sum, 1e-5);
-}
-
-test "softmaxWithTemp SIMD path with >8 elements" {
-    var logits: [16]f32 = undefined;
-    var out: [16]f32 = undefined;
-    for (0..16) |i| logits[i] = @as(f32, @floatFromInt(i)) * 0.5;
-
-    softmaxWithTemp(&logits, &out, 0.5);
-
-    var sum: f32 = 0;
-    for (out) |v| {
-        try std.testing.expect(v >= 0);
-        sum += v;
-    }
-    try std.testing.expectApproxEqAbs(@as(f32, 1.0), sum, 1e-4);
 }
 
 test "sampleResidual all mass on draft returns target argmax fallback" {
@@ -1429,28 +1434,26 @@ test "fuzz: all spec_decode functions" {
             }
             try std.testing.expectApproxEqAbs(@as(f32, 1.0), sum_exp, 1e-3);
 
-            // -- softmaxWithTemp --
-            var inp: [vocab_size]f32 = undefined;
-            for (0..vocab_size) |i| {
-                const raw = smith.valueWithHash(i16, @intCast(i + 200));
-                inp[i] = @as(f32, @floatFromInt(raw)) * 0.01;
-            }
-            var out: [vocab_size]f32 = undefined;
-            const temp_raw = smith.valueWithHash(u8, 50);
-            const temp: f32 = @as(f32, @floatFromInt(temp_raw)) * 0.02 + 0.01;
-            softmaxWithTemp(&inp, &out, temp);
-            var prob_sum: f32 = 0;
-            for (out) |v| {
-                try std.testing.expect(v >= 0);
-                prob_sum += v;
-            }
-            try std.testing.expectApproxEqAbs(@as(f32, 1.0), prob_sum, 1e-3);
-
             // -- sampleResidual --
             var target_probs: [vocab_size]f32 = undefined;
             var draft_lp: [vocab_size]f32 = undefined;
             var sample_buf: [vocab_size]f32 = undefined;
-            softmaxWithTemp(&inp, &target_probs, 1.0);
+            const temp_raw = smith.valueWithHash(u8, 50);
+            const temp: f32 = @as(f32, @floatFromInt(temp_raw)) * 0.02 + 0.01;
+            for (0..vocab_size) |i| {
+                const raw = smith.valueWithHash(i16, @intCast(i + 200));
+                target_probs[i] = @as(f32, @floatFromInt(raw)) * 0.01;
+            }
+            const dist = math_ops.truncatedDist(&target_probs, temp, 0, 1.0);
+            var prob_sum: f32 = 0;
+            if (dist.sum > 0 and std.math.isFinite(dist.sum)) {
+                for (&target_probs) |*p| {
+                    p.* /= dist.sum;
+                    try std.testing.expect(p.* >= 0);
+                    prob_sum += p.*;
+                }
+                try std.testing.expectApproxEqAbs(@as(f32, 1.0), prob_sum, 1e-3);
+            }
             for (0..vocab_size) |i| {
                 const raw = smith.valueWithHash(i16, @intCast(i + 300));
                 draft_lp[i] = @as(f32, @floatFromInt(raw)) * 0.01;

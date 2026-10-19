@@ -4873,6 +4873,14 @@ fn generateSpeculative(
             .dry_multiplier = cli.dry_multiplier,
             .dry_length = cli.dry_length,
         };
+        const spec_samp: spec_decode.Sampling = .{
+            .temperature = cli.temperature,
+            .top_k = cli.top_k,
+            .top_p = cli.top_p,
+            .min_p = cli.min_p,
+            .xtc_probability = cli.xtc_probability,
+            .xtc_threshold = cli.xtc_threshold,
+        };
         // Set when the cooldown branch produced pure n-gram drafts; skips the
         // drafter so verification consumes those drafts directly.
         var skip_draft_phase = false;
@@ -5072,7 +5080,7 @@ fn generateSpeculative(
         } else if (use_ddtree or self_spec)
             spec_decode.verifyDDTree(&spec_state, target, draft_model, last, cli.tree_budget, pre_draft_pos)
         else if (use_sampling)
-            spec_decode.verifySampling(&spec_state, target, draft_model, last, pre_draft_pos, cli.temperature, spec_pen, prng.random())
+            spec_decode.verifySampling(&spec_state, target, draft_model, last, pre_draft_pos, spec_samp, spec_pen, prng.random())
         else
             spec_decode.verifySequential(&spec_state, target, draft_model, last, pre_draft_pos, spec_pen);
 

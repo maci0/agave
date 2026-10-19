@@ -41,6 +41,20 @@ const grammar_mod = @import("../grammar.zig");
 
 const Mutex = Io.Mutex;
 
+/// Carry the request's truncation into speculative verification, so a draft
+/// token is accepted against the distribution the non-speculative path would
+/// have sampled from rather than the untruncated softmax.
+fn specSampling(s: SamplingParams) spec_decode.Sampling {
+    return .{
+        .temperature = s.temperature,
+        .top_k = s.top_k,
+        .top_p = s.top_p,
+        .min_p = s.min_p,
+        .xtc_probability = s.xtc_probability,
+        .xtc_threshold = s.xtc_threshold,
+    };
+}
+
 // ── Server constants ────────────────────────────────────────────
 const slog_buf_size: usize = 4096;
 const models_json_buf_size: usize = 1024;
@@ -4746,7 +4760,7 @@ fn generateNPre(formatted: []const u8, reset: bool, max_tokens: usize, sampling:
                     break :blk model.forward(ld) catch ld;
                 } }
             else if (use_sampling)
-                spec_decode.verifySampling(spec_state, model, draft_model, last, pre_draft_pos, sampling.temperature, spec_pen, prng.random())
+                spec_decode.verifySampling(spec_state, model, draft_model, last, pre_draft_pos, specSampling(sampling), spec_pen, prng.random())
             else
                 spec_decode.verifySequential(spec_state, model, draft_model, last, pre_draft_pos, spec_pen);
 
@@ -6080,7 +6094,7 @@ fn generateAnthropicStream(stream: http.TcpStream, formatted: []const u8, max_to
                     break :blk model.forward(ld) catch ld;
                 } }
             else if (use_sampling_a)
-                spec_decode.verifySampling(a_spec, model, a_draft, last, pre, sampling_a.temperature, pen_a, prng_a.random())
+                spec_decode.verifySampling(a_spec, model, a_draft, last, pre, specSampling(sampling_a), pen_a, prng_a.random())
             else
                 spec_decode.verifySequential(a_spec, model, a_draft, last, pre, pen_a);
 
@@ -6601,7 +6615,7 @@ fn generateResponsesStream(stream: http.TcpStream, prompt: []const u8, max_token
                     break :blk model.forward(ld) catch ld;
                 } }
             else if (use_sampling_r)
-                spec_decode.verifySampling(r_spec, model, r_draft, last, pre, sampling_r.temperature, pen_r, prng_r.random())
+                spec_decode.verifySampling(r_spec, model, r_draft, last, pre, specSampling(sampling_r), pen_r, prng_r.random())
             else
                 spec_decode.verifySequential(r_spec, model, r_draft, last, pre, pen_r);
 
@@ -7415,7 +7429,7 @@ fn generateStream(stream: http.TcpStream, prompt: []const u8, req_id: u64, creat
                     break :blk model.forward(ld) catch ld;
                 } }
             else if (use_sampling_s)
-                spec_decode.verifySampling(s_spec, model, s_draft, last, pre, sampling.temperature, pen_s, prng_s.random())
+                spec_decode.verifySampling(s_spec, model, s_draft, last, pre, specSampling(sampling), pen_s, prng_s.random())
             else
                 spec_decode.verifySequential(s_spec, model, s_draft, last, pre, pen_s);
 

@@ -597,21 +597,31 @@ pub fn sampleMirostat(logits: []f32, tau: f32, eta: f32, mu: *f32, temperature: 
     return chosen;
 }
 
-/// Sample a token from logits using temperature, top-k, and top-p (nucleus) filtering.
-/// Modifies the logits buffer in-place.
+/// Unnormalized distribution `truncatedDist` leaves in its logits buffer.
+pub const Dist = struct {
+    /// Sum of the surviving weights. Divide a weight by it for a probability.
+    sum: f32,
+    /// Token to use when filtering left nothing to sample.
+    fallback: u32,
+};
+
+/// Apply temperature, top-k and top-p to `logits` in place, leaving the
+/// unnormalized weight of every surviving token and zero elsewhere.
 ///
-/// Returns 0 for empty input. When temperature == 0, returns argmax (greedy).
-/// Otherwise:
+/// Callers that only need a token want `sampleToken`. Speculative
+/// verification needs the weights themselves, to accept a draft token against
+/// the same distribution the sampler would have drawn from; without that the
+/// two paths disagree and `--spec-mode` silently changes the output
+/// distribution.
+///
 ///   1. Scale logits by 1/temperature.
 ///   2. If top_k > 0, keep only the top_k highest logits (rest set to -inf),
 ///      then fuse the mask with softmax in a single SIMD pass.
 ///   3. Softmax over remaining candidates.
 ///   4. If top_p < 1.0, keep the smallest set of tokens whose cumulative
 ///      probability >= top_p (nucleus filtering), zero the rest, recompute sum.
-///   5. Weighted random sample from the (unnormalized) filtered distribution.
-pub fn sampleToken(logits: []f32, temperature: f32, top_k: u32, top_p: f32, rng: std.Random) u32 {
-    if (logits.len == 0) return 0;
-    if (temperature == 0) return argmax(logits);
+pub fn truncatedDist(logits: []f32, temperature: f32, top_k: u32, top_p: f32) Dist {
+    if (logits.len == 0) return .{ .sum = 0, .fallback = 0 };
 
     const n = logits.len;
     const neg_inf = -std.math.inf(f32);
@@ -772,17 +782,29 @@ pub fn sampleToken(logits: []f32, temperature: f32, top_k: u32, top_p: f32, rng:
         }
     }
 
-    // 5. Weighted random sampling (unnormalized, scale threshold by sum).
-    // If sum <= 0 after filtering (all candidates zeroed), fall back to argmax
-    // of the original logits to avoid a biased return of the last token index.
-    if (sum <= 0 or !std.math.isFinite(sum)) return fallback;
+    return .{ .sum = sum, .fallback = fallback };
+}
+
+/// Sample a token from logits using temperature, top-k, and top-p (nucleus)
+/// filtering. Modifies the logits buffer in place.
+///
+/// Returns 0 for empty input. When temperature == 0, returns argmax (greedy).
+/// Otherwise truncates with `truncatedDist` and takes one weighted random
+/// draw from the surviving weights. If filtering zeroed everything, returns
+/// the largest pre-filter logit rather than biasing toward the last index.
+pub fn sampleToken(logits: []f32, temperature: f32, top_k: u32, top_p: f32, rng: std.Random) u32 {
+    if (logits.len == 0) return 0;
+    if (temperature == 0) return argmax(logits);
+
+    const dist = truncatedDist(logits, temperature, top_k, top_p);
+    if (dist.sum <= 0 or !std.math.isFinite(dist.sum)) return dist.fallback;
     var cumulative: f32 = 0;
-    const sample_threshold = rng.float(f32) * sum;
+    const sample_threshold = rng.float(f32) * dist.sum;
     for (logits, 0..) |p, i| {
         cumulative += p;
         if (sample_threshold < cumulative) return @intCast(i);
     }
-    return @intCast(n - 1);
+    return @intCast(logits.len - 1);
 }
 
 // ── Tests ─────────────────────────────────────────────────────────
