@@ -108,6 +108,10 @@ and Vulkan (gfx1100) despite full kernel coverage.
 | HQQ half-quadratic quantization (Metal/Vulkan/WebGPU/CUDA/ROCm native + CPU) | n/a |
 | Scattered-row prefetch for the Qwen4Exp PLE table (`Format.prefetchRows`) | llama.cpp |
 | Throughput + greedy-determinism release gate (`zig build gate`) | Atlas |
+| Qwen4-Exp QSA Q/K/V batched into one `gemvMulti` dispatch (Qwen 3.5 already had it) | vLLM |
+| `/v1/systemone` decision endpoint (noul / choice / score by logit read) | llama.cpp / vLLM / SGLang |
+| Tool-call and reasoning delimiters read from the chat template, not server literals | vLLM |
+| KV prefix wire format carries a header (version, geometry, RoPE bases) | llama.cpp |
 
 ### Partial
 

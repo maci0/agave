@@ -247,6 +247,56 @@ pub const Qwen4ExpModel = struct {
         model_mod.dispatchGemv(self.be, self.fmt, x, t, y, n, k);
     }
 
+    fn makeOp(self: *Qwen4ExpModel, t: TensorInfo, y: [*]f32, n: usize, k: usize) backend_mod.GemvOp {
+        var op = backend_mod.GemvOp{ .w = .{ .data = t.data_ptr, .dtype = t.dtype }, .y = y, .n = n };
+        if (t.dtype == .mlx_q) {
+            if (model_mod.findMlxCompanion(self.fmt, t, k)) |c| {
+                op.mlx_scales = c.scales;
+                op.mlx_biases = c.biases;
+                op.mlx_bits = c.bits;
+                op.mlx_group_size = c.group_size;
+            }
+        }
+        return op;
+    }
+
+    /// Project three outputs from one activation in a single dispatch.
+    ///
+    /// Q, K and V read the same vector, so batching them reads it once and
+    /// costs one dispatch instead of three. The formats that need a companion
+    /// tensor and their own kernel (NVFP4, GPTQ, AWQ) and the ones that route
+    /// to the CPU fall back to separate calls: `GemvOp` carries MLX's
+    /// companions and nothing else.
+    fn gemvW3(
+        self: *Qwen4ExpModel,
+        x: [*]const f32,
+        t0: TensorInfo,
+        y0: [*]f32,
+        n0: usize,
+        t1: TensorInfo,
+        y1: [*]f32,
+        n1: usize,
+        t2: TensorInfo,
+        y2: [*]f32,
+        n2: usize,
+        k: usize,
+    ) void {
+        for ([_]TensorInfo{ t0, t1, t2 }) |t| {
+            if (dtypeNeedsCpuGemv(t.dtype) or t.dtype == .nvfp4 or t.dtype == .gptq or t.dtype == .awq) {
+                self.gemvW(x, t0, y0, n0, k);
+                self.gemvW(x, t1, y1, n1, k);
+                self.gemvW(x, t2, y2, n2, k);
+                return;
+            }
+        }
+        const ops = [_]backend_mod.GemvOp{
+            self.makeOp(t0, y0, n0, k),
+            self.makeOp(t1, y1, n1, k),
+            self.makeOp(t2, y2, n2, k),
+        };
+        self.be.gemvMulti(x, &ops, k);
+    }
+
     fn gemvExpert(self: *Qwen4ExpModel, x: [*]const f32, t: TensorInfo, ei: usize, stride: usize, y: [*]f32, n: usize, k: usize) void {
         const data = t.data_ptr + ei * stride;
         if (dtypeNeedsCpuGemv(t.dtype)) {
@@ -880,9 +930,19 @@ pub const Qwen4ExpModel = struct {
         const qw = try self.layerT(li, "attn_q.weight");
         const kw = try self.layerT(li, "attn_k.weight");
         const vw = try self.layerT(li, "attn_v.weight");
-        self.gemvW(self.hidden2.ptr, qw, self.q_buf.ptr, qd * 2, e);
-        self.gemvW(self.hidden2.ptr, kw, self.k_buf.ptr, kvd, e);
-        self.gemvW(self.hidden2.ptr, vw, self.v_buf.ptr, kvd, e);
+        self.gemvW3(
+            self.hidden2.ptr,
+            qw,
+            self.q_buf.ptr,
+            qd * 2,
+            kw,
+            self.k_buf.ptr,
+            kvd,
+            vw,
+            self.v_buf.ptr,
+            kvd,
+            e,
+        );
         self.be.sync();
         // GGUF qwen4exp packs Q then gate per head (HF splitQGate layout).
         self.be.splitQGate(self.q_buf.ptr, self.ff_buf2.ptr, self.gate_buf.ptr, hd, nh);
