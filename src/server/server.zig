@@ -38,6 +38,7 @@ const VisionEncoder = @import("../models/model.zig").VisionEncoder;
 const image_mod = @import("../image.zig");
 const engine_version = @import("build_options").version;
 const grammar_mod = @import("../grammar.zig");
+const prefix_header = @import("../kvcache/prefix_header.zig");
 
 const Mutex = Io.Mutex;
 
@@ -104,7 +105,10 @@ fn estimateKvExportBytes(model: Model, n_tokens: usize) usize {
     const per_token3 = std.math.mul(usize, per_token2, @sizeOf(f32)) catch return kv_export_max_bytes;
     const per_token4 = std.math.mul(usize, per_token3, kv_export_dim_headroom) catch return kv_export_max_bytes;
     const raw = std.math.mul(usize, n_tokens, per_token4) catch return kv_export_max_bytes;
-    return @min(if (raw == 0) kv_export_max_bytes else raw, kv_export_max_bytes);
+    // The blob leads with a prefix header, so a buffer sized to the payload
+    // alone makes exportKvPrefix fail and fall back to the cap for nothing.
+    const with_header = std.math.add(usize, raw, prefix_header.Header.size) catch return kv_export_max_bytes;
+    return @min(if (raw == 0) kv_export_max_bytes else with_header, kv_export_max_bytes);
 }
 const conv_title_max_len = conv_store.max_title_len;
 const conv_list_buf_size: usize = 8192;

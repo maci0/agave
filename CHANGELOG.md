@@ -11,6 +11,17 @@ must still appear under **Changed** or **Breaking** below. See
 
 ## [Unreleased]
 
+### Fixed
+- Speculative decoding corrupted recurrent state on hybrid models. Verification rewinds the target with `setKvSeqLen` and replays the accepted prefix, which is exact for attention and a no-op for the DeltaNet conv and recurrence states, so the replay double-consumed the prefix and drifted further every round. Affected Qwen 3.5 and Qwen4-Exp on `--spec-mode self`, `ddtree` and `mtp`, and on the tree-verify replay path.
+- `--spec-mode` silently disabled `--top-k`, `--top-p`, `--min-p` and `--xtc-*`: verification compared draft tokens against an untruncated softmax and drew its bonus token with truncation off, so speculative and non-speculative decoding sampled from different distributions.
+
+### Added
+- `zig build gate` checks decode throughput against `benchmarks/baselines.json` at a 5% tolerance and requires two greedy runs at one seed to match byte for byte. Baselines ship empty and are recorded per machine with `python3 scripts/perf-gate.py --update-baselines`.
+- Qwen4-Exp hints the PLE table rows a token hashes to before reading them, instead of taking one blocking page fault per row.
+
+### Breaking
+- `GET`/`POST /v1/kv_cache` blobs now carry a 40-byte header naming the format version, cache geometry and RoPE bases. Import refuses anything that disagrees with the loaded model, where before a same-sized blob from another model restored and then decoded nonsense. Blobs exported by 0.13.0 or earlier are rejected; re-export them. See [docs/API.md](docs/API.md#cross-instance-kv-cache-sharing).
+
 ## [0.13.0] - 2026-10-15
 
 ### Added

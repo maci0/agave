@@ -605,10 +605,33 @@ Cache is invalidated when the prompt prefix changes (e.g., switching conversatio
 
 For deployments with multiple agave instances serving the same model, KV cache prefixes can be transferred between instances:
 
-**Wire format** (unversioned; not the disk `checkpoint.KVC` header):
+**Wire format** (not the disk `checkpoint.KVC` header): a 40-byte header, then
 `layer₀_K | layer₀_V | layer₁_K | layer₁_V | …` as little-endian f32.
 Per-layer K/V length is `n_tokens × kvd_layer × 4` bytes (`kvd` may differ across layers on dual-attention / MLA models).
-Only architectures that implement `exportKvPrefix` / `importKvPrefix` support this (currently Gemma 4). Export on any other architecture returns `501` (`code: not_implemented`); import returns `400` (`code: kv_import_failed`), which also covers a blob whose size does not match `n_tokens`.
+
+| Offset | Size | Field |
+|-------:|-----:|-------|
+| 0 | 8 | magic `AGVKVPFX` |
+| 8 | 4 | format version (currently `1`) |
+| 12 | 4 | layer count |
+| 16 | 4 | token count, must equal the `n_tokens` query parameter |
+| 20 | 4 | KV width of layer 0 |
+| 24 | 4 | reserved, zero |
+| 28 | 8 | FNV-1a hash of the per-layer KV widths |
+| 36 | 4 | first RoPE base the stored keys were rotated with |
+| 40 | 4 | second RoPE base (architectures with one base repeat it) |
+
+Import refuses a blob whose magic, version, layer count, layer-0 width, shape
+hash or RoPE bases disagree with the loaded model. The body is untrusted, and
+without those fields a prefix from a different architecture, cache geometry or
+RoPE base restores cleanly and then decodes nonsense.
+
+Stored keys carry the rotation of the positions they were exported from, and
+no backend has a rope-delta kernel, so a prefix only restores at the offset it
+was taken from. The header turns a mismatch into a rejection; it does not
+repair one.
+
+Only architectures that implement `exportKvPrefix` / `importKvPrefix` support this (currently Gemma 4). Export on any other architecture returns `501` (`code: not_implemented`); import returns `400` (`code: kv_import_failed`), which also covers a blob whose size, header or `n_tokens` does not match.
 The blob does **not** include prompt token IDs, so a following OpenAI-style request with `reset` still re-prefills unless the server already holds matching prefix-cache IDs from a prior local generation.
 
 **Export**, serialize `N` tokens of KV cache as a binary blob (`n_tokens` is a required query parameter):

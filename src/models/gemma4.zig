@@ -27,6 +27,7 @@ const quant = @import("../ops/quant.zig");
 const perf = @import("../perf.zig");
 const kv_quant = @import("../ops/kv_quant.zig");
 const kv_evict = @import("../ops/kv_evict.zig");
+const prefix_header = @import("../kvcache/prefix_header.zig");
 const kvcache = @import("../kvcache/manager.zig");
 const block_alloc_mod = @import("../kvcache/block_allocator.zig");
 const BlockAllocator = block_alloc_mod.BlockAllocator;
@@ -1622,14 +1623,30 @@ pub const Gemma4Model = struct {
         model_mod.signalCancel(&self.cancelled);
     }
 
+    /// Describe this model's cache for the prefix header, so an import can
+    /// tell whether a blob belongs to it.
+    fn prefixHeader(self: *const Gemma4Model, n_tokens: usize) prefix_header.Header {
+        return .{
+            .n_layers = self.n_layers,
+            .n_tokens = @intCast(n_tokens),
+            .head_dim = @intCast(self.layer_kvd[0]),
+            .shape_hash = prefix_header.shapeHash(self.layer_kvd[0..self.n_layers]),
+            .rope_theta_a = self.sl_rope_theta,
+            .rope_theta_b = self.gl_rope_theta,
+        };
+    }
+
     /// Export KV cache for positions [0, n_tokens) into a flat byte buffer.
-    /// Layout: [layer_0_keys | layer_0_values | layer_1_keys | ...] as f32
-    /// (unversioned; the checkpoint format is not implemented). Per-layer width is
-    /// `layer_kvd[i]`, so dual-attention layers may differ in byte size.
-    /// Returns bytes written (0 if dst too small or n_tokens > kv_seq_len).
+    /// Layout: a `prefix_header.Header` then
+    /// [layer_0_keys | layer_0_values | layer_1_keys | ...] as f32. Per-layer
+    /// width is `layer_kvd[i]`, so dual-attention layers may differ in byte
+    /// size, which is why the header carries a shape hash rather than one
+    /// width. Returns bytes written (0 if dst too small or n_tokens >
+    /// kv_seq_len).
     pub fn exportKvPrefix(self: *Gemma4Model, dst: []u8, n_tokens: usize) usize {
         if (n_tokens > self.kv_seq_len or n_tokens > self.max_seq_len) return 0;
-        var offset: usize = 0;
+        if (!prefix_header.write(dst, self.prefixHeader(n_tokens))) return 0;
+        var offset: usize = prefix_header.Header.size;
         for (self.layer_keys, self.layer_values, 0..) |keys, vals, i| {
             const kvd = self.layer_kvd[i];
             const k_floats = n_tokens * kvd;
@@ -1653,7 +1670,14 @@ pub const Gemma4Model = struct {
     /// byte-size math below.
     pub fn importKvPrefix(self: *Gemma4Model, src: []const u8, n_tokens: usize) bool {
         if (n_tokens > self.max_seq_len) return false;
-        var offset: usize = 0;
+        // The body arrives over POST /v1/kv_cache, so it is untrusted. A
+        // length check alone lets a blob from another architecture, another
+        // cache geometry or another RoPE base restore cleanly and then decode
+        // nonsense; the header is what makes those a refusal.
+        const incoming = prefix_header.read(src) orelse return false;
+        if (!incoming.compatible(self.prefixHeader(n_tokens))) return false;
+        if (incoming.n_tokens != n_tokens) return false;
+        var offset: usize = prefix_header.Header.size;
         for (self.layer_keys, self.layer_values, 0..) |keys, vals, i| {
             const kvd = self.layer_kvd[i];
             const k_floats = n_tokens * kvd;
@@ -3053,10 +3077,10 @@ test "Gemma4 importKvPrefix round-trips an exported prefix" {
     var cpu_be: backend_mod.CpuBackend = .{};
     var m = kvOnlyModel(keys, vals, &layer_tables, &cpu_be);
 
-    var blob: [cap * kvd * @sizeOf(f32) * 2]u8 = undefined;
+    var blob: [prefix_header.Header.size + cap * kvd * @sizeOf(f32) * 2]u8 = undefined;
     m.kv_seq_len = 3;
     const n = m.exportKvPrefix(&blob, 3);
-    try std.testing.expectEqual(@as(usize, 3 * kvd * @sizeOf(f32) * 2), n);
+    try std.testing.expectEqual(@as(usize, prefix_header.Header.size + 3 * kvd * @sizeOf(f32) * 2), n);
 
     // Import into a fresh cache restores the same floats.
     const keys2 = try allocator.alloc(f32, cap * kvd);
@@ -3112,11 +3136,48 @@ test "Gemma4 importKvPrefix rejects oversized or short inputs" {
         try std.testing.expectEqual(@as(usize, 0), m.kv_seq_len);
     }
 
-    // Exact-size import at capacity still succeeds.
+    // A correctly sized body with no header is refused: that is exactly the
+    // pre-header blob shape, and accepting it would restore foreign keys.
     {
-        const body = try allocator.alloc(u8, full_bytes);
+        const body = try allocator.alloc(u8, prefix_header.Header.size + full_bytes);
         defer allocator.free(body);
         @memset(body, 0);
+        try std.testing.expect(!m.importKvPrefix(body, cap));
+        try std.testing.expectEqual(@as(usize, 0), m.kv_seq_len);
+    }
+
+    // A header describing a different cache geometry is refused even though
+    // the payload is the right length.
+    {
+        const body = try allocator.alloc(u8, prefix_header.Header.size + full_bytes);
+        defer allocator.free(body);
+        @memset(body, 0);
+        var foreign = m.prefixHeader(cap);
+        foreign.shape_hash ^= 1;
+        try std.testing.expect(prefix_header.write(body, foreign));
+        try std.testing.expect(!m.importKvPrefix(body, cap));
+        try std.testing.expectEqual(@as(usize, 0), m.kv_seq_len);
+    }
+
+    // A header from a model with a different RoPE base is refused: the keys
+    // carry a rotation this model cannot interpret at these positions.
+    {
+        const body = try allocator.alloc(u8, prefix_header.Header.size + full_bytes);
+        defer allocator.free(body);
+        @memset(body, 0);
+        var retuned = m.prefixHeader(cap);
+        retuned.rope_theta_a += 1.0;
+        try std.testing.expect(prefix_header.write(body, retuned));
+        try std.testing.expect(!m.importKvPrefix(body, cap));
+        try std.testing.expectEqual(@as(usize, 0), m.kv_seq_len);
+    }
+
+    // Exact-size import at capacity, with this model's own header, succeeds.
+    {
+        const body = try allocator.alloc(u8, prefix_header.Header.size + full_bytes);
+        defer allocator.free(body);
+        @memset(body, 0);
+        try std.testing.expect(prefix_header.write(body, m.prefixHeader(cap)));
         try std.testing.expect(m.importKvPrefix(body, cap));
         try std.testing.expectEqual(@as(usize, cap), m.kv_seq_len);
     }
@@ -3137,9 +3198,12 @@ test "Gemma4 exportKvPrefix rejects positions beyond capacity" {
     var m = kvOnlyModel(keys, vals, &layer_tables, &cpu_be);
     m.kv_seq_len = cap;
 
-    var dst: [cap * kvd * @sizeOf(f32) * 2]u8 = undefined;
+    var dst: [prefix_header.Header.size + cap * kvd * @sizeOf(f32) * 2]u8 = undefined;
     try std.testing.expectEqual(@as(usize, 0), m.exportKvPrefix(&dst, cap + 1));
     try std.testing.expectEqual(@as(usize, 0), m.exportKvPrefix(dst[0 .. dst.len - 1], cap));
+    // A buffer with room for the header but not the payload also writes
+    // nothing, rather than a header describing data that is not there.
+    try std.testing.expectEqual(@as(usize, 0), m.exportKvPrefix(dst[0 .. prefix_header.Header.size + 1], cap));
     try std.testing.expectEqual(dst.len, m.exportKvPrefix(&dst, cap));
 }
 
