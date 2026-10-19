@@ -58,7 +58,9 @@ and Vulkan (gfx1100) despite full kernel coverage.
 ### Metal 4 tensor-API FlashAttention (2026-10-19)
 
 llama.cpp #29570 added a tensor-API flash attention kernel for F16 KV. The
-blocker here is not the kernel, it is the language version.
+capability it delivers, **F16 KV attention, has shipped** (see Done): the FA2
+kernels dequant f16 in-kernel. What is rejected here is the tensor API as the
+vehicle for it, because the blocker is the language version, not the kernel.
 
 `metal::tensor` needs MSL 4.0, requested through
 `MTLCompileOptions.languageVersion`, and MSL 4.0 needs macOS 26. Agave
@@ -186,6 +188,8 @@ Two things to carry forward rather than relearn:
 | Prefix-cache LRU eviction (`RadixTree.evictLru`); at the cap an insert evicts instead of refusing | SGLang |
 | Windowed SDPA on the backend's fused kernel (shifted cache base), so sliding-window layers stop attending to the whole sequence and read the window instead | llama.cpp / ggml |
 | Real per-head softmax stats from GPU SDPA, so mixed-tier attention merges one partial per tier instead of falling back to a full-sequence CPU pass | vLLM HiSparse |
+| F16 KV attention on Metal (in-kernel dequant, `bits_k == 16`); `--kv-type f16` used to hit the unsupported-type panic despite being the default | llama.cpp |
+| `agave-bench` reports the minimum, not the median, with `--warmup-ms` for the GPU clock ramp | n/a |
 | `/v1/systemone` decision endpoint (noul / choice / score by logit read) | llama.cpp / vLLM / SGLang |
 | Tool-call and reasoning delimiters read from the chat template, not server literals | vLLM |
 | KV prefix wire format carries a header (version, geometry, RoPE bases) | llama.cpp |

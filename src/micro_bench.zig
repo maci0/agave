@@ -194,6 +194,7 @@ const Kernel = enum {
     sdpa_turbo4,
     sdpa_turbo3,
     sdpa_turbo2,
+    sdpa_f16,
 };
 
 const CliArgs = struct {
@@ -2044,7 +2045,7 @@ fn benchKernel(kernel: Kernel, be: Backend, be_name: []const u8, n: usize, k: us
             emitJson("rope", be_name, timing, computeGbps(total_bytes, timing.min_ns), computeGflops(total_flops, timing.min_ns), iters);
         },
 
-        .sdpa, .sdpa_turbo4, .sdpa_turbo3, .sdpa_turbo2 => {
+        .sdpa, .sdpa_f16, .sdpa_turbo4, .sdpa_turbo3, .sdpa_turbo2 => {
             // For SDPA: --n = n_heads, --k = head_dim. Sequence length from
             // a sensible default or derived from context.
             const n_heads = if (n > 0) n else default_n_heads;
@@ -2057,6 +2058,7 @@ fn benchKernel(kernel: Kernel, be: Backend, be_name: []const u8, n: usize, k: us
 
             // Determine KV cache types
             const kv_type: KvQuantType = switch (kernel) {
+                .sdpa_f16 => .f16,
                 .sdpa_turbo4 => .turbo4,
                 .sdpa_turbo3 => .turbo3,
                 .sdpa_turbo2 => .turbo2,

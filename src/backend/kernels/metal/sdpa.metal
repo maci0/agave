@@ -812,6 +812,14 @@ kernel void sdpa_fa2_turbo(
                 for (uint d = 0; d < hd; d++) {
                     kv_block[t * hd + d] = K_f32[k_base + d];
                 }
+            } else if (bits_k == 16) {
+                // f16: element addressable, no blocks. Halves the cache
+                // against f32 and converts on load.
+                device const half* K_f16 = (device const half*)K_cache;
+                uint elem_base = t_global * kvd + kvh * hd;
+                for (uint d = 0; d < hd; d++) {
+                    kv_block[t * hd + d] = float(K_f16[elem_base + d]);
+                }
             } else if (bits_k == 8) {
                 // Q8_0 dequant: 34 bytes per 32-element block (f16 scale + 32 × i8)
                 uint elem_base = t_global * kvd + kvh * hd;
@@ -914,6 +922,13 @@ kernel void sdpa_fa2_turbo(
                 uint v_base = t_global * kvd + kvh * hd;
                 for (uint d = 0; d < hd; d++) {
                     kv_block[t * hd + d] = V_f32[v_base + d];
+                }
+            } else if (bits_v == 16) {
+                // f16: see the K side above.
+                device const half* V_f16 = (device const half*)V_cache;
+                uint elem_base = t_global * kvd + kvh * hd;
+                for (uint d = 0; d < hd; d++) {
+                    kv_block[t * hd + d] = float(V_f16[elem_base + d]);
                 }
             } else if (bits_v == 8) {
                 // Q8_0 dequant for V

@@ -1190,3 +1190,70 @@ test "kvSliceable refuses a base that would cut a packed block" {
     // Two interleaved planes: a single shifted base cannot describe it.
     try std.testing.expect(!kvq.kvSliceable(.nvfp4_ds_mla, 0));
 }
+
+test "f16 KV attention on Metal matches the CPU reference" {
+    // --kv-type f16 is the default, and Metal used to reach its
+    // unsupported-type panic with it: isTurbo() covers turbo2/3/4 and q8_0
+    // only, so f16 fell past every branch. The FA2 kernel dequants it
+    // in-kernel now (bits_k == 16), which halves the cache against f32.
+    if (@import("builtin").os.tag != .macos) return error.SkipZigTest;
+    const nh: usize = 4;
+    const nkv: usize = 2;
+    const hd: usize = 64;
+    const kvd: usize = nkv * hd;
+    const seq_len: usize = 12;
+
+    var q: [nh * hd]f32 = undefined;
+    for (&q, 0..) |*v, i| v.* = 0.1 + @as(f32, @floatFromInt(i % 17)) * 0.03;
+    var k_new: [kvd]f32 = undefined;
+    var v_new: [kvd]f32 = undefined;
+    for (0..kvd) |d| {
+        k_new[d] = 0.4 + @as(f32, @floatFromInt(d % 11)) * 0.05;
+        v_new[d] = 1.5 - @as(f32, @floatFromInt(d % 7)) * 0.1;
+    }
+
+    // f16 cache: two bytes per element, filled through kvStore so the
+    // rounding matches what a real run would have written.
+    const kv_bytes = kv_quant.kvSliceBytes(.f16, (seq_len + 1) * kvd);
+    const keys_a = try std.testing.allocator.alloc(u8, kv_bytes);
+    defer std.testing.allocator.free(keys_a);
+    const vals_a = try std.testing.allocator.alloc(u8, kv_bytes);
+    defer std.testing.allocator.free(vals_a);
+    @memset(keys_a, 0);
+    @memset(vals_a, 0);
+    var row: [kvd]f32 = undefined;
+    for (0..seq_len) |t| {
+        for (0..kvd) |d| row[d] = @as(f32, @floatFromInt(t + 1)) * 0.07 + @as(f32, @floatFromInt(d % 13)) * 0.02;
+        const off = kv_quant.kvByteOffset(.f16, t * kvd);
+        kv_quant.kvStore(keys_a.ptr + off, &row, kvd, .f16);
+        for (0..kvd) |d| row[d] = @as(f32, @floatFromInt(t + 2)) * 0.05 - @as(f32, @floatFromInt(d % 5)) * 0.03;
+        kv_quant.kvStore(vals_a.ptr + off, &row, kvd, .f16);
+    }
+    const keys_b = try std.testing.allocator.dupe(u8, keys_a);
+    defer std.testing.allocator.free(keys_b);
+    const vals_b = try std.testing.allocator.dupe(u8, vals_a);
+    defer std.testing.allocator.free(vals_b);
+
+    const scale: f32 = 1.0 / @sqrt(@as(f32, @floatFromInt(hd)));
+
+    // Bare backends, no BackendState: standing up its thread pool beside a
+    // Metal device aborts under the full suite, and metal.zig's own tests
+    // drive MetalBackend directly for the same reason.
+    var cpu = @import("../backend/cpu.zig").CpuBackend{};
+    var expected: [nh * hd]f32 = @splat(0);
+    cpu.sdpa(&q, keys_a, vals_a, &k_new, &v_new, &expected, nh, nkv, hd, seq_len, scale, .f16, .f16);
+
+    const MetalBackend = @import("../backend/metal.zig").MetalBackend;
+    var gpu = MetalBackend.init(std.testing.allocator) catch |err| {
+        if (err == error.NoMetalDevice) return error.SkipZigTest;
+        return err;
+    };
+    defer gpu.deinit();
+    var got: [nh * hd]f32 = @splat(0);
+    gpu.sdpa(&q, keys_b, vals_b, &k_new, &v_new, &got, nh, nkv, hd, seq_len, scale, .f16, .f16);
+    gpu.sync();
+
+    for (0..nh * hd) |i| {
+        try std.testing.expectApproxEqAbs(expected[i], got[i], 1e-3);
+    }
+}

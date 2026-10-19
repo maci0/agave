@@ -2643,8 +2643,13 @@ pub const MetalBackend = struct {
 
     fn sdpaInner(self: *MetalBackend, q: [*]const f32, keys: []u8, values: []u8, k_new: [*]const f32, v_new: [*]const f32, output: [*]f32, head_max: ?[*]f32, head_sum: ?[*]f32, nh: usize, nkv: usize, hd: usize, seq_len: usize, scale: f32, kv_type_k: backend_mod.KvQuantType, kv_type_v: backend_mod.KvQuantType) void {
         self.active_pipeline_label = if (kv_type_k.isTurbo()) "sdpa_turbo" else if (kv_type_k == .q8_0) "sdpa_turbo" else "sdpa_fa2";
-        const is_turbo_k = kv_type_k.isTurbo() or kv_type_k == .q8_0;
-        const is_turbo_v = kv_type_v.isTurbo() or kv_type_v == .q8_0;
+        // f16 goes down the same in-kernel dequant path as q8_0 and turbo.
+        // It is not a block format, so the kernel reads `turboBits() == 16`
+        // as a width tag and indexes elements directly. Before this it fell
+        // past every branch into the unsupported-type panic, which made
+        // `--kv-type f16` unusable on Metal even though it is the default.
+        const is_turbo_k = kv_type_k.isTurbo() or kv_type_k == .q8_0 or kv_type_k == .f16;
+        const is_turbo_v = kv_type_v.isTurbo() or kv_type_v == .q8_0 or kv_type_v == .f16;
         const is_f32_k = (kv_type_k == .f32);
         const is_f32_v = (kv_type_v == .f32);
 
@@ -2675,6 +2680,13 @@ pub const MetalBackend = struct {
         if (sl > sdpa_max_seq_len) @panic("Metal SDPA: sequence length exceeds GPU limit (" ++ std.fmt.comptimePrint("{d}", .{sdpa_max_seq_len}) ++ "), reduce --ctx-size");
 
         // Route hd>256 turbo/q8_0 to the DS4 hd512 kernel instead of panicking.
+        // f16 above the standard head dim has no kernel: the hd512 path is
+        // DS4's and reads turbo or q8_0 blocks only. Route to the CPU, which
+        // reads f16 KV natively, rather than reach a kernel that refuses it.
+        if (hd > sdpa_max_head_dim and (kv_type_k == .f16 or kv_type_v == .f16)) {
+            cpuSdpaCarryingStats(self.pool, q, keys, values, k_new, v_new, output, head_max, head_sum, nh, nkv, hd, seq_len, scale, kv_type_k, kv_type_v);
+            return;
+        }
         if (hd > sdpa_max_head_dim and (is_turbo_k or is_turbo_v) and !is_f32_k and !is_f32_v) {
             // The hd512 DS4 kernel reports no stats, so a caller that needs
             // them takes the CPU instead of a silently zeroed denominator.

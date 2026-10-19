@@ -562,6 +562,9 @@ pub const KvQuantType = enum {
             .turbo3, .planar3, .iso3, .rotor3 => 3,
             .turbo4, .planar4, .iso4, .rotor4 => 4,
             .q8_0 => 8,
+            // Not a block format: element addressable, two bytes each. The
+            // GPU SDPA kernels read this as a width tag, not a block size.
+            .f16 => 16,
             else => 0,
         };
     }

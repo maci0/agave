@@ -1399,6 +1399,17 @@ pub const WebGpuBackend = struct {
             cpu.sdpa(q, keys, values, k_new, v_new, output, nh, nkv, hd, seq_len, scale, kv_type_k, kv_type_v);
             return;
         }
+        if (kv_type_k == .f16 or kv_type_v == .f16) {
+            // Deliberate CPU route, not a missing kernel. WGSL has no f16
+            // without the shader-f16 extension, so the cache would have to
+            // be unpacked from u32 pairs; the CPU already reads f16 KV
+            // natively and `--kv-type f16` is the default, so routing beats
+            // refusing. Metal dequants f16 in-kernel (`bits_k == 16`).
+            self.sync();
+            var cpu = CpuBackend{};
+            cpu.sdpa(q, keys, values, k_new, v_new, output, nh, nkv, hd, seq_len, scale, kv_type_k, kv_type_v);
+            return;
+        }
         if (kv_type_k != .f32 or kv_type_v != .f32)
             @panic("WebGPU sdpa: only f32 KV supported, use --kv-type f32");
 
