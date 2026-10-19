@@ -28,6 +28,7 @@ zig build fmt-check                # check formatting without writing
 bun run lint                       # oxlint (web TypeScript; blocking in CI)
 bun run typecheck                  # tsc --noEmit for src/web and web
 zig build bench                    # agave-bench micro-benchmarks
+zig build gate                     # decode tok/s and greedy determinism vs benchmarks/baselines.json. Needs models and the machine that recorded them, so it is not in `check` or `ci`. Baselines ship empty; record with `python3 scripts/perf-gate.py --update-baselines` (benchmarks/README.md)
 zig build run -- model.gguf "hi"   # run the ReleaseFast binary without installing
 ./zig-out/bin/agave model.gguf "prompt"
 ./zig-out/bin/agave model.gguf --serve
@@ -110,7 +111,7 @@ Non-negotiable. Every change must respect all of them.
 - `std.debug.assert` for internal invariants. `pub` only for intended API.
 - Public functions and structs get `///` (purpose, ownership, returns, errors). Files get `//!`.
 - `test` blocks at the bottom of the relevant file. Backend tests use target guards.
-- Changes under `src/backend/`, `src/models/`, `src/kvcache/` ship before/after numbers (throughput, TTFT, VRAM, bandwidth) for the touched op. Measure with `agave model.gguf "prompt" --profile` (`--profile` is a boolean flag) and `zig build bench` (see docs/CONTRIBUTING.md, "How to Debug Performance Regressions"). A >5% regression needs a written justification in the change.
+- Changes under `src/backend/`, `src/models/`, `src/kvcache/` ship before/after numbers (throughput, TTFT, VRAM, bandwidth) for the touched op. Measure with `agave model.gguf "prompt" --profile` (`--profile` is a boolean flag) and `zig build bench` (see docs/CONTRIBUTING.md, "How to Debug Performance Regressions"). A >5% regression needs a written justification in the change. `zig build gate` enforces that 5% against `benchmarks/baselines.json` on a machine that has the models.
 - Kernel research and reference implementations stay in `research/kernels/` (Python/torch tooling plus `tilelang/` experiments). Port to native Zig + target IR before merging into `src/`.
 
 ### Models

@@ -107,6 +107,7 @@ and Vulkan (gfx1100) despite full kernel coverage.
 | TQ2_0 ternary GEMV kernel (2-bit ternary, faster on AVX2, all 6 backends) | n/a |
 | HQQ half-quadratic quantization (Metal/Vulkan/WebGPU/CUDA/ROCm native + CPU) | n/a |
 | Scattered-row prefetch for the Qwen4Exp PLE table (`Format.prefetchRows`) | llama.cpp |
+| Throughput + greedy-determinism release gate (`zig build gate`) | Atlas |
 
 ### Partial
 

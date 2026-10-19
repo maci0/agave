@@ -404,6 +404,24 @@ See `src/spec/ddtree.zig` for the tree construction algorithm and `src/backend/k
 4. **Check allocations**: Use `std.testing.allocator` in tests (detects leaks automatically)
 5. **Verify comptime dispatch**: Ensure `inline else` dispatch is still used in `backend.zig`
 
+### Gating a regression
+
+`zig build gate` measures `--benchmark` decode throughput for every entry in
+`benchmarks/baselines.json` and fails on anything more than 5% under its
+baseline, the same threshold the change rules use. It also runs each entry
+twice at a fixed seed and virtual clock and fails if greedy output is not
+byte-identical, which catches the uninitialised-memory and stale-cache
+classes that a throughput number alone hides.
+
+It needs model files, so it is deliberately outside `zig build check` and
+`zig build ci`. Baselines ship empty: a number recorded on other hardware is
+not a baseline for yours. Record them once per machine with
+`python3 scripts/perf-gate.py --update-baselines`, and re-record after a
+hardware, Zig, or build-flag change. See [benchmarks/README.md](../benchmarks/README.md).
+
+An entry whose model is missing is reported as skipped, never as a pass, and
+a run where everything skipped says so rather than printing a green result.
+
 ## Kernel Artifact Regeneration
 
 The GPU kernel binaries under `src/backend/kernels/` are **generated artifacts checked into git** and embedded via `@embedFile`. `zig build` never rebuilds them, so editing a kernel source without regenerating ships stale GPU code silently. Canonical commands:

@@ -642,6 +642,23 @@ pub fn build(b: *std.Build) void {
             ).step);
         }
 
+        // Decode throughput and greedy determinism against committed
+        // baselines. Not in `check` or `ci`: it needs model files and the
+        // machine that recorded the baselines, so it stays a deliberate run.
+        const gate_step = b.step("gate", "Decode throughput and determinism vs benchmarks/baselines.json (needs models; see benchmarks/README.md)");
+        if (python3) |py| {
+            const gate_cmd = b.addSystemCommand(&.{ py, "scripts/perf-gate.py" });
+            gate_cmd.setCwd(repo_cwd);
+            pin_spawned_python(gate_cmd);
+            gate_cmd.has_side_effects = true;
+            gate_cmd.addPassthruArgs();
+            gate_step.dependOn(&gate_cmd.step);
+        } else {
+            gate_step.dependOn(&b.addFail(
+                "python3 not found; zig build gate needs Python 3.11+ for scripts/perf-gate.py",
+            ).step);
+        }
+
         // The committed web bundles are minified, so the notices of the Preact
         // and Radix code inside them exist nowhere in the release. The
         // GPL-3.0-or-later grant requires them to travel with it, and a notices

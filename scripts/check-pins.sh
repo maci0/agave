@@ -635,15 +635,12 @@ check_exact_pins "pyproject dependencies" < <(
 # single-line read would let a range through as soon as someone reformatted it.
 pep723_fail=0
 while IFS= read -r pep723_file; do
-    while IFS= read -r spec; do
-        [[ -n "$spec" ]] || continue
-        if [[ ! "$spec" =~ ^[A-Za-z0-9._-]+(==)?[0-9][A-Za-z0-9._+-]*(\[[^]]+\])?(\;.*)?$ ]]; then
-            echo "check-pins: $pep723_file (PEP 723 header): '$spec' does not pin one exact version" >&2
-            pep723_fail=1
-        fi
-    done < <(
-        # shellcheck disable=SC2016  # awk's $0 and /^# dependencies = \[/ are the awk language, not the shell
-        awk '
+    # Collected into a variable rather than read from a second `< <(...)`:
+    # bash 3.2, which is what /bin/bash still is on macOS, cannot parse a
+    # process substitution nested inside the one driving the outer loop and
+    # dies with "bad substitution: no closing `)'".
+    # shellcheck disable=SC2016  # awk's $0 and /^# dependencies = \[/ are the awk language, not the shell
+    pep723_specs="$(awk '
             /^# dependencies = \[/ { in_deps = 1 }
             in_deps {
                 while (match($0, /"[^"]+"/)) {
@@ -652,8 +649,15 @@ while IFS= read -r pep723_file; do
                 }
                 if ($0 ~ /\]/) { in_deps = 0 }
             }
-        ' "$pep723_file"
-    )
+        ' "$pep723_file")"
+    [[ -n "$pep723_specs" ]] || continue
+    while IFS= read -r spec; do
+        [[ -n "$spec" ]] || continue
+        if [[ ! "$spec" =~ ^[A-Za-z0-9._-]+(==)?[0-9][A-Za-z0-9._+-]*(\[[^]]+\])?(\;.*)?$ ]]; then
+            echo "check-pins: $pep723_file (PEP 723 header): '$spec' does not pin one exact version" >&2
+            pep723_fail=1
+        fi
+    done <<< "$pep723_specs"
 done < <(find scripts tools tests -name '*.py' -not -path '*/.venv/*' -exec grep -l '^# /// script' {} + | LC_ALL=C sort)
 
 if ((exact_pin_fail || pep723_fail)); then

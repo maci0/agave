@@ -87,6 +87,17 @@ die() {
     exit 1
 }
 
+# BSD chmod, which is what macOS ships, has no `--` end-of-options separator
+# and fails outright on one. An option-like path is disarmed by making it
+# explicitly relative instead, which both implementations accept.
+chmod_path() {
+    local mode="$1" path="$2"
+    case "$path" in
+        -*) path="./$path" ;;
+    esac
+    chmod "$mode" "$path"
+}
+
 note() {
     echo "conv-store-backup: $*"
 }
@@ -372,7 +383,7 @@ verify_store() {
 copy_atomic() {
     local src="$1" dest="$2"
     cp -- "$src" "$dest.tmp" || die "copy $src -> $dest.tmp failed"
-    chmod 600 -- "$dest.tmp" || die "could not restrict permissions on $dest.tmp"
+    chmod_path 600 "$dest.tmp" || die "could not restrict permissions on $dest.tmp"
     if ! command -v sync >/dev/null 2>&1; then
         die "no sync command available; cannot flush $dest.tmp to disk (install coreutils or busybox)"
     fi
@@ -388,7 +399,7 @@ do_backup() {
     mkdir -p -- "$dir" || die "cannot create $dir"
     # The backup dir holds nothing but copies of the conversation store, so it
     # is owner-only even when the operator's umask is not.
-    chmod 700 -- "$dir" || die "cannot restrict permissions on $dir"
+    chmod_path 700 "$dir" || die "cannot restrict permissions on $dir"
     if [[ ! -f "$live" ]]; then
         die "no conversation store at $live (nothing to back up; the server writes one on its first conversation)"
     fi
@@ -529,7 +540,7 @@ do_restore() {
         local dir snap
         dir="$(backup_dir)"
         mkdir -p -- "$dir" || die "cannot create $dir"
-        chmod 700 -- "$dir" || die "cannot restrict permissions on $dir"
+        chmod_path 700 "$dir" || die "cannot restrict permissions on $dir"
         snap="$dir/conversations-prerestore-$(stamp).json"
         [[ -e "$snap" ]] && snap="${snap%.json}-$$.json"
         copy_atomic "$live" "$snap"
