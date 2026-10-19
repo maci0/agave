@@ -46,7 +46,12 @@ pub const TensorInfo = struct {
     /// tensorBytes, correctly handles non-block-aligned element counts.
     /// Used by prefetchLayer to size madvise hints.
     pub fn dataByteLen(self: *const TensorInfo) usize {
-        const n = self.numElements();
+        return self.byteLenFor(self.numElements());
+    }
+
+    /// Raw byte size of `n` elements at this tensor's dtype. Separate from
+    /// `dataByteLen` so a single row can be sized for `Format.prefetchRows`.
+    pub fn byteLenFor(self: *const TensorInfo, n: usize) usize {
         if (n == 0) return 0;
         const maxInt = std.math.maxInt(usize);
         return switch (self.dtype) {
@@ -81,6 +86,16 @@ pub const TensorInfo = struct {
         };
     }
 };
+
+/// Byte offset of `row` within a tensor of `total` bytes, or null when the
+/// row does not fit. A hashed row index can exceed the table (a truncated or
+/// mismatched file), and madvise on a range past the mapping would fail for
+/// every row rather than skipping the one bad one.
+fn rowSpan(row: u32, row_bytes: usize, total: usize) ?usize {
+    const off = std.math.mul(usize, row, row_bytes) catch return null;
+    if (off >= total or total - off < row_bytes) return null;
+    return off;
+}
 
 /// Ceiling division with overflow-safe addition, matching gguf.zig's tensorBytes pattern.
 /// Returns `ceil(n / bs)`, saturating to maxInt(usize) on overflow.
@@ -285,6 +300,28 @@ pub const Format = struct {
         if (layer_idx >= plan.ranges.len) return;
         for (plan.ranges[layer_idx]) |r| prefetchRegion(r.ptr, r.len);
         plan.issued_through.store(layer_idx, .release);
+    }
+
+    /// Hint the OS to fetch a scattered set of rows out of one tensor.
+    ///
+    /// For a table too large to page in whole, `prefetchLayer` is the wrong
+    /// tool: it would pull the entire tensor for the handful of rows a token
+    /// touches. Qwen4Exp's per-layer token embedding is the case that needs
+    /// this, where every token reads `ple_n_heads` rows hashed out of a table
+    /// in the tens of billions of parameters. Issuing the hints up front lets
+    /// the kernel start all of them at once instead of taking one blocking
+    /// major fault per row.
+    ///
+    /// `elems_per_row` is the row width in elements, not bytes. Rows past the
+    /// end of the tensor are skipped. No-op on freestanding.
+    pub fn prefetchRows(_: Format, tensor: TensorInfo, rows: []const u32, elems_per_row: usize) void {
+        const row_bytes = tensor.byteLenFor(elems_per_row);
+        if (row_bytes == 0) return;
+        const total = tensor.dataByteLen();
+        for (rows) |row| {
+            const span = rowSpan(row, row_bytes, total) orelse continue;
+            prefetchRegion(@as([*]u8, @ptrCast(@constCast(tensor.data_ptr))) + span, row_bytes);
+        }
     }
 
     /// Detect the quantization scheme name by probing well-known weight tensors.
@@ -820,4 +857,23 @@ test "fuzz: all format functions" {
             std.debug.assert(qname.len > 0);
         }
     }.f, .{});
+}
+
+test "rowSpan skips rows that do not fit the tensor" {
+    // A hashed PLE row index can land past a truncated table. One bad row
+    // must not take the whole prefetch down with it.
+    try std.testing.expectEqual(@as(?usize, 0), rowSpan(0, 64, 256));
+    try std.testing.expectEqual(@as(?usize, 192), rowSpan(3, 64, 256));
+    try std.testing.expectEqual(@as(?usize, null), rowSpan(4, 64, 256));
+    // Last row is short by one byte.
+    try std.testing.expectEqual(@as(?usize, null), rowSpan(3, 64, 255));
+    try std.testing.expectEqual(@as(?usize, null), rowSpan(std.math.maxInt(u32), 1 << 40, 256));
+}
+
+test "byteLenFor sizes one row at the tensor dtype" {
+    const t = TensorInfo{ .name = "t", .dtype = .q4_k, .dims = .{ 256, 4, 1, 1 }, .n_dims = 2, .data_ptr = undefined };
+    // Q4_K packs 256 elements into 144 bytes, so a 256-wide row is one block.
+    try std.testing.expectEqual(@as(usize, 144), t.byteLenFor(256));
+    try std.testing.expectEqual(@as(usize, 4 * 144), t.dataByteLen());
+    try std.testing.expectEqual(@as(usize, 0), t.byteLenFor(0));
 }

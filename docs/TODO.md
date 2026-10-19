@@ -106,6 +106,7 @@ and Vulkan (gfx1100) despite full kernel coverage.
 | TQ1_0 ternary GEMV kernel (BitNet 1.58-bit, {-1,0,1}, 5 trits/byte, all 6 backends) | n/a |
 | TQ2_0 ternary GEMV kernel (2-bit ternary, faster on AVX2, all 6 backends) | n/a |
 | HQQ half-quadratic quantization (Metal/Vulkan/WebGPU/CUDA/ROCm native + CPU) | n/a |
+| Scattered-row prefetch for the Qwen4Exp PLE table (`Format.prefetchRows`) | llama.cpp |
 
 ### Partial
 

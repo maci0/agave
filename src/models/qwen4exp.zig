@@ -749,6 +749,10 @@ pub const Qwen4ExpModel = struct {
             self.ple_eos,
             self.ple_rows,
         );
+        // The table is far too large to page in whole, and the rows a token
+        // hashes to are scattered. Hint them all before the first read so the
+        // kernel overlaps the I/O instead of taking one major fault per row.
+        self.fmt.prefetchRows(table, self.ple_rows[0..n_heads], hd);
         var h: usize = 0;
         while (h < n_heads) : (h += 1) {
             self.cpu.embLookup(.{ .data = table.data_ptr, .dtype = table.dtype }, self.ple_rows[h], self.ple_emb.ptr + h * hd, hd);
