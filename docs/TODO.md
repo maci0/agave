@@ -55,6 +55,46 @@ and Vulkan (gfx1100) despite full kernel coverage.
 
 ## Tried and rejected
 
+### Metal 4 tensor-API FlashAttention (2026-10-19)
+
+llama.cpp #29570 added a tensor-API flash attention kernel for F16 KV. The
+blocker here is not the kernel, it is the language version.
+
+`metal::tensor` needs MSL 4.0, requested through
+`MTLCompileOptions.languageVersion`, and MSL 4.0 needs macOS 26. Agave
+compiles every shader into one library from one `newLibraryWithSource:` call,
+so raising the version raises it for all of them: Metal would stop working on
+macOS 15, which is what CI's `test-macos` job runs on
+(`.github/workflows/ci.yml`, `runs-on: macos-15`), and on every user below
+26. Compiling a second library at MSL 4.0 and picking at runtime avoids that
+and doubles shader compile time while splitting the kernel set in two.
+
+Not worth either cost on the evidence available: the SDPA kernels are already
+FlashAttention-2 with sparse-V skipping, and `agave-bench` varies about 2x
+run to run (see below), so a win could not be demonstrated on this hardware
+anyway. Revisit when the macOS floor is 26, where it becomes a single-library
+change.
+
+### Per-request paged KV and parallel decode slots (2026-10-19)
+
+LM Studio 0.4.0 ships `n_parallel` slots over a unified KV cache; vLLM adds
+`--max-num-active-seqs` and orders its waiting queue by KV residency. Agave's
+server admits one request at a time, and `--max-batch-size` is inert.
+
+The shortcut does not exist. Switching slots by save/restore is the only route
+that avoids per-sequence block tables, and with `exportKvPrefix` +
+`saveSsmState` in place it would copy the whole KV cache on every switch:
+hundreds of megabytes at a 4096-token context, per interleave. That is slower
+than queueing, which is what the server already does.
+
+The real change is per-sequence block tables in the model layer, so each
+request owns a logical sequence over the shared `PagedKvCache`. The pieces
+exist (`PagedKvCache`, `RadixTree`, `pagedAttention`, `getBlockTable`), but
+every one of the seven architectures threads a single `kv_seq_len` and one
+flat cache through its forward pass. It is a rewrite of the model-layer KV
+contract, not an increment, and it has to land across all of them at once or
+the backends disagree about what a sequence is.
+
 ### Output-row tiling in the Metal Q8_0 GEMM (2026-10-19)
 
 `gemm_q8_0` runs one threadgroup per output row, so every threadgroup streams
