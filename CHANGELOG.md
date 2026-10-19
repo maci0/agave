@@ -20,6 +20,9 @@ must still appear under **Changed** or **Breaking** below. See
 - Qwen4-Exp hints the PLE table rows a token hashes to before reading them, instead of taking one blocking page fault per row.
 - `POST /v1/systemone` answers typed decision questions (`noul`, `choice`, `score`) about a state. Each question is one prefill and the answer is the softmax over its label tokens, so nothing is generated and `usage.output_tokens` is always `0`. Matches the shapes llama.cpp, vLLM, SGLang, Ollama and LM Studio converged on this quarter. See [docs/API.md](docs/API.md#post-v1systemone).
 
+### Changed
+- Tool-call and reasoning delimiters come from the loaded chat template instead of being `<tool_call>` and `<think>` literals in the server. An architecture that wraps calls or reasoning in a different pair declares it on its `ChatTemplate` and both the tool-use system prompt and the response parser follow; there is no per-model parser to add.
+
 ### Breaking
 - `GET`/`POST /v1/kv_cache` blobs now carry a 40-byte header naming the format version, cache geometry and RoPE bases. Import refuses anything that disagrees with the loaded model, where before a same-sized blob from another model restored and then decoded nonsense. Blobs exported by 0.13.0 or earlier are rejected; re-export them. See [docs/API.md](docs/API.md#cross-instance-kv-cache-sharing).
 

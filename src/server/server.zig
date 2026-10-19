@@ -1760,12 +1760,16 @@ fn buildToolSystemPrompt(allocator: Allocator, tmpl: ChatTemplate, tp: *const js
         try tmpl.writeUntrusted(allocator, &buf, tool.parameters_json);
         try buf.appendSlice(allocator, "\n");
     }
-    try buf.appendSlice(allocator,
-        \\
-        \\To call a tool, output a JSON object wrapped in <tool_call> tags:
-        \\<tool_call>{"name": "tool_name", "arguments": {"param": "value"}}</tool_call>
-        \\You may call multiple tools.
-    );
+    // Same delimiters the response parser looks for, so instructing the
+    // model and reading it back cannot drift apart.
+    const tags = serverToolTags();
+    try buf.appendSlice(allocator, "\nTo call a tool, output a JSON object wrapped in ");
+    try buf.appendSlice(allocator, tags.open);
+    try buf.appendSlice(allocator, " tags:\n");
+    try buf.appendSlice(allocator, tags.open);
+    try buf.appendSlice(allocator, "{\"name\": \"tool_name\", \"arguments\": {\"param\": \"value\"}}");
+    try buf.appendSlice(allocator, tags.close);
+    try buf.appendSlice(allocator, "\nYou may call multiple tools.");
     if (std.mem.eql(u8, tp.tool_choice, "required")) {
         try buf.appendSlice(allocator, " You MUST call at least one tool.");
     } else {
@@ -1774,9 +1778,12 @@ fn buildToolSystemPrompt(allocator: Allocator, tmpl: ChatTemplate, tp: *const js
     return buf.toOwnedSlice(allocator);
 }
 
-/// Parse tool calls from model output. Looks for <tool_call>...</tool_call> patterns.
-fn hasToolCalls(text: []const u8) bool {
-    return std.mem.indexOf(u8, text, "<tool_call>") != null;
+/// Parse tool calls from model output. The delimiters come from the loaded
+/// chat template, so an architecture that wraps calls in something other than
+/// ChatML's `<tool_call>` pair is parsed by declaring it, not by adding a
+/// branch here.
+fn hasToolCalls(text: []const u8, tags: ToolTags) bool {
+    return std.mem.indexOf(u8, text, tags.open) != null;
 }
 
 /// Drop tool-call tag markup from assistant text that is returned as plain
@@ -1785,9 +1792,9 @@ fn hasToolCalls(text: []const u8) bool {
 /// client that scans for them the same text the server just refused to trust.
 /// Text after an unterminated opening tag is dropped. Returns the input slice
 /// when there is no tag to remove.
-fn stripToolCallTags(allocator: Allocator, text: []const u8) error{OutOfMemory}![]const u8 {
-    const tc_start_tag = "<tool_call>";
-    const tc_end_tag = "</tool_call>";
+fn stripToolCallTags(allocator: Allocator, text: []const u8, tags: ToolTags) error{OutOfMemory}![]const u8 {
+    const tc_start_tag = tags.open;
+    const tc_end_tag = tags.close;
     if (std.mem.indexOf(u8, text, tc_start_tag) == null) return text;
     var out = std.ArrayList(u8).empty;
     errdefer out.deinit(allocator);
@@ -1820,8 +1827,8 @@ const PlainContent = struct {
     }
 };
 
-fn plainContent(allocator: Allocator, raw: []const u8, escaped_fallback: []const u8) PlainContent {
-    const stripped = stripToolCallTags(allocator, raw) catch raw;
+fn plainContent(allocator: Allocator, raw: []const u8, escaped_fallback: []const u8, tags: ToolTags) PlainContent {
+    const stripped = stripToolCallTags(allocator, raw, tags) catch raw;
     if (stripped.ptr == raw.ptr) return .{ .text = escaped_fallback, .owned = false };
     // jsonEscape aliases its input when there is nothing to escape, so the
     // stripped buffer is either handed to the caller or freed here.
@@ -1845,7 +1852,25 @@ const ToolCallCtx = struct {
     model_name: []const u8,
     registry: *const tools_mod.Registry,
     tp: *const json.ToolParams,
+    /// Delimiters this model wraps a tool call in, from its chat template.
+    /// Defaulted to ChatML's so a test can build a context without a server.
+    tags: ToolTags = .{},
 };
+
+/// The delimiters a model wraps a tool call in. Carried rather than read from
+/// the global so the parsers stay pure and testable.
+const ToolTags = struct {
+    open: []const u8 = "<tool_call>",
+    close: []const u8 = "</tool_call>",
+};
+
+/// The loaded model's tool-call delimiters.
+fn serverToolTags() ToolTags {
+    return .{
+        .open = g_server.chat_template.tool_call_open,
+        .close = g_server.chat_template.tool_call_close,
+    };
+}
 
 /// The tool-call context of the running server, for the request's own tools.
 fn serverToolCallCtx(tp: *const json.ToolParams) ToolCallCtx {
@@ -1854,6 +1879,7 @@ fn serverToolCallCtx(tp: *const json.ToolParams) ToolCallCtx {
         .model_name = g_server.model_name,
         .registry = &g_server.tool_registry,
         .tp = tp,
+        .tags = serverToolTags(),
     };
 }
 
@@ -1861,8 +1887,8 @@ fn serverToolCallCtx(tp: *const json.ToolParams) ToolCallCtx {
 /// `name` is in the request tools or the process registry. Returns the JSON
 /// between the tags, or null when none remain. Undeclared names are skipped.
 fn nextAllowedToolCall(text: []const u8, search_pos: *usize, ctx: ToolCallCtx) ?[]const u8 {
-    const tc_start_tag = "<tool_call>";
-    const tc_end_tag = "</tool_call>";
+    const tc_start_tag = ctx.tags.open;
+    const tc_end_tag = ctx.tags.close;
     while (search_pos.* < text.len) {
         const tc_start = std.mem.indexOfPos(u8, text, search_pos.*, tc_start_tag) orelse return null;
         const json_start = tc_start + tc_start_tag.len;
@@ -1929,10 +1955,15 @@ fn escapedToolCall(allocator: Allocator, tc_json: []const u8) ?EscapedToolCall {
 /// Detects <think>...</think> (DeepSeek R1, QwQ) and similar markers.
 /// Returns reasoning slice and content slice, both reference the original text (no alloc).
 const ThinkingSplit = struct { reasoning: []const u8, content: []const u8 };
-fn splitThinkingContent(text: []const u8) ThinkingSplit {
+
+/// Split with the loaded template's reasoning markers.
+fn splitThinking(text: []const u8) ThinkingSplit {
+    return splitThinkingWith(text, g_server.chat_template.reasoning_open, g_server.chat_template.reasoning_close);
+}
+
+fn splitThinkingWith(text: []const u8, think_open: []const u8, think_close: []const u8) ThinkingSplit {
+    if (think_open.len == 0 or think_close.len == 0) return .{ .reasoning = "", .content = text };
     // Pattern: <think>REASONING</think>CONTENT
-    const think_open = "<think>";
-    const think_close = "</think>";
     if (std.mem.startsWith(u8, text, think_open)) {
         if (std.mem.indexOf(u8, text, think_close)) |end| {
             const reasoning = text[think_open.len..end];
@@ -2779,13 +2810,13 @@ fn handleRequest(stream: http.TcpStream, req: http.HttpRequest) void {
         const total = gen.stats.tokens_generated + gen.stats.prompt_tokens;
         var resp_buf: [response_buf_size]u8 = undefined;
 
-        const json_body = if (toolsWanted(&tool_params) and hasToolCalls(gen.raw)) blk: {
+        const json_body = if (toolsWanted(&tool_params) and hasToolCalls(gen.raw, serverToolTags())) blk: {
             const tc_resp = buildToolCallResponse(&resp_buf, gen.raw, req_id, created, gen.stats.prompt_tokens, gen.stats.tokens_generated, serverToolCallCtx(&tool_params));
             if (tc_resp.len > 0) break :blk tc_resp;
             // No declared tool parsed. Return the text without the tag markup:
             // the server just refused this payload, so a client that scans for
             // tags must not find it in the content either.
-            const plain = plainContent(g_server.allocator, gen.raw, gen.escaped);
+            const plain = plainContent(g_server.allocator, gen.raw, gen.escaped, serverToolTags());
             defer plain.deinit(g_server.allocator);
             break :blk std.fmt.bufPrint(&resp_buf,
                 \\{{"id":"chatcmpl-{d}","object":"chat.completion","created":{d},"model":"{s}","system_fingerprint":"{s}","choices":[{{"index":0,"message":{{"role":"assistant","content":"{s}"}},"finish_reason":"{s}"}}],"usage":{{"prompt_tokens":{d},"completion_tokens":{d},"total_tokens":{d}}}}}
@@ -2798,7 +2829,7 @@ fn handleRequest(stream: http.TcpStream, req: http.HttpRequest) void {
             };
         } else blk: {
             // Split reasoning_content from content for thinking models (DeepSeek R1, QwQ, Gemma 4 12B).
-            const split = splitThinkingContent(gen.raw);
+            const split = splitThinking(gen.raw);
             if (split.reasoning.len > 0) {
                 // Emit separate reasoning_content field (DeepSeek/o1 compatible API)
                 const reasoning_escaped = json.jsonEscape(g_server.allocator, split.reasoning) catch {
@@ -3426,11 +3457,11 @@ fn handleRequest(stream: http.TcpStream, req: http.HttpRequest) void {
         // A tool-call tag that names no declared tool leaves call_idx at 0 and
         // returns "", so unparseable output degrades to a plain message item
         // with the tag markup removed, as on /v1/chat/completions.
-        const tc_body = if (toolsWanted(&tool_params_r) and hasToolCalls(gen.raw))
+        const tc_body = if (toolsWanted(&tool_params_r) and hasToolCalls(gen.raw, serverToolTags()))
             buildResponsesToolCallResponse(&resp_buf, gen.raw, req_id, created, gen.stats.prompt_tokens, gen.stats.tokens_generated, serverToolCallCtx(&tool_params_r))
         else
             "";
-        const plain = plainContent(g_server.allocator, gen.raw, gen.escaped);
+        const plain = plainContent(g_server.allocator, gen.raw, gen.escaped, serverToolTags());
         defer plain.deinit(g_server.allocator);
         const json_body = if (tc_body.len > 0) tc_body else std.fmt.bufPrint(&resp_buf,
             \\{{"id":"resp-{d}","object":"response","created_at":{d},"status":"completed","model":"{s}","stop_reason":"{s}","output":[{{"type":"message","id":"msg_0","status":"completed","role":"assistant","content":[{{"type":"output_text","text":"{s}"}}]}}],"usage":{{"input_tokens":{d},"output_tokens":{d},"total_tokens":{d}}}}}
@@ -3591,7 +3622,7 @@ fn handleRequest(stream: http.TcpStream, req: http.HttpRequest) void {
         // Falls back to the plain text response when no <tool_call> payload
         // parses (small-model malformed output), mirroring /v1/chat/completions.
         var resp_buf_tc: [response_buf_size]u8 = undefined;
-        if (want_tools_m and hasToolCalls(gen.raw)) {
+        if (want_tools_m and hasToolCalls(gen.raw, serverToolTags())) {
             const anth_tc = buildAnthropicToolCallResponse(&resp_buf_tc, gen.raw, req_id, gen.stats.prompt_tokens, gen.stats.tokens_generated, serverToolCallCtx(&tool_params_m));
             if (anth_tc.len > 0) {
                 sendJson(stream, anth_tc);
@@ -3604,7 +3635,7 @@ fn handleRequest(stream: http.TcpStream, req: http.HttpRequest) void {
         }
 
         var resp_buf: [response_buf_size]u8 = undefined;
-        const plain = plainContent(g_server.allocator, gen.raw, gen.escaped);
+        const plain = plainContent(g_server.allocator, gen.raw, gen.escaped, serverToolTags());
         defer plain.deinit(g_server.allocator);
         const json_body = std.fmt.bufPrint(&resp_buf,
             \\{{"id":"msg_{d}","type":"message","role":"assistant","content":[{{"type":"text","text":"{s}"}}],"model":"{s}","stop_reason":"{s}","stop_sequence":null,"usage":{{"input_tokens":{d},"output_tokens":{d}}}}}
@@ -5832,7 +5863,7 @@ fn startAnthropicStreamWithTools(stream: http.TcpStream, formatted: []const u8, 
     }
 
     var call_idx: usize = 0;
-    if (hasToolCalls(gen.raw)) {
+    if (hasToolCalls(gen.raw, serverToolTags())) {
         var search_pos: usize = 0;
 
         while (nextAllowedToolCall(gen.raw, &search_pos, ctx)) |tc_json| {
@@ -7035,7 +7066,7 @@ fn startStreamWithTools(stream: http.TcpStream, prompt: []const u8, max_tokens: 
     var chunk_buf: [response_buf_size]u8 = undefined;
 
     var call_idx: usize = 0;
-    if (hasToolCalls(gen.raw)) {
+    if (hasToolCalls(gen.raw, serverToolTags())) {
         // Emit tool calls as delta chunks
         var search_pos: usize = 0;
 
@@ -7074,7 +7105,7 @@ fn startStreamWithTools(stream: http.TcpStream, prompt: []const u8, max_tokens: 
         // empty assistant turn that claims finish_reason "tool_calls". The tag
         // markup itself is dropped, so a client scanning for tags cannot read
         // the payload the server just refused.
-        const plain = plainContent(ctx.allocator, gen.raw, gen.escaped);
+        const plain = plainContent(ctx.allocator, gen.raw, gen.escaped, ctx.tags);
         defer plain.deinit(ctx.allocator);
         writeStreamedContent(stream, &chunk_buf, g_server.model_name, req_id, created, plain.text, gen.finish_reason);
     }
@@ -8844,15 +8875,15 @@ test "stripToolCallTags removes tag markup and keeps surrounding text" {
     const text =
         \\before<tool_call>{"name": "rm"}</tool_call>after
     ;
-    const out = try stripToolCallTags(alloc, text);
+    const out = try stripToolCallTags(alloc, text, .{});
     defer if (out.ptr != text.ptr) alloc.free(@constCast(out));
     try std.testing.expectEqualStrings("beforeafter", out);
     // No tags: the input is borrowed, not copied.
     const plain = "plain";
-    try std.testing.expectEqual(@intFromPtr(plain.ptr), @intFromPtr((try stripToolCallTags(alloc, plain)).ptr));
+    try std.testing.expectEqual(@intFromPtr(plain.ptr), @intFromPtr((try stripToolCallTags(alloc, plain, .{})).ptr));
     // An unterminated tag drops the rest rather than looping.
     const unterminated = "keep<tool_call>{\"name\"";
-    const open = try stripToolCallTags(alloc, unterminated);
+    const open = try stripToolCallTags(alloc, unterminated, .{});
     defer if (open.ptr != unterminated.ptr) alloc.free(@constCast(open));
     try std.testing.expectEqualStrings("keep", open);
 }
@@ -8860,14 +8891,14 @@ test "stripToolCallTags removes tag markup and keeps surrounding text" {
 test "plainContent drops tags, escapes, and falls back to the pre-escaped text" {
     const alloc = std.testing.allocator;
     // Text with no tag is borrowed from the caller's already-escaped copy.
-    const no_tags = plainContent(alloc, "plain", "already");
+    const no_tags = plainContent(alloc, "plain", "already", .{});
     try std.testing.expect(!no_tags.owned);
     try std.testing.expectEqualStrings("already", no_tags.text);
     no_tags.deinit(alloc);
 
     // Tag markup is dropped and the remainder is escaped into one owned buffer.
     const tagged = "a\"b<tool_call>x</tool_call>c";
-    const stripped = plainContent(alloc, tagged, "fallback");
+    const stripped = plainContent(alloc, tagged, "fallback", .{});
     defer stripped.deinit(alloc);
     try std.testing.expect(stripped.owned);
     try std.testing.expectEqualStrings("a\\\"bc", stripped.text);
@@ -9672,14 +9703,14 @@ test "fuzz: all server functions" {
 
             // hasToolCalls
             {
-                std.debug.assert(hasToolCalls("<tool_call>{\"name\":\"foo\"}</tool_call>"));
-                std.debug.assert(!hasToolCalls("No tools here"));
+                std.debug.assert(hasToolCalls("<tool_call>{\"name\":\"foo\"}</tool_call>", .{}));
+                std.debug.assert(!hasToolCalls("No tools here", .{}));
                 // Random input
                 var tc_buf: [16]u8 = undefined;
                 for (0..16) |i| {
                     tc_buf[i] = smith.valueWithHash(u8, @truncate(0x30 +% i));
                 }
-                _ = hasToolCalls(&tc_buf);
+                _ = hasToolCalls(&tc_buf, .{});
             }
 
             // elapsedBetween
@@ -10077,10 +10108,10 @@ test "fuzz: model output tool-call, thinking, and tool-input parsers" {
                 try std.testing.expect(isCompleteJsonObject(resolved.obj));
             }
 
-            const split = splitThinkingContent(text);
+            const split = splitThinkingWith(text, "<think>", "</think>");
             try std.testing.expect(sliceWithin(text, split.reasoning));
             try std.testing.expect(sliceWithin(text, split.content));
-            try std.testing.expect(hasToolCalls(text));
+            try std.testing.expect(hasToolCalls(text, .{}));
         }
     }.f, .{});
 }
@@ -10301,4 +10332,62 @@ test "known_endpoints route /v1/systemone as POST only" {
         }
     }
     try std.testing.expect(found);
+}
+
+test "tool-call parsing follows the template's delimiters" {
+    // A model that wraps calls in something other than ChatML's pair used to
+    // be unparseable: the delimiters were literals in the server, so the only
+    // way to support one was another branch here.
+    const alloc = std.testing.allocator;
+    const tags = ToolTags{ .open = "[TOOL_CALLS]", .close = "[/TOOL_CALLS]" };
+    const text = "before[TOOL_CALLS]{\"name\": \"rm\"}[/TOOL_CALLS]after";
+
+    try std.testing.expect(hasToolCalls(text, tags));
+    // The ChatML pair must not match the same text.
+    try std.testing.expect(!hasToolCalls(text, .{}));
+
+    const out = try stripToolCallTags(alloc, text, tags);
+    defer if (out.ptr != text.ptr) alloc.free(@constCast(out));
+    try std.testing.expectEqualStrings("beforeafter", out);
+
+    // With the wrong delimiters the markup survives into the content a client
+    // sees, which is the failure the template field removes.
+    const untouched = try stripToolCallTags(alloc, text, .{});
+    defer if (untouched.ptr != text.ptr) alloc.free(@constCast(untouched));
+    try std.testing.expectEqualStrings(text, untouched);
+}
+
+test "reasoning split follows the template's markers" {
+    const custom = splitThinkingWith("<reasoning>why</reasoning>answer", "<reasoning>", "</reasoning>");
+    try std.testing.expectEqualStrings("why", custom.reasoning);
+    try std.testing.expectEqualStrings("answer", custom.content);
+
+    // ChatML markers against the same text find nothing, so the tags would
+    // have reached the client inside `content`.
+    const missed = splitThinkingWith("<reasoning>why</reasoning>answer", "<think>", "</think>");
+    try std.testing.expectEqualStrings("", missed.reasoning);
+    try std.testing.expectEqualStrings("<reasoning>why</reasoning>answer", missed.content);
+
+    // A template that declares no markers leaves the text whole rather than
+    // matching an empty needle at position zero.
+    const none = splitThinkingWith("plain", "", "");
+    try std.testing.expectEqualStrings("", none.reasoning);
+    try std.testing.expectEqualStrings("plain", none.content);
+}
+
+test "every chat template declares usable tool and reasoning delimiters" {
+    // An empty open or close tag would make hasToolCalls match everything.
+    const templates = [_]chat_tmpl_mod.ChatTemplate{
+        chat_tmpl_mod.ChatTemplate.chatml,
+        chat_tmpl_mod.ChatTemplate.qwen35,
+        chat_tmpl_mod.ChatTemplate.gemma4,
+        chat_tmpl_mod.ChatTemplate.gemma4_unified,
+        chat_tmpl_mod.ChatTemplate.deepseek4,
+        chat_tmpl_mod.ChatTemplate.llama4,
+    };
+    for (templates) |t| {
+        try std.testing.expect(t.tool_call_open.len > 0);
+        try std.testing.expect(t.tool_call_close.len > 0);
+        try std.testing.expect(!std.mem.eql(u8, t.tool_call_open, t.tool_call_close));
+    }
 }

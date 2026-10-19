@@ -318,7 +318,12 @@ each other, so the offline copy of such a diagram is untitled per group.
 
 1. Add a `pub const` to `src/chat_template.zig` with role prefixes/suffixes and EOG token names
 2. Map arch → template in `src/arch.zig: Arch.chatTemplate()`
-3. Add format test verifying correct prompt assembly
+3. Set `tool_call_open` / `tool_call_close` and `reasoning_open` / `reasoning_close` if the
+   architecture does not use ChatML's `<tool_call>` and `<think>` pairs. The server writes these
+   into the tool-use system prompt and parses them back out of the response, so a wrong pair means
+   tool calls never parse and reasoning reaches the client as content with the tags still in it.
+   There is no per-model parser to add: declaring the delimiters is the whole change.
+4. Add format test verifying correct prompt assembly
 
 ## How to Add a New Recipe
 
