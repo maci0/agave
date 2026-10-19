@@ -140,6 +140,7 @@ Two things to carry forward rather than relearn:
 | Qwen4-Exp QSA Q/K/V batched into one `gemvMulti` dispatch (Qwen 3.5 already had it) | vLLM |
 | Prefix-cache LRU eviction (`RadixTree.evictLru`); at the cap an insert evicts instead of refusing | SGLang |
 | Windowed SDPA on the backend's fused kernel (shifted cache base), so sliding-window layers stop attending to the whole sequence and read the window instead | llama.cpp / ggml |
+| Real per-head softmax stats from GPU SDPA, so mixed-tier attention merges one partial per tier instead of falling back to a full-sequence CPU pass | vLLM HiSparse |
 | `/v1/systemone` decision endpoint (noul / choice / score by logit read) | llama.cpp / vLLM / SGLang |
 | Tool-call and reasoning delimiters read from the chat template, not server literals | vLLM |
 | KV prefix wire format carries a header (version, geometry, RoPE bases) | llama.cpp |

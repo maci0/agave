@@ -1453,12 +1453,13 @@ pub const WebGpuBackend = struct {
 
     /// SDPA with per-head max/sum statistics (for disaggregated attention merging).
     pub fn sdpaWithStats(self: *WebGpuBackend, q: [*]const f32, keys: []u8, values: []u8, k_new: [*]const f32, v_new: [*]const f32, output: [*]f32, head_max: [*]f32, head_sum: [*]f32, nh: usize, nkv: usize, hd: usize, seq_len: usize, scale: f32, kv_type_k: KvQuantType, kv_type_v: KvQuantType) void {
-        self.sdpa(q, keys, values, k_new, v_new, output, nh, nkv, hd, seq_len, scale, kv_type_k, kv_type_v);
-        // Identity stats (max=0, sum=1), GPU SDPA output is already normalized
-        for (0..nh) |h| {
-            head_max[h] = 0.0;
-            head_sum[h] = 1.0;
-        }
+        // No stats-reporting shader here yet. Running the normal SDPA and
+        // writing identity stats (max=0, sum=1) would not be "no stats": a
+        // merge weights the partials by them, so the identity silently
+        // reweights both sides. The CPU path reports real ones.
+        self.sync();
+        var cpu = CpuBackend{};
+        cpu.sdpaWithStats(q, keys, values, k_new, v_new, output, head_max, head_sum, nh, nkv, hd, seq_len, scale, kv_type_k, kv_type_v);
     }
 
     /// Paged SDPA: block-table-indexed attention for non-contiguous KV cache.
