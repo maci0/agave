@@ -77,45 +77,6 @@ run to run (see below), so a win could not be demonstrated on this hardware
 anyway. Revisit when the macOS floor is 26, where it becomes a single-library
 change.
 
-### Per-request paged KV and parallel decode slots (2026-10-19)
-
-LM Studio 0.4.0 ships `n_parallel` slots over a unified KV cache; vLLM adds
-`--max-num-active-seqs` and orders its waiting queue by KV residency. Agave's
-server admits one request at a time, and `--max-batch-size` is inert.
-
-The shortcut does not exist. Switching slots by save/restore is the only route
-that avoids per-sequence block tables, and with `exportKvPrefix` +
-`saveSsmState` in place it would copy the whole KV cache on every switch:
-hundreds of megabytes at a 4096-token context, per interleave. That is slower
-than queueing, which is what the server already does.
-
-The real change is per-sequence block tables in the model layer. The parts
-look present, and are not connected:
-
-- `PagedKvCache`, `BlockAllocator` and `SeqBlockTable` work, and
-  `BlockAllocator.allocateSeqTable` already hands out independent sequences
-  over one shared pool.
-- Gemma 4 allocates a `paged_cache` and exactly one `seq_table`, then never
-  reads either from its attention path: `seq_table` appears only in init,
-  deinit, and `getBlockTable` (`src/models/gemma4.zig:1709`). The attention
-  path uses the flat `layer_keys` / `layer_values` arrays. No other
-  architecture has a paged cache at all.
-- `attention.pagedAttention` exists and is called only from that file's own
-  tests.
-- The `RadixTree` is metrics and queue priority only. The scheduler says so
-  at the insert site (`src/server/scheduler.zig:720`): "block sharing itself
-  is not wired yet, so prefill always recomputes". It stores
-  `model.getBlockTable()`, which is layer 0 of the one sequence.
-
-So the chain is: route attention through the paged view, per architecture;
-give each model N sequences; make the radix tree hand blocks back for reuse;
-then admit N requests. Nothing before the last step is observable, which is
-why there is no verifiable increment to land here.
-
-SWA-aware prefix retention (TODO 33) sits behind the same chain: freeing a
-sliding-window layer's aged KV early only means something once blocks are
-shared, and today they are not.
-
 ### Output-row tiling in the Metal Q8_0 GEMM (2026-10-19)
 
 `gemm_q8_0` runs one threadgroup per output row, so every threadgroup streams
@@ -207,6 +168,8 @@ Two things to carry forward rather than relearn:
 | Prefix-cache LRU eviction (`RadixTree.evictLru`); at the cap an insert evicts instead of refusing | SGLang |
 | Windowed SDPA on the backend's fused kernel (shifted cache base), so sliding-window layers stop attending to the whole sequence and read the window instead | llama.cpp / ggml |
 | Real per-head softmax stats from GPU SDPA, so mixed-tier attention merges one partial per tier instead of falling back to a full-sequence CPU pass | vLLM HiSparse |
+| Per-request KV sequences on Gemma 4 plus scheduler slot admission, so `--max-batch-size` binds instead of being inert | LM Studio / vLLM |
+| Sliding-window layers store their window instead of the whole context (`src/kvcache/window.zig`) | SGLang |
 | F16 KV attention on Metal (in-kernel dequant, `bits_k == 16`); `--kv-type f16` used to hit the unsupported-type panic despite being the default | llama.cpp |
 | `agave-bench` reports the minimum, not the median, with `--warmup-ms` for the GPU clock ramp | n/a |
 | `/v1/systemone` decision endpoint (noul / choice / score by logit read) | llama.cpp / vLLM / SGLang |
@@ -228,7 +191,9 @@ Two things to carry forward rather than relearn:
 | # | Feature | Impact | Source |
 |---|---------|--------|--------|
 | 14 | gRPC server (HTTP/2) | Lower overhead serving, use nginx/envoy for now | vLLM |
-| 33 | SWA-aware prefix-cache retention | Higher hit rate per byte on Gemma 4 and Llama 4. SGLang measured DeepSeek-V4-Flash token hit rate 43.8% → 60.8% and mean TTFT 1.57s → 1.07s. Needs `RadixNode.block_ids` split by layer class plus the model's per-layer window reaching `src/kvcache/manager.zig`. LRU eviction shipped, but the real prerequisite is block sharing: the radix tree is metrics-only today, so freeing a sliding-window layer's aged KV early frees nothing anyone would have reused. See "Per-request paged KV" above. | SGLang |
+| 33 | SWA-aware *prefix-cache* retention | The storage half shipped: a sliding-window layer holds its window instead of the whole context (`src/kvcache/window.zig`). What is left is the cross-request half, freeing a shared prefix's sliding-layer blocks early, which needs `RadixNode.block_ids` split by layer class and block sharing to exist at all. The radix tree is metrics-only today (`src/server/scheduler.zig`, the insert site), so there is nothing shared to free. SGLang measured hit rate 43.8% → 60.8% and mean TTFT 1.57s → 1.07s for the full thing. | SGLang |
+| 34 | Per-request KV on the remaining six architectures | Gemma 4 holds up to `max_kv_slots` sequences and the scheduler admits one request per sequence, so `--max-batch-size` binds there. Every other architecture reports one sequence through `Model.kvSlotCount` and still runs requests one at a time. Each needs its per-layer caches turned into per-slot sets the way `Gemma4Model.allocKvSlot` does. | LM Studio / vLLM |
+| 35 | Batched attention across slots | Slots interleave requests at token granularity; they do not batch the forward pass, so throughput per token is unchanged and the win is latency fairness. Batching the attention across resident sequences is the next step and needs the paged view wired first. | vLLM |
 
 ### Low Priority
 

@@ -337,7 +337,7 @@ light or dark setting.
 | `/ready` | GET | Readiness check |
 | `/metrics` | GET | Prometheus metrics |
 
-Server features: up to 64 concurrent connections, request scheduler (120s timeout), 30s connection read timeout, Bearer token auth, CORS support. The scheduler admits one request at a time while the model layer exposes a single shared KV sequence; `--max-batch-size` takes effect once per-request paged KV lands.
+Server features: up to 64 concurrent connections, request scheduler (120s timeout), 30s connection read timeout, Bearer token auth, CORS support. Concurrency is one running request per KV sequence the model holds: Gemma 4 gives each request its own, so `--max-batch-size` binds there, and an architecture with a single sequence still runs requests one at a time because two sharing a cache corrupt each other.
 
 ## Interactive REPL
 
@@ -504,7 +504,7 @@ agave [OPTIONS] <model> [prompt]
       --diffusion-canvas <N> DiffusionGemma canvas size [default: 256]
       --diffusion-confidence <F>  Diffusion acceptance threshold [default: 0.5]
       --sleep-after <N>    Server sleep after N seconds idle (0=off)
-      --max-batch-size <N> Server concurrent batch size [default: 8] (admission is one-at-a-time until per-request paged KV is wired)
+      --max-batch-size <N> Server concurrent batch size [default: 8] (capped by the model's KV sequence count; 1 on architectures with a single cache)
       --rate-limit-rpm <N> Server max requests/min (0=unlimited)
       --rate-limit-tpm <N> Server max prompt tokens/min (0=unlimited)
       --conv-store <PATH>  Persist web-UI conversations [default: $XDG_CACHE_HOME/agave/conversations.json]

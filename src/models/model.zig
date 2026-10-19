@@ -109,6 +109,8 @@ pub const Model = struct {
         set_layer_skip: *const fn (self: *anyopaque, start: u32, end: u32) void,
         set_image_embeddings: *const fn (self: *anyopaque, embeddings: ?[]const f32, n_tokens: u32, pad_token_id: u32) void,
         set_thread_context: *const fn (self: *anyopaque) void,
+        kv_slot_count: *const fn (self: *anyopaque) u32,
+        select_kv_slot: *const fn (self: *anyopaque, slot: u32) bool,
         ssm_state_bytes: *const fn (self: *anyopaque) usize,
         save_ssm_state: *const fn (self: *anyopaque, buf: []u8) usize,
         restore_ssm_state: *const fn (self: *anyopaque, snapshot: []const u8) void,
@@ -297,6 +299,20 @@ pub const Model = struct {
                     self.be.setThreadContext();
                 }
             }.call),
+            .kv_slot_count = @ptrCast(&struct {
+                fn call(self: *T) u32 {
+                    if (comptime @hasDecl(T, "kvSlotCount"))
+                        return self.kvSlotCount();
+                    return 1;
+                }
+            }.call),
+            .select_kv_slot = @ptrCast(&struct {
+                fn call(self: *T, slot: u32) bool {
+                    if (comptime @hasDecl(T, "selectKvSlot"))
+                        return self.selectKvSlot(slot);
+                    return slot == 0;
+                }
+            }.call),
             .ssm_state_bytes = @ptrCast(&struct {
                 fn call(self: *T) usize {
                     if (comptime @hasDecl(T, "ssmStateBytes"))
@@ -438,6 +454,24 @@ pub const Model = struct {
     /// runs on a different thread than the one that initialized the backend.
     pub fn setThreadContext(self: Model) void {
         self.vtable.set_thread_context(self.ptr);
+    }
+
+    /// Independent KV sequences this model can hold. 1 means the model has
+    /// one cache, so the server must finish a request before starting the
+    /// next; more means requests can interleave at token granularity, each
+    /// keeping its own cache.
+    pub fn kvSlotCount(self: Model) u32 {
+        return self.vtable.kv_slot_count(self.ptr);
+    }
+
+    /// Make `slot` the cache every later forward reads and writes. Returns
+    /// false when the slot does not exist or its buffers could not be
+    /// allocated, in which case the active slot is unchanged.
+    ///
+    /// Switching is a pointer swap, not a copy: the caller may do it
+    /// between any two forwards.
+    pub fn selectKvSlot(self: Model, slot: u32) bool {
+        return self.vtable.select_kv_slot(self.ptr, slot);
     }
 
     /// Bytes a full SSM snapshot needs. 0 on attention-only models, whose
@@ -1487,6 +1521,46 @@ pub const MockFormat = struct {
 
 /// Minimal mock model that satisfies the Model.from() comptime requirements.
 /// Used to test vtable dispatch without requiring a real backend or format.
+/// Mock that reports a configurable KV sequence count, so the scheduler can
+/// be tested against both a single-sequence model and a multi-slot one
+/// without constructing either for real.
+pub const SchedulerSlotMock = struct {
+    slots: u32 = 1,
+    selected: u32 = 0,
+    eos_token_id: u32 = 0,
+    vocab_size: u32 = 1,
+    n_layers: u32 = 1,
+    n_embd: u32 = 1,
+    n_head: u32 = 1,
+    n_head_kv: u32 = 1,
+    kv_seq_len: usize = 0,
+    logits_buf: []f32 = &.{},
+    cancelled: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    be: struct {
+        pub fn setThreadContext(_: *@This()) void {}
+    } = .{},
+
+    pub fn kvSlotCount(self: *const SchedulerSlotMock) u32 {
+        return self.slots;
+    }
+    pub fn selectKvSlot(self: *SchedulerSlotMock, slot: u32) bool {
+        if (slot >= self.slots) return false;
+        self.selected = slot;
+        return true;
+    }
+    pub fn forward(_: *SchedulerSlotMock, _: u32) ForwardError!u32 {
+        return 0;
+    }
+    pub fn prefill(_: *SchedulerSlotMock, _: []const u32) ForwardError!u32 {
+        return 0;
+    }
+    pub fn resetCache(_: *SchedulerSlotMock) void {}
+    pub fn cancel(_: *SchedulerSlotMock) void {}
+    pub fn getBlockTable(_: *SchedulerSlotMock) []const u32 {
+        return &.{};
+    }
+};
+
 const MockModel = struct {
     eos_token_id: u32 = 42,
     vocab_size: u32 = 1000,
@@ -2477,4 +2551,16 @@ test "fuzz: all model functions" {
             }
         }
     }.f, .{});
+}
+
+test "models without KV slots report one and accept only slot 0" {
+    // The capability is probed by @hasDecl, so a model that does not
+    // implement it must still answer coherently: one sequence, and any
+    // other slot refused rather than silently aliasing slot 0.
+    var mock = MockModel{};
+    const m = Model.from(MockModel, &mock);
+    try std.testing.expectEqual(@as(u32, 1), m.kvSlotCount());
+    try std.testing.expect(m.selectKvSlot(0));
+    try std.testing.expect(!m.selectKvSlot(1));
+    try std.testing.expect(!m.selectKvSlot(7));
 }

@@ -8133,11 +8133,12 @@ pub fn run(config: ServerConfig) !void {
     // The scheduler owns the model forward loop; HTTP handlers enqueue
     // requests and poll for results instead of calling model.forward() directly.
     const effective_batch_size: usize = if (config.max_batch_size > 0) config.max_batch_size else scheduler_max_batch_size;
-    // Admission runs one request at a time while the model layer exposes a
-    // single shared KV sequence (see scheduler.max_running_requests_single_sequence);
-    // `--max-batch-size` becomes effective concurrent decoding once per-request
-    // paged KV is wired end to end.
-    const admission_limit = @min(effective_batch_size, scheduler.max_running_requests_single_sequence);
+    // One running request per KV sequence the model can hold. A model with
+    // several lets `--max-batch-size` take effect, with each request
+    // keeping its own cache; one with a single sequence still runs them
+    // one at a time, because two interleaved requests on one cache corrupt
+    // each other silently.
+    const admission_limit = scheduler.admissionLimit(server.model, effective_batch_size);
     var request_manager = try scheduler.RequestManager.init(allocator, &server.metrics, effective_batch_size, scheduler_timeout_sec, tiered_cache, io);
     defer request_manager.deinit();
     server.request_manager = &request_manager;

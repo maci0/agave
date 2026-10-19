@@ -87,6 +87,18 @@ const default_moe_intermediate: u32 = 704;
 /// Maximum head dimension supported by Metal/GPU SDPA kernels. Layers with
 /// larger head_dim (e.g. global layers with hd=512) use CPU-side SDPA fallback.
 const gpu_sdpa_max_head_dim: usize = 256;
+/// Independent KV sequences a Gemma 4 model can hold. Each costs another
+/// full set of per-layer caches, so they are allocated on first use and a
+/// server that never interleaves requests pays for none of them.
+const max_kv_slots: u32 = 8;
+
+/// One KV sequence: its per-layer buffers and where it has got to.
+const KvSlot = struct {
+    keys: [][]f32,
+    values: [][]f32,
+    seq_len: usize,
+    base: [max_layers]usize,
+};
 
 // ── Attention scale ─────────────────────────────────────────────
 /// Gemma 4 uses QK norms instead of 1/sqrt(head_dim) scaling.
@@ -274,6 +286,9 @@ pub const Gemma4Model = struct {
     /// Absolute position stored at slot 0 of each layer. Nonzero only on a
     /// sliding layer that has compacted at least once.
     layer_kv_base: [max_layers]usize = @splat(0),
+    /// Extra KV sequences beyond slot 0, allocated on first selection.
+    kv_slots: [max_kv_slots]?KvSlot = @splat(null),
+    active_kv_slot: u32 = 0,
     /// One-shot guard so a skipped eviction logs once, not every interval.
     evict_window_warned: bool = false,
 
@@ -922,6 +937,23 @@ pub const Gemma4Model = struct {
     /// Release all heap allocations owned by this model.
     pub fn deinit(self: *Gemma4Model) void {
         self.be.sync();
+        // Extra KV sequences first, and put slot 0 back in place so the
+        // per-layer free below releases the buffers init allocated rather
+        // than whichever slot happened to be active.
+        if (self.active_kv_slot != 0) {
+            self.kv_slots[self.active_kv_slot] = self.liveKvSlot();
+            if (self.kv_slots[0]) |zero| {
+                self.installKvSlot(zero);
+                self.kv_slots[0] = null;
+            }
+            self.active_kv_slot = 0;
+        }
+        for (&self.kv_slots) |*maybe| {
+            if (maybe.*) |s| {
+                self.freeKvSlot(s);
+                maybe.* = null;
+            }
+        }
         // Free per-layer KV cache
         for (0..self.n_layers) |i| {
             if (self.kv_source[i] == @as(u32, @intCast(i))) {
@@ -1897,6 +1929,93 @@ pub const Gemma4Model = struct {
     /// Absolute position held at slot 0 of this layer's cache.
     fn kvBase(self: *const Gemma4Model, layer: usize) usize {
         return self.layer_kv_base[self.kv_source[layer]];
+    }
+
+    /// Independent KV sequences this model can hold. Slot 0 is the one
+    /// allocated at init; the rest are allocated the first time they are
+    /// selected, so a single-request server pays nothing for them.
+    pub fn kvSlotCount(_: *const Gemma4Model) u32 {
+        return max_kv_slots;
+    }
+
+    /// Make `slot` the active KV sequence.
+    ///
+    /// A pointer swap, not a copy: each slot owns its own per-layer buffers
+    /// and its own sequence length and window bases, and switching exchanges
+    /// which set the forward path sees. That is what lets the server
+    /// interleave requests at token granularity instead of running one to
+    /// completion before starting the next.
+    ///
+    /// Returns false when the slot index is out of range or its buffers
+    /// could not be allocated, leaving the active slot unchanged.
+    pub fn selectKvSlot(self: *Gemma4Model, slot: u32) bool {
+        if (slot >= max_kv_slots) return false;
+        if (slot == self.active_kv_slot) return true;
+
+        // Allocate on first use, before touching any live state, so a
+        // failure leaves the current slot intact.
+        if (self.kv_slots[slot] == null) {
+            self.kv_slots[slot] = self.allocKvSlot() catch return false;
+        }
+        self.kv_slots[self.active_kv_slot] = self.liveKvSlot();
+        self.installKvSlot(self.kv_slots[slot].?);
+        self.active_kv_slot = slot;
+        return true;
+    }
+
+    /// The live cache as a slot record.
+    fn liveKvSlot(self: *const Gemma4Model) KvSlot {
+        return .{
+            .keys = self.layer_keys,
+            .values = self.layer_values,
+            .seq_len = self.kv_seq_len,
+            .base = self.layer_kv_base,
+        };
+    }
+
+    fn installKvSlot(self: *Gemma4Model, s: KvSlot) void {
+        self.layer_keys = s.keys;
+        self.layer_values = s.values;
+        self.kv_seq_len = s.seq_len;
+        self.layer_kv_base = s.base;
+    }
+
+    /// Buffers for one additional sequence, laid out exactly like slot 0's
+    /// so every index and capacity already computed stays valid.
+    fn allocKvSlot(self: *Gemma4Model) !KvSlot {
+        const a = self.allocator;
+        const nl = self.n_layers;
+        const keys = try a.alloc([]f32, nl);
+        errdefer a.free(keys);
+        const values = try a.alloc([]f32, nl);
+        errdefer a.free(values);
+        @memset(keys, &.{});
+        @memset(values, &.{});
+        errdefer for (keys) |s| if (s.len > 0) a.free(s);
+        errdefer for (values) |s| if (s.len > 0) a.free(s);
+        for (0..nl) |i| {
+            // A shared layer has no storage of its own in slot 0 either;
+            // getLayerKvView redirects it to its source.
+            if (self.kv_source[i] != @as(u32, @intCast(i))) continue;
+            const n = self.layer_kv_cap[i] * self.layer_kvd[i];
+            keys[i] = try a.alloc(f32, n);
+            values[i] = try a.alloc(f32, n);
+            // A new sequence starts like a reset cache. Attention only
+            // reads below seq_len so this is not load bearing, but it costs
+            // one pass per slot and makes a slot indistinguishable from a
+            // freshly reset one.
+            @memset(keys[i], 0);
+            @memset(values[i], 0);
+        }
+        return .{ .keys = keys, .values = values, .seq_len = 0, .base = @splat(0) };
+    }
+
+    fn freeKvSlot(self: *Gemma4Model, s: KvSlot) void {
+        const a = self.allocator;
+        for (s.keys) |buf| if (buf.len > 0) a.free(buf);
+        for (s.values) |buf| if (buf.len > 0) a.free(buf);
+        a.free(s.keys);
+        a.free(s.values);
     }
 
     /// Whether any layer's slot 0 has moved off absolute position 0.
@@ -3484,4 +3603,73 @@ test "fuzz: all gemma4 functions" {
             }
         }
     }.f, .{});
+}
+
+test "KV slots are independent sequences and switching is a swap" {
+    // The scheduler interleaves requests by switching slots between
+    // forwards, so a slot must keep its own contents and its own sequence
+    // length, and switching must not copy or clobber either.
+    const allocator = std.testing.allocator;
+    const cap: usize = 4;
+    const kvd: usize = 2;
+    const keys = try allocator.alloc(f32, cap * kvd);
+    defer allocator.free(keys);
+    const vals = try allocator.alloc(f32, cap * kvd);
+    defer allocator.free(vals);
+    @memset(keys, 0);
+    @memset(vals, 0);
+    var layer_tables: [2][1][]f32 = undefined;
+    var cpu_be: backend_mod.CpuBackend = .{};
+    var m = kvOnlyModel(keys, vals, &layer_tables, &cpu_be);
+    m.allocator = allocator;
+    m.layer_kv_cap[0] = cap;
+    m.max_seq_len = cap;
+    defer {
+        // Only the lazily allocated slots: slot 0's buffers are the
+        // caller's `keys` / `vals` above.
+        if (m.active_kv_slot != 0) {
+            m.kv_slots[m.active_kv_slot] = m.liveKvSlot();
+            if (m.kv_slots[0]) |z| {
+                m.installKvSlot(z);
+                m.kv_slots[0] = null;
+            }
+            m.active_kv_slot = 0;
+        }
+        for (&m.kv_slots) |*s| {
+            if (s.*) |slot| {
+                m.freeKvSlot(slot);
+                s.* = null;
+            }
+        }
+    }
+
+    try std.testing.expect(m.kvSlotCount() > 1);
+
+    // Write a marker into slot 0 and advance its sequence.
+    m.layer_keys[0][0] = 11.0;
+    m.kv_seq_len = 3;
+
+    try std.testing.expect(m.selectKvSlot(1));
+    // A fresh slot starts empty and at position 0, not sharing slot 0's.
+    try std.testing.expectEqual(@as(usize, 0), m.kv_seq_len);
+    try std.testing.expectEqual(@as(f32, 0.0), m.layer_keys[0][0]);
+    m.layer_keys[0][0] = 22.0;
+    m.kv_seq_len = 1;
+
+    // Back to slot 0: its marker and position survived untouched.
+    try std.testing.expect(m.selectKvSlot(0));
+    try std.testing.expectEqual(@as(usize, 3), m.kv_seq_len);
+    try std.testing.expectEqual(@as(f32, 11.0), m.layer_keys[0][0]);
+
+    // And slot 1 kept its own.
+    try std.testing.expect(m.selectKvSlot(1));
+    try std.testing.expectEqual(@as(usize, 1), m.kv_seq_len);
+    try std.testing.expectEqual(@as(f32, 22.0), m.layer_keys[0][0]);
+
+    // Selecting the active slot is a no-op, and an out-of-range slot is
+    // refused without disturbing what is live.
+    try std.testing.expect(m.selectKvSlot(1));
+    try std.testing.expect(!m.selectKvSlot(max_kv_slots));
+    try std.testing.expectEqual(@as(usize, 1), m.kv_seq_len);
+    try std.testing.expectEqual(@as(f32, 22.0), m.layer_keys[0][0]);
 }

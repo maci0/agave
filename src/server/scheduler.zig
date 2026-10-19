@@ -46,18 +46,35 @@ const ms_per_second: f64 = 1000.0;
 /// Prevents unbounded memory growth under sustained load.
 const max_waiting_queue_size: usize = 1024;
 
-/// Requests that may sit in `running` at the same time.
+/// Requests that may sit in `running` at the same time when the model has
+/// only one KV sequence.
 ///
-/// The model layer currently exposes ONE shared KV sequence per model: a
-/// scalar `kv_seq_len` over a single-row `seq_table`. Two interleaved
-/// requests both prefill from position 0 into the same physical slots, so
-/// each silently corrupts the other's attention state and output (silent
-/// wrong completions, no error). Until Request.block_table is wired through
-/// the model vtable as a per-request sequence row, admission must stay
-/// serialized: requests queue and run one at a time, matching the direct
-/// path's whole-generation forward loop. Raise this to `max_batch_size`
-/// once paged per-request KV works end to end.
+/// Two interleaved requests on one cache both prefill from position 0 into
+/// the same physical slots, so each silently corrupts the other's attention
+/// state and output. A model that reports more than one slot
+/// (`Model.kvSlotCount`) gives each running request its own sequence and
+/// lifts this; one that does not keeps running them one at a time.
 pub const max_running_requests_single_sequence: usize = 1;
+
+/// Concurrently running requests this model can serve: one per KV sequence,
+/// never more than the configured batch size.
+pub fn admissionLimit(model: *Model, max_batch_size: usize) usize {
+    const slots: usize = @max(1, model.kvSlotCount());
+    if (slots <= 1) return @min(max_batch_size, max_running_requests_single_sequence);
+    return @min(max_batch_size, @min(slots, kv_slot_bits));
+}
+
+/// Slots the in-use bitmask can track.
+const kv_slot_bits: usize = 64;
+
+/// Lowest free KV sequence in `mask`, or null when all are taken.
+fn firstFreeSlot(mask: u64, slots: usize) ?u32 {
+    const n = @min(slots, kv_slot_bits);
+    for (0..n) |i| {
+        if (mask & (@as(u64, 1) << @intCast(i)) == 0) return @intCast(i);
+    }
+    return null;
+}
 
 /// Initial token output buffer capacity per request.
 /// Must be >= server's gen_ids_buf_size (4096) + cancellation margin.
@@ -119,6 +136,10 @@ fn sampleNextToken(req: *Request, model: *Model, greedy: u32) u32 {
 /// Per-request state for continuous batching.
 pub const Request = struct {
     id: u64,
+    /// KV sequence this request owns while it is running. Assigned on
+    /// admission and released when it leaves `running`, so no two
+    /// concurrent requests ever write the same cache.
+    kv_slot: u32 = 0,
     tokens: std.ArrayList(u32),
     last_token_id: u32,
     is_finished: std.atomic.Value(bool),
@@ -323,6 +344,9 @@ pub const RequestManager = struct {
     radix_tree: RadixTree,
     metrics: *Metrics,
     max_batch_size: usize,
+    /// One bit per KV sequence currently owned by a running request.
+    /// Guarded by `mutex` with the rest of the queue state.
+    kv_slots_in_use: u64 = 0,
     timeout_sec: u32,
     allocator: Allocator,
     mutex: Mutex,
@@ -477,6 +501,24 @@ pub const RequestManager = struct {
         return req;
     }
 
+    /// Hand a finished request's KV sequence back. Caller holds `mutex`.
+    /// Idempotent: a request that never got one owns slot 0, which the
+    /// single-sequence path also uses, and clearing a clear bit is a no-op.
+    fn releaseKvSlot(self: *RequestManager, req: *Request) void {
+        if (req.kv_slot >= kv_slot_bits) return;
+        self.kv_slots_in_use &= ~(@as(u64, 1) << @intCast(req.kv_slot));
+    }
+
+    /// Point the model at this request's KV sequence before running it.
+    /// A model with one sequence accepts slot 0 and nothing else, so this
+    /// is a no-op there.
+    fn useKvSlot(model: *Model, req: *Request) bool {
+        if (model.selectKvSlot(req.kv_slot)) return true;
+        std.log.err("req={d} could not select KV slot {d}; cancelling rather than sharing another request's cache", .{ req.id, req.kv_slot });
+        req.is_cancelled.store(true, .release);
+        return false;
+    }
+
     /// Execute one scheduler iteration.
     /// 1. Remove finished/cancelled requests from running
     /// 2. Check timeout on all running requests
@@ -500,10 +542,12 @@ pub const RequestManager = struct {
             while (i < self.running.items.len) {
                 const req = self.running.items[i];
                 if (req.is_finished.load(.acquire)) {
+                    self.releaseKvSlot(req);
                     _ = self.running.swapRemove(i);
                     self.completed_total += 1;
                     req.scheduler_done.store(true, .release);
                 } else if (req.is_cancelled.load(.acquire)) {
+                    self.releaseKvSlot(req);
                     _ = self.running.swapRemove(i);
                     self.cancelled_total += 1;
                     req.scheduler_done.store(true, .release);
@@ -556,15 +600,22 @@ pub const RequestManager = struct {
             // Reverse-iterate and skip non-ready entries so a single unready request
             // at the head does not block admission of lower-priority ready requests.
             {
-                const batch_limit = @min(self.max_batch_size, max_running_requests_single_sequence);
+                const slot_count: usize = @max(1, model.kvSlotCount());
+                const batch_limit = admissionLimit(model, self.max_batch_size);
                 var idx: usize = self.waiting.items.len;
                 while (idx > 0 and self.running.items.len < batch_limit) {
                     idx -= 1;
                     const candidate = self.waiting.items[idx];
                     if (!candidate.sampling_ready.load(.acquire)) continue;
                     if (candidate.is_cancelled.load(.acquire)) continue;
+                    // Claim a sequence before admitting: without one the
+                    // request would share another's cache.
+                    const slot = firstFreeSlot(self.kv_slots_in_use, slot_count) orelse break;
+                    candidate.kv_slot = slot;
+                    self.kv_slots_in_use |= @as(u64, 1) << @intCast(slot);
                     _ = self.waiting.orderedRemove(idx);
                     self.running.append(self.allocator, candidate) catch |err| {
+                        self.kv_slots_in_use &= ~(@as(u64, 1) << @intCast(slot));
                         // Re-queue to prevent request loss on allocation failure.
                         // If re-queue also fails (OOM), cancel the request so the
                         // handler thread unblocks instead of spinning forever.
@@ -699,7 +750,9 @@ pub const RequestManager = struct {
                 if (req.is_finished.load(.acquire)) continue;
                 if (req.prefill_pos < req.prompt_tokens) continue;
 
-                // Restore KV position for this request
+                // Point the model at this request's own KV sequence, then
+                // restore its position within it.
+                if (!useKvSlot(model, req)) continue;
                 model.setKvSeqLen(req.kv_position);
 
                 const greedy = model.forward(req.last_token_id) catch |err| {
@@ -745,7 +798,8 @@ pub const RequestManager = struct {
                 // tokens and corrupt recurrent state. See the note on
                 // RequestManager above.
 
-                // Restore KV position
+                // This request's own KV sequence, then its position in it.
+                if (!useKvSlot(model, req)) continue;
                 model.setKvSeqLen(req.kv_position);
 
                 // Process up to prefill_chunk_size tokens
@@ -1725,4 +1779,51 @@ test "fuzz: all scheduler functions" {
             }
         }
     }.f, .{});
+}
+
+test "firstFreeSlot hands out each sequence once" {
+    // Two running requests must never be given the same slot: they would
+    // write the same cache and corrupt each other silently, which is the
+    // whole reason admission was serialized before.
+    var mask: u64 = 0;
+    const slots: usize = 4;
+    for (0..slots) |expect| {
+        const got = firstFreeSlot(mask, slots) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqual(@as(u32, @intCast(expect)), got);
+        mask |= @as(u64, 1) << @intCast(got);
+    }
+    // All taken.
+    try std.testing.expect(firstFreeSlot(mask, slots) == null);
+
+    // Releasing the middle one makes exactly that slot available again.
+    mask &= ~(@as(u64, 1) << 1);
+    try std.testing.expectEqual(@as(?u32, 1), firstFreeSlot(mask, slots));
+}
+
+test "firstFreeSlot respects the model's slot count and the bitmask width" {
+    // A model with one sequence only ever yields slot 0.
+    try std.testing.expectEqual(@as(?u32, 0), firstFreeSlot(0, 1));
+    try std.testing.expect(firstFreeSlot(1, 1) == null);
+    // Never past the mask width, whatever the model claims.
+    try std.testing.expect(firstFreeSlot(std.math.maxInt(u64), 1000) == null);
+    try std.testing.expectEqual(@as(?u32, 63), firstFreeSlot(std.math.maxInt(u64) >> 1, 1000));
+}
+
+test "admissionLimit serializes a single-sequence model and opens up a multi-slot one" {
+    const model_mod = @import("../models/model.zig");
+    var mock = model_mod.SchedulerSlotMock{ .slots = 1 };
+    var one = model_mod.Model.from(model_mod.SchedulerSlotMock, &mock);
+    // One sequence: still one at a time, however large the batch size.
+    try std.testing.expectEqual(@as(usize, 1), admissionLimit(&one, 8));
+    try std.testing.expectEqual(@as(usize, 1), admissionLimit(&one, 1));
+
+    var multi_mock = model_mod.SchedulerSlotMock{ .slots = 4 };
+    var multi = model_mod.Model.from(model_mod.SchedulerSlotMock, &multi_mock);
+    // Several sequences: the batch size becomes the binding limit.
+    try std.testing.expectEqual(@as(usize, 4), admissionLimit(&multi, 8));
+    try std.testing.expectEqual(@as(usize, 2), admissionLimit(&multi, 2));
+    // And the model's count binds when it is the smaller of the two.
+    var big_mock = model_mod.SchedulerSlotMock{ .slots = 3 };
+    var big = model_mod.Model.from(model_mod.SchedulerSlotMock, &big_mock);
+    try std.testing.expectEqual(@as(usize, 3), admissionLimit(&big, 64));
 }
