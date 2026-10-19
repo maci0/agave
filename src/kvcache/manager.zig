@@ -210,11 +210,12 @@ const radix_max_depth: usize = 64;
 /// insert creates at most a split node plus a new child; the margin covers
 /// the walk reaching a second split.
 const radix_insert_reserve: usize = 4;
-/// Hard cap on total RadixTree nodes. LRU eviction is not deployed yet, so
-/// without a bound the tree grows with every distinct prompt prefix for the
-/// lifetime of the server. Once the cap is reached insert() fails with
-/// error.RadixTreeFull and the caller continues uncached (matchPrefix still
-/// serves everything already stored).
+/// Hard cap on total RadixTree nodes: without a bound the tree would grow
+/// with every distinct prompt prefix for the lifetime of the server. At the
+/// cap an insert evicts the coldest leaf (`evictLru`) and proceeds, so the
+/// bound costs the least recently used prefix rather than all future
+/// caching. `error.RadixTreeFull` survives for the case where nothing is
+/// evictable, and the caller then continues uncached.
 const radix_max_nodes: usize = 4096;
 
 /// Hash a token ID to a radix tree child bucket index.

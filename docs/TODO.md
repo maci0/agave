@@ -89,13 +89,32 @@ that avoids per-sequence block tables, and with `exportKvPrefix` +
 hundreds of megabytes at a 4096-token context, per interleave. That is slower
 than queueing, which is what the server already does.
 
-The real change is per-sequence block tables in the model layer, so each
-request owns a logical sequence over the shared `PagedKvCache`. The pieces
-exist (`PagedKvCache`, `RadixTree`, `pagedAttention`, `getBlockTable`), but
-every one of the seven architectures threads a single `kv_seq_len` and one
-flat cache through its forward pass. It is a rewrite of the model-layer KV
-contract, not an increment, and it has to land across all of them at once or
-the backends disagree about what a sequence is.
+The real change is per-sequence block tables in the model layer. The parts
+look present, and are not connected:
+
+- `PagedKvCache`, `BlockAllocator` and `SeqBlockTable` work, and
+  `BlockAllocator.allocateSeqTable` already hands out independent sequences
+  over one shared pool.
+- Gemma 4 allocates a `paged_cache` and exactly one `seq_table`, then never
+  reads either from its attention path: `seq_table` appears only in init,
+  deinit, and `getBlockTable` (`src/models/gemma4.zig:1709`). The attention
+  path uses the flat `layer_keys` / `layer_values` arrays. No other
+  architecture has a paged cache at all.
+- `attention.pagedAttention` exists and is called only from that file's own
+  tests.
+- The `RadixTree` is metrics and queue priority only. The scheduler says so
+  at the insert site (`src/server/scheduler.zig:720`): "block sharing itself
+  is not wired yet, so prefill always recomputes". It stores
+  `model.getBlockTable()`, which is layer 0 of the one sequence.
+
+So the chain is: route attention through the paged view, per architecture;
+give each model N sequences; make the radix tree hand blocks back for reuse;
+then admit N requests. Nothing before the last step is observable, which is
+why there is no verifiable increment to land here.
+
+SWA-aware prefix retention (TODO 33) sits behind the same chain: freeing a
+sliding-window layer's aged KV early only means something once blocks are
+shared, and today they are not.
 
 ### Output-row tiling in the Metal Q8_0 GEMM (2026-10-19)
 
@@ -209,7 +228,7 @@ Two things to carry forward rather than relearn:
 | # | Feature | Impact | Source |
 |---|---------|--------|--------|
 | 14 | gRPC server (HTTP/2) | Lower overhead serving, use nginx/envoy for now | vLLM |
-| 33 | SWA-aware prefix-cache retention | Higher hit rate per byte on Gemma 4 and Llama 4. SGLang measured DeepSeek-V4-Flash token hit rate 43.8% → 60.8% and mean TTFT 1.57s → 1.07s. Needs `RadixNode.block_ids` split by layer class plus the model's per-layer window reaching `src/kvcache/manager.zig`: the win is freeing the sliding-window layers' KV once it ages past the window while keeping the full-attention layers', which one flat block list per node cannot express. LRU eviction (the prerequisite) shipped. | SGLang |
+| 33 | SWA-aware prefix-cache retention | Higher hit rate per byte on Gemma 4 and Llama 4. SGLang measured DeepSeek-V4-Flash token hit rate 43.8% → 60.8% and mean TTFT 1.57s → 1.07s. Needs `RadixNode.block_ids` split by layer class plus the model's per-layer window reaching `src/kvcache/manager.zig`. LRU eviction shipped, but the real prerequisite is block sharing: the radix tree is metrics-only today, so freeing a sliding-window layer's aged KV early frees nothing anyone would have reused. See "Per-request paged KV" above. | SGLang |
 
 ### Low Priority
 
