@@ -2330,16 +2330,22 @@ pub const Qwen35Model = struct {
         }
     }
 
-    /// Save all SSM states (conv + recurrence) for prefix caching.
-    /// Returns owned memory that must be freed by the caller.
-    pub fn saveSsmState(self: *const Qwen35Model, allocator: std.mem.Allocator) ![]u8 {
+    /// Bytes `saveSsmState` writes. 0 when the model has no DeltaNet layers.
+    pub fn ssmStateBytes(self: *const Qwen35Model) usize {
         var total_bytes: usize = 0;
         for (0..self.n_layers) |i| {
             total_bytes += self.conv_states[i].len * @sizeOf(f32);
             total_bytes += self.ssm_states[i].len * @sizeOf(f32);
         }
-        if (total_bytes == 0) return &.{};
-        const buf = try allocator.alloc(u8, total_bytes);
+        return total_bytes;
+    }
+
+    /// Copy all SSM states (conv + recurrence) into `buf`, returning bytes
+    /// written. Returns 0 when `buf` is shorter than `ssmStateBytes()`, which
+    /// leaves the caller's snapshot empty rather than half written.
+    pub fn saveSsmState(self: *const Qwen35Model, buf: []u8) usize {
+        const total_bytes = self.ssmStateBytes();
+        if (total_bytes == 0 or buf.len < total_bytes) return 0;
         var pos: usize = 0;
         for (0..self.n_layers) |i| {
             const conv_bytes = self.conv_states[i].len * @sizeOf(f32);
@@ -2353,11 +2359,14 @@ pub const Qwen35Model = struct {
                 pos += ssm_bytes;
             }
         }
-        return buf;
+        return pos;
     }
 
-    /// Restore SSM states from a previously saved snapshot.
+    /// Restore SSM states from a previously saved snapshot. A snapshot of the
+    /// wrong length is ignored: a partial restore would mix states from two
+    /// positions, which is worse than keeping the current one.
     pub fn restoreSsmState(self: *Qwen35Model, snapshot: []const u8) void {
+        if (snapshot.len != self.ssmStateBytes()) return;
         var pos: usize = 0;
         for (0..self.n_layers) |i| {
             const conv_bytes = self.conv_states[i].len * @sizeOf(f32);
@@ -2887,9 +2896,11 @@ test "fuzz: all qwen35 functions" {
                 m.ssm_states[0] = &ssm0;
                 m.ssm_states[1] = &ssm1;
 
-                const snapshot = m.saveSsmState(allocator) catch return;
-                defer if (snapshot.len > 0) allocator.free(snapshot);
-                try std.testing.expect(snapshot.len > 0);
+                const total = m.ssmStateBytes();
+                try std.testing.expectEqual(@as(usize, 8 * @sizeOf(f32)), total);
+                const snapshot = allocator.alloc(u8, total) catch return;
+                defer allocator.free(snapshot);
+                try std.testing.expectEqual(total, m.saveSsmState(snapshot));
 
                 // Zero out, then restore
                 conv0 = .{ 0, 0 };
@@ -2899,6 +2910,15 @@ test "fuzz: all qwen35 functions" {
                 m.restoreSsmState(snapshot);
                 try std.testing.expectApproxEqAbs(@as(f32, 1.0), conv0[0], 1e-6);
                 try std.testing.expectApproxEqAbs(@as(f32, 8.0), ssm1[1], 1e-6);
+
+                // A buffer one byte short writes nothing rather than a prefix.
+                conv0 = .{ 0, 0 };
+                try std.testing.expectEqual(@as(usize, 0), m.saveSsmState(snapshot[0 .. total - 1]));
+                try std.testing.expectApproxEqAbs(@as(f32, 0.0), conv0[0], 1e-6);
+
+                // A snapshot of the wrong length is ignored, not half applied.
+                m.restoreSsmState(snapshot[0 .. total - 1]);
+                try std.testing.expectApproxEqAbs(@as(f32, 0.0), conv0[0], 1e-6);
             }
 
             // ── 11. getBlockTable: needs seq_table, verify via comptime ──
@@ -2922,6 +2942,7 @@ test "fuzz: all qwen35 functions" {
                 _ = &Qwen35Model.prefill;
                 _ = &Qwen35Model.sendKvCache;
                 _ = &Qwen35Model.recvKvCache;
+                _ = &Qwen35Model.ssmStateBytes;
                 _ = &Qwen35Model.saveSsmState;
                 _ = &Qwen35Model.restoreSsmState;
                 _ = &Qwen35Model.resetCache;

@@ -4700,6 +4700,11 @@ fn generateNPre(formatted: []const u8, reset: bool, max_tokens: usize, sampling:
         if (spec_decode.SpecState.init(g_server.allocator, g_server.spec_tokens, model.vocabSize())) |ok| {
             spec_state_storage = ok;
             spec_state_valid = true;
+            spec_state_storage.reserveSsmRewind(g_server.allocator, model) catch {
+                spec_state_storage.deinit(g_server.allocator);
+                spec_state_storage = spec_decode.SpecState{ .k = 0, .vocab_size = 0 };
+                spec_state_valid = false;
+            };
         } else |_| {
             spec_state_storage = spec_decode.SpecState{ .k = 0, .vocab_size = 0 };
         }
@@ -4719,6 +4724,7 @@ fn generateNPre(formatted: []const u8, reset: bool, max_tokens: usize, sampling:
 
         while (token_count < effective_max and !hit_eog) {
             const pre_draft_pos = model.kvSeqLen();
+            spec_state.beginRound(model);
             const is_self = (model.ptr == draft_model.ptr);
             const spec_pen: spec_decode.Penalties = .{
                 .history = gen_tokens[0..token_count],
@@ -6024,6 +6030,11 @@ fn generateAnthropicStream(stream: http.TcpStream, formatted: []const u8, max_to
         if (spec_decode.SpecState.init(g_server.allocator, g_server.spec_tokens, model.vocabSize())) |ok| {
             a_spec_storage = ok;
             a_spec_valid = true;
+            a_spec_storage.reserveSsmRewind(g_server.allocator, model) catch {
+                a_spec_storage.deinit(g_server.allocator);
+                a_spec_storage = spec_decode.SpecState{ .k = 0, .vocab_size = 0 };
+                a_spec_valid = false;
+            };
         } else |_| {
             a_spec_storage = spec_decode.SpecState{ .k = 0, .vocab_size = 0 };
         }
@@ -6049,6 +6060,7 @@ fn generateAnthropicStream(stream: http.TcpStream, formatted: []const u8, max_to
         while (token_count < max_tokens and !anth_disconnected) {
             if (token_ids.len == 0 or (token_count == 0 and g_server.isEog(first_gen_token))) break;
             const pre = model.kvSeqLen();
+            a_spec.beginRound(model);
             const is_self = (model.ptr == a_draft.ptr);
             const pen_a: spec_decode.Penalties = .{
                 .history = a_spec_tokens[0..a_spec_count],
@@ -6547,6 +6559,11 @@ fn generateResponsesStream(stream: http.TcpStream, prompt: []const u8, max_token
         if (spec_decode.SpecState.init(g_server.allocator, g_server.spec_tokens, model.vocabSize())) |ok| {
             r_spec_storage = ok;
             r_spec_valid = true;
+            r_spec_storage.reserveSsmRewind(g_server.allocator, model) catch {
+                r_spec_storage.deinit(g_server.allocator);
+                r_spec_storage = spec_decode.SpecState{ .k = 0, .vocab_size = 0 };
+                r_spec_valid = false;
+            };
         } else |_| {
             r_spec_storage = spec_decode.SpecState{ .k = 0, .vocab_size = 0 };
         }
@@ -6564,6 +6581,7 @@ fn generateResponsesStream(stream: http.TcpStream, prompt: []const u8, max_token
         while (token_count < max_tokens and !resp_disconnected) {
             if (token_ids.len == 0 or (token_count == 0 and g_server.isEog(first_gen_token))) break;
             const pre = model.kvSeqLen();
+            r_spec.beginRound(model);
             const is_self = (model.ptr == r_draft.ptr);
             const pen_r: spec_decode.Penalties = .{
                 .history = gen_tokens[0..token_count],
@@ -7346,6 +7364,11 @@ fn generateStream(stream: http.TcpStream, prompt: []const u8, req_id: u64, creat
         if (spec_decode.SpecState.init(g_server.allocator, g_server.spec_tokens, model.vocabSize())) |ok| {
             s_spec_storage = ok;
             s_spec_valid = true;
+            s_spec_storage.reserveSsmRewind(g_server.allocator, model) catch {
+                s_spec_storage.deinit(g_server.allocator);
+                s_spec_storage = spec_decode.SpecState{ .k = 0, .vocab_size = 0 };
+                s_spec_valid = false;
+            };
         } else |_| {
             s_spec_storage = spec_decode.SpecState{ .k = 0, .vocab_size = 0 };
         }
@@ -7372,6 +7395,7 @@ fn generateStream(stream: http.TcpStream, prompt: []const u8, req_id: u64, creat
         while (token_count < max_tokens and !stream_disconnected) {
             if (token_ids.len == 0 or (token_count == 0 and g_server.isEog(first_gen_token))) break;
             const pre = model.kvSeqLen();
+            s_spec.beginRound(model);
             const is_self = (model.ptr == s_draft.ptr);
             const pen_s: spec_decode.Penalties = .{
                 .history = s_spec_tokens[0..s_spec_count],

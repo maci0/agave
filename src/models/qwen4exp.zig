@@ -591,6 +591,53 @@ pub const Qwen4ExpModel = struct {
         self.cancelled.store(false, .release);
     }
 
+    /// Bytes `saveSsmState` writes: every per-position state `setKvSeqLen`
+    /// cannot rewind. That is the gated-DeltaNet conv and recurrence states
+    /// plus the PLE n-gram and conv histories.
+    pub fn ssmStateBytes(self: *const Qwen4ExpModel) usize {
+        var total: usize = 0;
+        for (self.conv_states) |s| total += s.len * @sizeOf(f32);
+        for (self.ssm_states) |s| total += s.len * @sizeOf(f32);
+        total += self.ple_conv_hist.len * @sizeOf(f32);
+        total += self.ple_tok_hist.len * @sizeOf(i32);
+        return total;
+    }
+
+    /// Copy recurrent state into `buf`, returning bytes written, or 0 when
+    /// `buf` is shorter than `ssmStateBytes()`.
+    pub fn saveSsmState(self: *const Qwen4ExpModel, buf: []u8) usize {
+        const total = self.ssmStateBytes();
+        if (total == 0 or buf.len < total) return 0;
+        var pos: usize = 0;
+        for (self.conv_states) |s| pos += copyOut(buf[pos..], std.mem.sliceAsBytes(s));
+        for (self.ssm_states) |s| pos += copyOut(buf[pos..], std.mem.sliceAsBytes(s));
+        pos += copyOut(buf[pos..], std.mem.sliceAsBytes(self.ple_conv_hist));
+        pos += copyOut(buf[pos..], std.mem.sliceAsBytes(self.ple_tok_hist));
+        return pos;
+    }
+
+    /// Restore recurrent state from a `saveSsmState` snapshot. A snapshot of
+    /// the wrong length is ignored: a partial restore would mix states from
+    /// two positions, which is worse than keeping the current one.
+    pub fn restoreSsmState(self: *Qwen4ExpModel, snapshot: []const u8) void {
+        if (snapshot.len != self.ssmStateBytes()) return;
+        var pos: usize = 0;
+        for (self.conv_states) |s| pos += copyIn(std.mem.sliceAsBytes(s), snapshot[pos..]);
+        for (self.ssm_states) |s| pos += copyIn(std.mem.sliceAsBytes(s), snapshot[pos..]);
+        pos += copyIn(std.mem.sliceAsBytes(self.ple_conv_hist), snapshot[pos..]);
+        pos += copyIn(std.mem.sliceAsBytes(self.ple_tok_hist), snapshot[pos..]);
+    }
+
+    fn copyOut(dst: []u8, src: []const u8) usize {
+        if (src.len > 0) @memcpy(dst[0..src.len], src);
+        return src.len;
+    }
+
+    fn copyIn(dst: []u8, src: []const u8) usize {
+        if (dst.len > 0) @memcpy(dst, src[0..dst.len]);
+        return dst.len;
+    }
+
     fn embToken(self: *Qwen4ExpModel, tok: u32) !void {
         const t = self.fmt.getTensor("token_embd.weight") orelse return error.MissingTensor;
         self.be.embLookup(.{ .data = t.data_ptr, .dtype = t.dtype }, tok, self.hidden.ptr, self.n_embd);

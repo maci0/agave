@@ -4759,6 +4759,10 @@ fn generateSpeculative(
     };
     spec_state.adaptive_k_enabled = true;
     defer spec_state.deinit(allocator);
+    spec_state.reserveSsmRewind(allocator, target) catch {
+        eprint("Error: failed to allocate speculative SSM rewind buffer\n", .{});
+        return;
+    };
 
     // FR-Spec: load token frequency map if provided
     var fr_spec_mask: ?[]bool = null;
@@ -4861,6 +4865,8 @@ fn generateSpeculative(
             }
         }
         const pre_draft_pos = target.kvSeqLen();
+        // Before drafting: self, ddtree and MTP modes draft through the target.
+        spec_state.beginRound(target);
         const spec_pen: spec_decode.Penalties = .{
             .history = gen_ids_buf[0..token_count],
             .repeat_penalty = cli.repeat_penalty,

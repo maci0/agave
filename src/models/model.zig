@@ -109,7 +109,8 @@ pub const Model = struct {
         set_layer_skip: *const fn (self: *anyopaque, start: u32, end: u32) void,
         set_image_embeddings: *const fn (self: *anyopaque, embeddings: ?[]const f32, n_tokens: u32, pad_token_id: u32) void,
         set_thread_context: *const fn (self: *anyopaque) void,
-        save_ssm_state: *const fn (self: *anyopaque, allocator: std.mem.Allocator) ?[]u8,
+        ssm_state_bytes: *const fn (self: *anyopaque) usize,
+        save_ssm_state: *const fn (self: *anyopaque, buf: []u8) usize,
         restore_ssm_state: *const fn (self: *anyopaque, snapshot: []const u8) void,
         mtp_forward: *const fn (self: *anyopaque, token_id: u32, depth: u32) ForwardError!u32,
         get_mtp_depth: *const fn (self: *anyopaque) u32,
@@ -149,7 +150,7 @@ pub const Model = struct {
     /// Create a polymorphic Model from a concrete model type.
     /// Required methods: forward, prefill, resetCache, cancel, getBlockTable.
     /// Required fields: eos_token_id, vocab_size, n_layers, n_embd, n_head, n_head_kv, kv_seq_len, logits_buf, be.
-    /// Optional methods (via @hasDecl): forwardTree, treeLogits, saveSsmState, restoreSsmState, mtpForward, resetMtpCache, forwardCanvas.
+    /// Optional methods (via @hasDecl): forwardTree, treeLogits, ssmStateBytes, saveSsmState, restoreSsmState, mtpForward, resetMtpCache, forwardCanvas.
     /// Optional fields (via @hasField): layer_skip_start, image_embeddings, image_pad_token_id, visual_token_idx, n_mtp_layers, mtp_logits_buf.
     pub fn from(comptime T: type, ptr: *T) Model {
         const vtable = comptime genVTable(T);
@@ -296,11 +297,18 @@ pub const Model = struct {
                     self.be.setThreadContext();
                 }
             }.call),
+            .ssm_state_bytes = @ptrCast(&struct {
+                fn call(self: *T) usize {
+                    if (comptime @hasDecl(T, "ssmStateBytes"))
+                        return self.ssmStateBytes();
+                    return 0;
+                }
+            }.call),
             .save_ssm_state = @ptrCast(&struct {
-                fn call(self: *T, allocator: std.mem.Allocator) ?[]u8 {
+                fn call(self: *T, buf: []u8) usize {
                     if (comptime @hasDecl(T, "saveSsmState"))
-                        return self.saveSsmState(allocator) catch null;
-                    return null;
+                        return self.saveSsmState(buf);
+                    return 0;
                 }
             }.call),
             .restore_ssm_state = @ptrCast(&struct {
@@ -432,12 +440,20 @@ pub const Model = struct {
         self.vtable.set_thread_context(self.ptr);
     }
 
-    /// Save SSM state for prefix caching (returns null if model has no SSM layers).
-    pub fn saveSsmState(self: Model, allocator: std.mem.Allocator) ?[]u8 {
-        return self.vtable.save_ssm_state(self.ptr, allocator);
+    /// Bytes a full SSM snapshot needs. 0 on attention-only models, whose
+    /// whole decode state is the KV cache and rewinds with `setKvSeqLen`.
+    pub fn ssmStateBytes(self: Model) usize {
+        return self.vtable.ssm_state_bytes(self.ptr);
     }
 
-    /// Restore SSM state from a cached snapshot.
+    /// Copy conv + recurrence state into `buf`, returning the bytes written
+    /// (0 if the model has no SSM layers or `buf` is too small). Allocation
+    /// free so speculative rounds can snapshot on the hot path.
+    pub fn saveSsmState(self: Model, buf: []u8) usize {
+        return self.vtable.save_ssm_state(self.ptr, buf);
+    }
+
+    /// Restore conv + recurrence state from a `saveSsmState` snapshot.
     pub fn restoreSsmState(self: Model, snapshot: []const u8) void {
         self.vtable.restore_ssm_state(self.ptr, snapshot);
     }
@@ -1721,10 +1737,12 @@ test "Model.from and vtable dispatch, treeLogits returns 0 for mock" {
     try std.testing.expectEqual(@as(u32, 0), m.treeLogits(0));
 }
 
-test "Model.from and vtable dispatch, saveSsmState returns null for mock" {
+test "Model.from and vtable dispatch, attention-only model reports no SSM state" {
     var mock = MockModel{};
     const m = Model.from(MockModel, &mock);
-    try std.testing.expect(m.saveSsmState(std.testing.allocator) == null);
+    var buf: [8]u8 = @splat(0);
+    try std.testing.expectEqual(@as(usize, 0), m.ssmStateBytes());
+    try std.testing.expectEqual(@as(usize, 0), m.saveSsmState(&buf));
 }
 
 test "Model.from and vtable dispatch, restoreSsmState no-op for mock" {
@@ -2399,8 +2417,10 @@ test "fuzz: all model functions" {
                 m.cancel();
                 std.debug.assert(mock.cancelled.load(.acquire));
 
-                // saveSsmState (null for mock)
-                std.debug.assert(m.saveSsmState(std.testing.allocator) == null);
+                // ssmStateBytes / saveSsmState (0 for mock: attention only)
+                var ssm_buf: [8]u8 = @splat(0);
+                std.debug.assert(m.ssmStateBytes() == 0);
+                std.debug.assert(m.saveSsmState(&ssm_buf) == 0);
 
                 // restoreSsmState (no-op for mock)
                 m.restoreSsmState(&[_]u8{ 1, 2, 3 });
