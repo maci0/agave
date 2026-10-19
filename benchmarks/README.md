@@ -56,6 +56,29 @@ A run where every entry skipped prints that nothing was verified and exits
 `0`: it has no evidence either way, and a machine without the models should
 not block a build. Read the skip list before trusting a green gate.
 
+## Measuring at all
+
+Every number here is a **minimum**, never a median or a mean.
+
+A kernel does identical work each iteration, so the spread between samples is
+contention, and contention only adds time. The minimum is the sample carrying
+least of it and the only statistic that does not move with machine load. The
+median moves with it directly: agave's Metal Q8_0 GEMM reported 156 and 332
+GFLOP/s for one shape minutes apart on a median, and 161.5-161.9 on a
+minimum. `agave-bench` prints `ns_min` with `ns_median` and `spread_pct`
+beside it; a wide spread means the machine was busy and the run is worth
+repeating.
+
+The minimum does not fix everything. On Apple silicon the GPU settles into
+one of two power states roughly 2x apart, and which one is chosen looks to be
+per process, not something in-process warmup controls. Six consecutive runs
+of the same GEMM measured 835, 827, 339, 833, 831 and 831 microseconds.
+
+So: **a single run is not a measurement.** Run both sides interleaved, several
+runs each, and compare the best. `scripts/perf-gate.py` does this with
+`BENCHMARK_REPEATS`. `--warmup-ms` covers the clock ramp (default 200 ms;
+`zig build validate` passes 0, since a correctness check does not care).
+
 ## Comparing fairly
 
 A baseline and the run measured against it have to match in workload, build

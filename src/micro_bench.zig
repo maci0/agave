@@ -37,6 +37,17 @@ const KvQuantType = kv_quant.KvQuantType;
 // ── Named constants ──────────────────────────────────────────────
 
 const warmup_iters: usize = 10;
+/// Default sustained work before any sample is kept, in milliseconds.
+/// Overridden by `--warmup-ms`; `zig build validate` passes 0 because a
+/// correctness check does not care how fast the kernel ran.
+///
+/// Ten iterations is not enough on a GPU that clocks up under load, so this
+/// covers the ramp. It does not cover everything: see the bistability note
+/// in `Timing`.
+const default_warmup_ms: u64 = 200;
+/// Sustained warmup before sampling, set once from `--warmup-ms` at startup
+/// and read only by `collectTiming`.
+var warmup_ns: u64 = default_warmup_ms * std.time.ns_per_ms;
 const default_iters: usize = 100;
 const max_samples: usize = 1000;
 const default_dim: usize = 4096;
@@ -276,6 +287,13 @@ fn parseCli(proc_args: std.process.Args) ?CliArgs {
                 eprint("Run 'agave-bench --help' for more information.\n", .{});
                 std.process.exit(2);
             };
+        } else if (getArgValue(args_slice, &i, "--warmup-ms")) |v| {
+            const ms = std.fmt.parseInt(u64, v, 10) catch {
+                eprint("Error: invalid value for --warmup-ms: '{s}'\n", .{v});
+                eprint("Run 'agave-bench --help' for more information.\n", .{});
+                std.process.exit(2);
+            };
+            warmup_ns = ms * std.time.ns_per_ms;
         } else if (getArgValue(args_slice, &i, "--iters")) |v| {
             result.iters = std.fmt.parseInt(usize, v, 10) catch {
                 eprint("Error: invalid value for --iters: '{s}'\n", .{v});
@@ -447,6 +465,8 @@ fn printUsage() void {
         \\                   E2E: tokens to generate [default: 10]
         \\  -k, --k <K>      Input dimension for GEMV [default: 4096]
         \\  --iters <N>      Number of timed iterations [default: 100, max: 1000]
+        \\  --warmup-ms <N>  Sustained work before sampling, in ms [default: 200].
+        \\                   Covers the GPU clock ramp; 0 for correctness runs.
         \\  --validate       Re-run the kernel on the CPU backend with the same inputs
         \\                   and report the largest relative difference. Exits non-zero
         \\                   when it exceeds the tolerance, so CI can gate on it
@@ -499,13 +519,50 @@ const NanoTimer = struct {
 /// Collects timing samples for a kernel invocation, returning the median in nanoseconds.
 /// Runs warmup_iters untimed iterations, then `iters` timed iterations with per-iteration
 /// timing via NanoTimer. Returns median of the sorted sample array.
-fn collectMedian(
+/// Timing of one kernel across its samples.
+pub const Timing = struct {
+    /// Fastest sample. This is the number every rate is derived from.
+    ///
+    /// A kernel does the same work every iteration, so the spread between
+    /// samples is contention, not the kernel: another process on the GPU, a
+    /// scheduler preemption, a thermal step. Those only ever add time, so
+    /// the minimum is the sample with the least of them in it and is the
+    /// only statistic here that does not move with machine load. The median
+    /// moves with it directly, which is how a Metal GEMM measured 156 and
+    /// 332 GFLOP/s for the same shape minutes apart and an A/B drew the
+    /// wrong conclusion from it.
+    /// What the minimum does not fix: on Apple silicon the GPU settles into
+    /// one of two power states roughly 2x apart, and which one is chosen
+    /// appears to be per process, not something in-process warmup controls.
+    /// Measured on an M4 Pro over six consecutive runs, the Q8_0 GEMM at
+    /// 4096x4096 reported 835, 827, 339, 833, 831 and 831 microseconds.
+    /// So a single run is not a measurement: compare by running both
+    /// binaries interleaved and taking the best of several runs each, which
+    /// is what `scripts/perf-gate.py` does.
+    min_ns: u64,
+    /// Middle sample. Reported alongside so the gap to `min_ns` shows how
+    /// loaded the machine was: a wide gap means the run competed for the
+    /// device, and a measurement taken then is worth re-taking.
+    median_ns: u64,
+
+    /// How much slower the median ran than the best sample, in percent.
+    pub fn spreadPct(self: Timing) f64 {
+        if (self.min_ns == 0) return 0.0;
+        const ratio = @as(f64, @floatFromInt(self.median_ns)) / @as(f64, @floatFromInt(self.min_ns));
+        return (ratio - 1.0) * 100.0;
+    }
+};
+
+fn collectTiming(
     comptime runFn: fn (*const BenchCtx) void,
     ctx: *const BenchCtx,
     iters: usize,
-) u64 {
-    // Warmup
-    for (0..warmup_iters) |_| {
+) Timing {
+    // Warm up to the device's sustained clock state. Sampling during the
+    // ramp measures the ramp, not the kernel.
+    var warm = NanoTimer.start();
+    var warmed: usize = 0;
+    while (warmed < warmup_iters or warm.read() < warmup_ns) : (warmed += 1) {
         runFn(ctx);
     }
 
@@ -520,9 +577,8 @@ fn collectMedian(
         samples[i] = timer.read();
     }
 
-    // Sort for median
     std.mem.sort(u64, samples[0..n], {}, std.sort.asc(u64));
-    return samples[n / 2];
+    return .{ .min_ns = samples[0], .median_ns = samples[n / 2] };
 }
 
 /// Context for benchmark invocations, holding all pre-allocated buffers and parameters.
@@ -1050,24 +1106,27 @@ fn fillSyntheticQ4_0(buf: []u8, n_rows: usize, k: usize) void {
 // ── Metrics computation ──────────────────────────────────────────
 
 /// Computes bandwidth in GB/s given total bytes transferred and median nanoseconds.
-fn computeGbps(total_bytes: usize, median_ns: u64) f64 {
-    if (median_ns == 0) return 0.0;
-    return @as(f64, @floatFromInt(total_bytes)) / @as(f64, @floatFromInt(median_ns));
+fn computeGbps(total_bytes: usize, ns: u64) f64 {
+    if (ns == 0) return 0.0;
+    return @as(f64, @floatFromInt(total_bytes)) / @as(f64, @floatFromInt(ns));
 }
 
 /// Computes GFLOP/s given total flops and median nanoseconds.
-fn computeGflops(total_flops: usize, median_ns: u64) f64 {
-    if (median_ns == 0) return 0.0;
-    return @as(f64, @floatFromInt(total_flops)) / @as(f64, @floatFromInt(median_ns));
+fn computeGflops(total_flops: usize, ns: u64) f64 {
+    if (ns == 0) return 0.0;
+    return @as(f64, @floatFromInt(total_flops)) / @as(f64, @floatFromInt(ns));
 }
 
 // ── JSON output ──────────────────────────────────────────────────
 
 /// Writes a single JSON result line to stdout.
-fn emitJson(kernel_name: []const u8, be_name: []const u8, median_ns: u64, gb_s: f64, gflop_s: f64, iters: usize) void {
+/// Emit one kernel result. Rates come from `timing.min_ns`, the load
+/// independent sample; `ns_median` and `spread_pct` travel with them so a
+/// reader can see whether the machine was busy enough to distrust the run.
+fn emitJson(kernel_name: []const u8, be_name: []const u8, timing: Timing, gb_s: f64, gflop_s: f64, iters: usize) void {
     print(
-        "{{\"mode\":\"kernel\",\"kernel\":\"{s}\",\"backend\":\"{s}\",\"ns_median\":{d},\"gb_s\":{d:.1},\"gflop_s\":{d:.1},\"iters\":{d}}}\n",
-        .{ kernel_name, be_name, median_ns, gb_s, gflop_s, iters },
+        "{{\"mode\":\"kernel\",\"kernel\":\"{s}\",\"backend\":\"{s}\",\"ns_min\":{d},\"ns_median\":{d},\"spread_pct\":{d:.1},\"gb_s\":{d:.1},\"gflop_s\":{d:.1},\"iters\":{d}}}\n",
+        .{ kernel_name, be_name, timing.min_ns, timing.median_ns, timing.spreadPct(), gb_s, gflop_s, iters },
     );
 }
 
@@ -1100,12 +1159,12 @@ fn benchKernel(kernel: Kernel, be: Backend, be_name: []const u8, n: usize, k: us
                 .k = k,
                 .td = td,
             };
-            const median_ns = if (reupload) collectMedian(runGemvReupload, &ctx, iters) else collectMedian(runGemv, &ctx, iters);
+            const timing = if (reupload) collectTiming(runGemvReupload, &ctx, iters) else collectTiming(runGemv, &ctx, iters);
             if (validate) validateVsCpu(runGemv, refillNone, &ctx, y, allocator, io, @tagName(kernel), be_name);
             // GEMV: read w[n*k] + x[k], write y[n]. Flops: ~2*n*k (k muls + k-1 adds per row).
             const total_bytes = n * k * @sizeOf(f32) + k * @sizeOf(f32) + n * @sizeOf(f32);
             const total_flops = 2 * n * k;
-            emitJson("gemv_f32", be_name, median_ns, computeGbps(total_bytes, median_ns), computeGflops(total_flops, median_ns), iters);
+            emitJson("gemv_f32", be_name, timing, computeGbps(total_bytes, timing.min_ns), computeGflops(total_flops, timing.min_ns), iters);
         },
 
         .gemv_bf16 => {
@@ -1128,11 +1187,11 @@ fn benchKernel(kernel: Kernel, be: Backend, be_name: []const u8, n: usize, k: us
                 .k = k,
                 .td = td,
             };
-            const median_ns = if (reupload) collectMedian(runGemvReupload, &ctx, iters) else collectMedian(runGemv, &ctx, iters);
+            const timing = if (reupload) collectTiming(runGemvReupload, &ctx, iters) else collectTiming(runGemv, &ctx, iters);
             if (validate) validateVsCpu(runGemv, refillNone, &ctx, y, allocator, io, @tagName(kernel), be_name);
             const total_bytes = n * k * @sizeOf(u16) + k * @sizeOf(f32) + n * @sizeOf(f32);
             const total_flops = 2 * n * k;
-            emitJson("gemv_bf16", be_name, median_ns, computeGbps(total_bytes, median_ns), computeGflops(total_flops, median_ns), iters);
+            emitJson("gemv_bf16", be_name, timing, computeGbps(total_bytes, timing.min_ns), computeGflops(total_flops, timing.min_ns), iters);
         },
 
         .gemv_f16 => {
@@ -1155,11 +1214,11 @@ fn benchKernel(kernel: Kernel, be: Backend, be_name: []const u8, n: usize, k: us
                 .k = k,
                 .td = td,
             };
-            const median_ns = if (reupload) collectMedian(runGemvReupload, &ctx, iters) else collectMedian(runGemv, &ctx, iters);
+            const timing = if (reupload) collectTiming(runGemvReupload, &ctx, iters) else collectTiming(runGemv, &ctx, iters);
             if (validate) validateVsCpu(runGemv, refillNone, &ctx, y, allocator, io, @tagName(kernel), be_name);
             const total_bytes = n * k * @sizeOf(f16) + k * @sizeOf(f32) + n * @sizeOf(f32);
             const total_flops = 2 * n * k;
-            emitJson("gemv_f16", be_name, median_ns, computeGbps(total_bytes, median_ns), computeGflops(total_flops, median_ns), iters);
+            emitJson("gemv_f16", be_name, timing, computeGbps(total_bytes, timing.min_ns), computeGflops(total_flops, timing.min_ns), iters);
         },
 
         .gemv_q8_0 => {
@@ -1186,11 +1245,11 @@ fn benchKernel(kernel: Kernel, be: Backend, be_name: []const u8, n: usize, k: us
                 .k = k,
                 .td = td,
             };
-            const median_ns = if (reupload) collectMedian(runGemvReupload, &ctx, iters) else collectMedian(runGemv, &ctx, iters);
+            const timing = if (reupload) collectTiming(runGemvReupload, &ctx, iters) else collectTiming(runGemv, &ctx, iters);
             if (validate) validateVsCpu(runGemv, refillNone, &ctx, y, allocator, io, @tagName(kernel), be_name);
             const total_bytes = total_w + k * @sizeOf(f32) + n * @sizeOf(f32);
             const total_flops = 2 * n * k;
-            emitJson("gemv_q8_0", be_name, median_ns, computeGbps(total_bytes, median_ns), computeGflops(total_flops, median_ns), iters);
+            emitJson("gemv_q8_0", be_name, timing, computeGbps(total_bytes, timing.min_ns), computeGflops(total_flops, timing.min_ns), iters);
         },
 
         .gemv_q4_k => {
@@ -1220,7 +1279,7 @@ fn benchKernel(kernel: Kernel, be: Backend, be_name: []const u8, n: usize, k: us
                 .k = k,
                 .td = td,
             };
-            const median_ns = if (reupload) collectMedian(runGemvReupload, &ctx, iters) else collectMedian(runGemv, &ctx, iters);
+            const timing = if (reupload) collectTiming(runGemvReupload, &ctx, iters) else collectTiming(runGemv, &ctx, iters);
             if (validate) validateVsCpu(runGemv, refillNone, &ctx, y, allocator, io, @tagName(kernel), be_name);
             const total_bytes = total_w + k * @sizeOf(f32) + n * @sizeOf(f32);
             const total_flops = 2 * n * k;
@@ -1237,7 +1296,7 @@ fn benchKernel(kernel: Kernel, be: Backend, be_name: []const u8, n: usize, k: us
                     const err = @abs(got - ref_y) / @max(1.0, @abs(ref_y));
                     if (err > max_err) max_err = err;
                 }
-                emitJson("gemv_q4_k", be_name, median_ns, computeGbps(total_bytes, median_ns), computeGflops(total_flops, median_ns), iters);
+                emitJson("gemv_q4_k", be_name, timing, computeGbps(total_bytes, timing.min_ns), computeGflops(total_flops, timing.min_ns), iters);
                 var dbg: usize = 0;
                 while (dbg < @min(check_rows, 4)) : (dbg += 1) {
                     var ref_y: f32 = 0;
@@ -1282,11 +1341,11 @@ fn benchKernel(kernel: Kernel, be: Backend, be_name: []const u8, n: usize, k: us
                 .k = k,
                 .td = td,
             };
-            const median_ns = if (reupload) collectMedian(runGemvReupload, &ctx, iters) else collectMedian(runGemv, &ctx, iters);
+            const timing = if (reupload) collectTiming(runGemvReupload, &ctx, iters) else collectTiming(runGemv, &ctx, iters);
             if (validate) validateVsCpu(runGemv, refillNone, &ctx, y, allocator, io, @tagName(kernel), be_name);
             const total_bytes = total_w + k * @sizeOf(f32) + n * @sizeOf(f32);
             const total_flops = 2 * n * k;
-            emitJson("gemv_q4_0", be_name, median_ns, computeGbps(total_bytes, median_ns), computeGflops(total_flops, median_ns), iters);
+            emitJson("gemv_q4_0", be_name, timing, computeGbps(total_bytes, timing.min_ns), computeGflops(total_flops, timing.min_ns), iters);
         },
 
         // ── Batched prefill ops ──────────────────────────────────
@@ -1307,9 +1366,9 @@ fn benchKernel(kernel: Kernel, be: Backend, be_name: []const u8, n: usize, k: us
             fillSyntheticQ5_0(w, n, k);
 
             var ctx = BenchCtx{ .be = be, .x = x, .y = y, .n = n, .k = k, .td = TensorData{ .data = w.ptr, .dtype = .q5_0 } };
-            const median_ns = if (reupload) collectMedian(runGemvReupload, &ctx, iters) else collectMedian(runGemv, &ctx, iters);
+            const timing = if (reupload) collectTiming(runGemvReupload, &ctx, iters) else collectTiming(runGemv, &ctx, iters);
             if (validate) validateVsCpu(runGemv, refillNone, &ctx, y, allocator, io, @tagName(kernel), be_name);
-            emitJson("gemv_q5_0", be_name, median_ns, computeGbps(n * row_bytes, median_ns), computeGflops(2 * n * k, median_ns), iters);
+            emitJson("gemv_q5_0", be_name, timing, computeGbps(n * row_bytes, timing.min_ns), computeGflops(2 * n * k, timing.min_ns), iters);
         },
 
         .gemv_q6_k => {
@@ -1326,9 +1385,9 @@ fn benchKernel(kernel: Kernel, be: Backend, be_name: []const u8, n: usize, k: us
             fillSyntheticQ6_K(w, n, k);
 
             var ctx = BenchCtx{ .be = be, .x = x, .y = y, .n = n, .k = k, .td = TensorData{ .data = w.ptr, .dtype = .q6_k } };
-            const median_ns = if (reupload) collectMedian(runGemvReupload, &ctx, iters) else collectMedian(runGemv, &ctx, iters);
+            const timing = if (reupload) collectTiming(runGemvReupload, &ctx, iters) else collectTiming(runGemv, &ctx, iters);
             if (validate) validateVsCpu(runGemv, refillNone, &ctx, y, allocator, io, @tagName(kernel), be_name);
-            emitJson("gemv_q6_k", be_name, median_ns, computeGbps(n * row_bytes, median_ns), computeGflops(2 * n * k, median_ns), iters);
+            emitJson("gemv_q6_k", be_name, timing, computeGbps(n * row_bytes, timing.min_ns), computeGflops(2 * n * k, timing.min_ns), iters);
         },
 
         // ── Quantized GEMV formats sharing one generic body ──────
@@ -1373,9 +1432,9 @@ fn benchKernel(kernel: Kernel, be: Backend, be_name: []const u8, n: usize, k: us
             fillSyntheticQuantBytes(w);
 
             var ctx = BenchCtx{ .be = be, .x = x, .y = y, .n = n, .k = k, .td = TensorData{ .data = w.ptr, .dtype = geom.dtype } };
-            const median_ns = if (reupload) collectMedian(runGemvReupload, &ctx, iters) else collectMedian(runGemv, &ctx, iters);
+            const timing = if (reupload) collectTiming(runGemvReupload, &ctx, iters) else collectTiming(runGemv, &ctx, iters);
             if (validate) validateVsCpu(runGemv, refillNone, &ctx, y, allocator, io, @tagName(kernel), be_name);
-            emitJson(@tagName(kernel), be_name, median_ns, computeGbps(n * row_bytes, median_ns), computeGflops(2 * n * k, median_ns), iters);
+            emitJson(@tagName(kernel), be_name, timing, computeGbps(n * row_bytes, timing.min_ns), computeGflops(2 * n * k, timing.min_ns), iters);
         },
 
         .gemm_q8_0 => {
@@ -1401,10 +1460,10 @@ fn benchKernel(kernel: Kernel, be: Backend, be_name: []const u8, n: usize, k: us
                 .k = k,
                 .td = TensorData{ .data = w.ptr, .dtype = .q8_0 },
             };
-            const median_ns = collectMedian(runGemm, &ctx, iters);
+            const timing = collectTiming(runGemm, &ctx, iters);
             if (validate) validateVsCpu(runGemm, refillNone, &ctx, y, allocator, io, @tagName(kernel), be_name);
             const total_bytes = n * row_bytes + n_tok * (k + n) * @sizeOf(f32);
-            emitJson("gemm_q8_0", be_name, median_ns, computeGbps(total_bytes, median_ns), computeGflops(2 * n_tok * n * k, median_ns), iters);
+            emitJson("gemm_q8_0", be_name, timing, computeGbps(total_bytes, timing.min_ns), computeGflops(2 * n_tok * n * k, timing.min_ns), iters);
         },
 
         .gemm_q4_0 => {
@@ -1430,10 +1489,10 @@ fn benchKernel(kernel: Kernel, be: Backend, be_name: []const u8, n: usize, k: us
                 .k = k,
                 .td = TensorData{ .data = w.ptr, .dtype = .q4_0 },
             };
-            const median_ns = collectMedian(runGemm, &ctx, iters);
+            const timing = collectTiming(runGemm, &ctx, iters);
             if (validate) validateVsCpu(runGemm, refillNone, &ctx, y, allocator, io, @tagName(kernel), be_name);
             const total_bytes = n * row_bytes + n_tok * (k + n) * @sizeOf(f32);
-            emitJson("gemm_q4_0", be_name, median_ns, computeGbps(total_bytes, median_ns), computeGflops(2 * n_tok * n * k, median_ns), iters);
+            emitJson("gemm_q4_0", be_name, timing, computeGbps(total_bytes, timing.min_ns), computeGflops(2 * n_tok * n * k, timing.min_ns), iters);
         },
 
         .rms_norm_batched => {
@@ -1457,9 +1516,9 @@ fn benchKernel(kernel: Kernel, be: Backend, be_name: []const u8, n: usize, k: us
                 .n = n,
                 .k = k,
             };
-            const median_ns = collectMedian(runRmsNormBatched, &ctx, iters);
+            const timing = collectTiming(runRmsNormBatched, &ctx, iters);
             if (validate) validateVsCpu(runRmsNormBatched, refillNone, &ctx, out, allocator, io, @tagName(kernel), be_name);
-            emitJson("rms_norm_batched", be_name, median_ns, computeGbps(2 * n_tok * n * @sizeOf(f32), median_ns), 0, iters);
+            emitJson("rms_norm_batched", be_name, timing, computeGbps(2 * n_tok * n * @sizeOf(f32), timing.min_ns), 0, iters);
         },
 
         .rope_batched => {
@@ -1485,9 +1544,9 @@ fn benchKernel(kernel: Kernel, be: Backend, be_name: []const u8, n: usize, k: us
                 .n = n,
                 .k = k,
             };
-            const median_ns = collectMedian(runRopeBatched, &ctx, iters);
+            const timing = collectTiming(runRopeBatched, &ctx, iters);
             if (validate) validateVsCpu(runRopeBatched, refillX, &ctx, x, allocator, io, @tagName(kernel), be_name);
-            emitJson("rope_batched", be_name, median_ns, computeGbps(2 * n_tok * stride * @sizeOf(f32), median_ns), 0, iters);
+            emitJson("rope_batched", be_name, timing, computeGbps(2 * n_tok * stride * @sizeOf(f32), timing.min_ns), 0, iters);
         },
 
         .sdpa_prefill => {
@@ -1553,7 +1612,7 @@ fn benchKernel(kernel: Kernel, be: Backend, be_name: []const u8, n: usize, k: us
                 .kv_type_v = .f32,
             };
             refillKvCache(&ctx);
-            const median_ns = collectMedian(runSdpaPrefill, &ctx, iters);
+            const timing = collectTiming(runSdpaPrefill, &ctx, iters);
 
             // Validate on a KV pair the timed loop never touched. ROCm keeps the
             // KV cache device-side and keyed by host address, so refilling host
@@ -1569,7 +1628,7 @@ fn benchKernel(kernel: Kernel, be: Backend, be_name: []const u8, n: usize, k: us
                 ctx.values = values2;
                 validateVsCpu(runSdpaPrefill, refillKvCache, &ctx, out, allocator, io, @tagName(kernel), be_name);
             }
-            emitJson("sdpa_prefill", be_name, median_ns, 0, 0, iters);
+            emitJson("sdpa_prefill", be_name, timing, 0, 0, iters);
         },
 
         .rms_norm_multi => {
@@ -1595,9 +1654,9 @@ fn benchKernel(kernel: Kernel, be: Backend, be_name: []const u8, n: usize, k: us
                 .n = n,
                 .k = k,
             };
-            const median_ns = collectMedian(runRmsNormMulti, &ctx, iters);
+            const timing = collectTiming(runRmsNormMulti, &ctx, iters);
             if (validate) validateVsCpu(runRmsNormMulti, refillX, &ctx, x, allocator, io, @tagName(kernel), be_name);
-            emitJson("rms_norm_multi", be_name, median_ns, computeGbps(2 * total * @sizeOf(f32), median_ns), 0, iters);
+            emitJson("rms_norm_multi", be_name, timing, computeGbps(2 * total * @sizeOf(f32), timing.min_ns), 0, iters);
         },
 
         .add_aliased, .silu_mul_aliased => {
@@ -1609,17 +1668,17 @@ fn benchKernel(kernel: Kernel, be: Backend, be_name: []const u8, n: usize, k: us
             fillSyntheticF32(y, synthetic_x_mod + 1, synthetic_x_scale, synthetic_x_offset);
 
             var ctx = BenchCtx{ .be = be, .x = x, .y = y, .n = n, .k = k };
-            const median_ns = if (kernel == .add_aliased)
-                collectMedian(runAddAliased, &ctx, iters)
+            const timing = if (kernel == .add_aliased)
+                collectTiming(runAddAliased, &ctx, iters)
             else
-                collectMedian(runSiluMulAliased, &ctx, iters);
+                collectTiming(runSiluMulAliased, &ctx, iters);
             if (validate) {
                 if (kernel == .add_aliased)
                     validateVsCpu(runAddAliased, refillX, &ctx, x, allocator, io, @tagName(kernel), be_name)
                 else
                     validateVsCpu(runSiluMulAliased, refillX, &ctx, x, allocator, io, @tagName(kernel), be_name);
             }
-            emitJson(@tagName(kernel), be_name, median_ns, computeGbps(3 * n * @sizeOf(f32), median_ns), 0, iters);
+            emitJson(@tagName(kernel), be_name, timing, computeGbps(3 * n * @sizeOf(f32), timing.min_ns), 0, iters);
         },
 
         // ── Ops the model uses that no benchmark reached ─────────
@@ -1636,17 +1695,17 @@ fn benchKernel(kernel: Kernel, be: Backend, be_name: []const u8, n: usize, k: us
             fillSyntheticF32(x, synthetic_x_mod, synthetic_x_scale, synthetic_x_offset);
 
             var ctx = BenchCtx{ .be = be, .x = x, .y = a, .norm_out = b, .n_heads = n_heads, .head_dim = head_dim, .n = n, .k = k };
-            const median_ns = if (kernel == .deinterleave)
-                collectMedian(runDeinterleave, &ctx, iters)
+            const timing = if (kernel == .deinterleave)
+                collectTiming(runDeinterleave, &ctx, iters)
             else
-                collectMedian(runSplitQGate, &ctx, iters);
+                collectTiming(runSplitQGate, &ctx, iters);
             if (validate) {
                 if (kernel == .deinterleave)
                     validateVsCpu(runDeinterleave, refillNone, &ctx, a, allocator, io, @tagName(kernel), be_name)
                 else
                     validateVsCpu(runSplitQGate, refillNone, &ctx, a, allocator, io, @tagName(kernel), be_name);
             }
-            emitJson(@tagName(kernel), be_name, median_ns, computeGbps(2 * total * @sizeOf(f32), median_ns), 0, iters);
+            emitJson(@tagName(kernel), be_name, timing, computeGbps(2 * total * @sizeOf(f32), timing.min_ns), 0, iters);
         },
 
         .add_rms_norm, .rms_norm_add, .gelu_mul, .clamped_silu_mul => {
@@ -1665,11 +1724,11 @@ fn benchKernel(kernel: Kernel, be: Backend, be_name: []const u8, n: usize, k: us
             var ctx = BenchCtx{ .be = be, .x = x, .y = y, .norm_weight = w_norm, .norm_out = out, .n = n, .k = k };
             // addRmsNorm mutates its first argument; rmsNormAdd accumulates into
             // its output. Both need more than the input restored between runs.
-            const median_ns = switch (kernel) {
-                .add_rms_norm => collectMedian(runAddRmsNorm, &ctx, iters),
-                .rms_norm_add => collectMedian(runRmsNormAdd, &ctx, iters),
-                .gelu_mul => collectMedian(runGeluMul, &ctx, iters),
-                else => collectMedian(runClampedSiluMul, &ctx, iters),
+            const timing = switch (kernel) {
+                .add_rms_norm => collectTiming(runAddRmsNorm, &ctx, iters),
+                .rms_norm_add => collectTiming(runRmsNormAdd, &ctx, iters),
+                .gelu_mul => collectTiming(runGeluMul, &ctx, iters),
+                else => collectTiming(runClampedSiluMul, &ctx, iters),
             };
             if (validate) switch (kernel) {
                 .add_rms_norm => validateVsCpu(runAddRmsNorm, refillAddRmsNorm, &ctx, out, allocator, io, @tagName(kernel), be_name),
@@ -1677,7 +1736,7 @@ fn benchKernel(kernel: Kernel, be: Backend, be_name: []const u8, n: usize, k: us
                 .gelu_mul => validateVsCpu(runGeluMul, refillNone, &ctx, out, allocator, io, @tagName(kernel), be_name),
                 else => validateVsCpu(runClampedSiluMul, refillNone, &ctx, out, allocator, io, @tagName(kernel), be_name),
             };
-            emitJson(@tagName(kernel), be_name, median_ns, computeGbps(3 * n * @sizeOf(f32), median_ns), 0, iters);
+            emitJson(@tagName(kernel), be_name, timing, computeGbps(3 * n * @sizeOf(f32), timing.min_ns), 0, iters);
         },
 
         .sigmoid_mul, .add_scaled => {
@@ -1690,17 +1749,17 @@ fn benchKernel(kernel: Kernel, be: Backend, be_name: []const u8, n: usize, k: us
 
             var ctx = BenchCtx{ .be = be, .x = x, .y = y, .n = n, .k = k };
             // Both write in place through x, so x is refilled between runs.
-            const median_ns = if (kernel == .sigmoid_mul)
-                collectMedian(runSigmoidMul, &ctx, iters)
+            const timing = if (kernel == .sigmoid_mul)
+                collectTiming(runSigmoidMul, &ctx, iters)
             else
-                collectMedian(runAddScaled, &ctx, iters);
+                collectTiming(runAddScaled, &ctx, iters);
             if (validate) {
                 if (kernel == .sigmoid_mul)
                     validateVsCpu(runSigmoidMul, refillX, &ctx, x, allocator, io, @tagName(kernel), be_name)
                 else
                     validateVsCpu(runAddScaled, refillX, &ctx, x, allocator, io, @tagName(kernel), be_name);
             }
-            emitJson(@tagName(kernel), be_name, median_ns, computeGbps(2 * n * @sizeOf(f32), median_ns), 0, iters);
+            emitJson(@tagName(kernel), be_name, timing, computeGbps(2 * n * @sizeOf(f32), timing.min_ns), 0, iters);
         },
 
         .gemv_t => {
@@ -1732,9 +1791,9 @@ fn benchKernel(kernel: Kernel, be: Backend, be_name: []const u8, n: usize, k: us
                 .k = k,
                 .td = TensorData{ .data = w.ptr, .dtype = .q8_0 },
             };
-            const median_ns = collectMedian(runGemvT, &ctx, iters);
+            const timing = collectTiming(runGemvT, &ctx, iters);
             if (validate) validateVsCpu(runGemvT, refillNone, &ctx, y, allocator, io, @tagName(kernel), be_name);
-            emitJson("gemv_t", be_name, median_ns, computeGbps(w.len + (n + k) * @sizeOf(f32), median_ns), 0, iters);
+            emitJson("gemv_t", be_name, timing, computeGbps(w.len + (n + k) * @sizeOf(f32), timing.min_ns), 0, iters);
         },
 
         .gemv_multi, .emb_lookup => {
@@ -1759,17 +1818,17 @@ fn benchKernel(kernel: Kernel, be: Backend, be_name: []const u8, n: usize, k: us
                 .k = k,
                 .td = TensorData{ .data = @ptrCast(w.ptr), .dtype = .f32 },
             };
-            const median_ns = switch (kernel) {
-                .gemv_multi => collectMedian(runGemvMulti, &ctx, iters),
-                .gemv_t => collectMedian(runGemvT, &ctx, iters),
-                else => collectMedian(runEmbLookup, &ctx, iters),
+            const timing = switch (kernel) {
+                .gemv_multi => collectTiming(runGemvMulti, &ctx, iters),
+                .gemv_t => collectTiming(runGemvT, &ctx, iters),
+                else => collectTiming(runEmbLookup, &ctx, iters),
             };
             if (validate) switch (kernel) {
                 .gemv_multi => validateVsCpu(runGemvMulti, refillNone, &ctx, y, allocator, io, @tagName(kernel), be_name),
                 .gemv_t => validateVsCpu(runGemvT, refillNone, &ctx, y, allocator, io, @tagName(kernel), be_name),
                 else => validateVsCpu(runEmbLookup, refillNone, &ctx, y, allocator, io, @tagName(kernel), be_name),
             };
-            emitJson(@tagName(kernel), be_name, median_ns, computeGbps(n * k * @sizeOf(f32), median_ns), 0, iters);
+            emitJson(@tagName(kernel), be_name, timing, computeGbps(n * k * @sizeOf(f32), timing.min_ns), 0, iters);
         },
 
         .rope_mrope => {
@@ -1779,9 +1838,9 @@ fn benchKernel(kernel: Kernel, be: Backend, be_name: []const u8, n: usize, k: us
             defer page.free(x);
             fillSyntheticF32(x, synthetic_x_mod, synthetic_x_scale, synthetic_x_offset);
             var ctx = BenchCtx{ .be = be, .x = x, .n_heads = n_heads, .head_dim = head_dim, .n = n, .k = k };
-            const median_ns = collectMedian(runRopeMrope, &ctx, iters);
+            const timing = collectTiming(runRopeMrope, &ctx, iters);
             if (validate) validateVsCpu(runRopeMrope, refillX, &ctx, x, allocator, io, @tagName(kernel), be_name);
-            emitJson("rope_mrope", be_name, median_ns, computeGbps(2 * n_heads * head_dim * @sizeOf(f32), median_ns), 0, iters);
+            emitJson("rope_mrope", be_name, timing, computeGbps(2 * n_heads * head_dim * @sizeOf(f32), timing.min_ns), 0, iters);
         },
 
         .all_reduce_add => {
@@ -1792,10 +1851,10 @@ fn benchKernel(kernel: Kernel, be: Backend, be_name: []const u8, n: usize, k: us
             fillSyntheticF32(x, synthetic_x_mod, synthetic_x_scale, synthetic_x_offset);
             fillSyntheticF32(y, synthetic_x_mod + 1, synthetic_x_scale, synthetic_x_offset);
             var ctx = BenchCtx{ .be = be, .x = x, .y = y, .n = n, .k = k };
-            const median_ns = collectMedian(runAllReduceAdd, &ctx, iters);
+            const timing = collectTiming(runAllReduceAdd, &ctx, iters);
             // Accumulates into x, so x is restored between runs.
             if (validate) validateVsCpu(runAllReduceAdd, refillX, &ctx, x, allocator, io, @tagName(kernel), be_name);
-            emitJson("all_reduce_add", be_name, median_ns, computeGbps(2 * n * @sizeOf(f32), median_ns), 0, iters);
+            emitJson("all_reduce_add", be_name, timing, computeGbps(2 * n * @sizeOf(f32), timing.min_ns), 0, iters);
         },
 
         .rms_norm => {
@@ -1816,13 +1875,13 @@ fn benchKernel(kernel: Kernel, be: Backend, be_name: []const u8, n: usize, k: us
                 .norm_out = out,
                 .n = n,
             };
-            const median_ns = collectMedian(runRmsNorm, &ctx, iters);
+            const timing = collectTiming(runRmsNorm, &ctx, iters);
             if (validate) validateVsCpu(runRmsNorm, refillNone, &ctx, ctx.norm_out.?, allocator, io, @tagName(kernel), be_name);
             // Read input[n] + weight[n], write output[n]
             const total_bytes = 3 * n * @sizeOf(f32);
             // Flops: square(n) + sum(n) + rsqrt(1) + mul(n) + mul(n) ~ 4n
             const total_flops = 4 * n;
-            emitJson("rms_norm", be_name, median_ns, computeGbps(total_bytes, median_ns), computeGflops(total_flops, median_ns), iters);
+            emitJson("rms_norm", be_name, timing, computeGbps(total_bytes, timing.min_ns), computeGflops(total_flops, timing.min_ns), iters);
         },
 
         .silu => {
@@ -1839,13 +1898,13 @@ fn benchKernel(kernel: Kernel, be: Backend, be_name: []const u8, n: usize, k: us
                 .y = y,
                 .n = n,
             };
-            const median_ns = collectMedian(runSilu, &ctx, iters);
+            const timing = collectTiming(runSilu, &ctx, iters);
             if (validate) validateVsCpu(runSilu, refillNone, &ctx, y, allocator, io, @tagName(kernel), be_name);
             // Read input[n], write output[n]
             const total_bytes = 2 * n * @sizeOf(f32);
             // Flops: exp(n) + add(n) + div(n) + mul(n) ~ 4n
             const total_flops = 4 * n;
-            emitJson("silu", be_name, median_ns, computeGbps(total_bytes, median_ns), computeGflops(total_flops, median_ns), iters);
+            emitJson("silu", be_name, timing, computeGbps(total_bytes, timing.min_ns), computeGflops(total_flops, timing.min_ns), iters);
         },
 
         .gelu => {
@@ -1862,11 +1921,11 @@ fn benchKernel(kernel: Kernel, be: Backend, be_name: []const u8, n: usize, k: us
                 .y = y,
                 .n = n,
             };
-            const median_ns = collectMedian(runGelu, &ctx, iters);
+            const timing = collectTiming(runGelu, &ctx, iters);
             if (validate) validateVsCpu(runGelu, refillNone, &ctx, y, allocator, io, @tagName(kernel), be_name);
             const total_bytes = 2 * n * @sizeOf(f32);
             const total_flops = 8 * n; // tanh + cube + several multiplies
-            emitJson("gelu", be_name, median_ns, computeGbps(total_bytes, median_ns), computeGflops(total_flops, median_ns), iters);
+            emitJson("gelu", be_name, timing, computeGbps(total_bytes, timing.min_ns), computeGflops(total_flops, timing.min_ns), iters);
         },
 
         .softmax => {
@@ -1880,12 +1939,12 @@ fn benchKernel(kernel: Kernel, be: Backend, be_name: []const u8, n: usize, k: us
                 .x = x,
                 .n = n,
             };
-            const median_ns = collectMedian(runSoftmax, &ctx, iters);
+            const timing = collectTiming(runSoftmax, &ctx, iters);
             if (validate) validateVsCpu(runSoftmax, refillX, &ctx, x, allocator, io, @tagName(kernel), be_name);
             // In-place: read + write n elements. 3 passes (max, exp-sum, div).
             const total_bytes = 2 * n * @sizeOf(f32);
             const total_flops = 5 * n; // max + exp + sum + sub + div
-            emitJson("softmax", be_name, median_ns, computeGbps(total_bytes, median_ns), computeGflops(total_flops, median_ns), iters);
+            emitJson("softmax", be_name, timing, computeGbps(total_bytes, timing.min_ns), computeGflops(total_flops, timing.min_ns), iters);
         },
 
         .l2_norm => {
@@ -1899,12 +1958,12 @@ fn benchKernel(kernel: Kernel, be: Backend, be_name: []const u8, n: usize, k: us
                 .x = x,
                 .n = n,
             };
-            const median_ns = collectMedian(runL2Norm, &ctx, iters);
+            const timing = collectTiming(runL2Norm, &ctx, iters);
             if (validate) validateVsCpu(runL2Norm, refillX, &ctx, x, allocator, io, @tagName(kernel), be_name);
             // In-place: read + write n elements
             const total_bytes = 2 * n * @sizeOf(f32);
             const total_flops = 3 * n; // square + sum + div
-            emitJson("l2_norm", be_name, median_ns, computeGbps(total_bytes, median_ns), computeGflops(total_flops, median_ns), iters);
+            emitJson("l2_norm", be_name, timing, computeGbps(total_bytes, timing.min_ns), computeGflops(total_flops, timing.min_ns), iters);
         },
 
         .add => {
@@ -1925,12 +1984,12 @@ fn benchKernel(kernel: Kernel, be: Backend, be_name: []const u8, n: usize, k: us
                 .norm_out = out,
                 .n = n,
             };
-            const median_ns = collectMedian(runAdd, &ctx, iters);
+            const timing = collectTiming(runAdd, &ctx, iters);
             if (validate) validateVsCpu(runAdd, refillNone, &ctx, ctx.norm_out.?, allocator, io, @tagName(kernel), be_name);
             // Read a[n] + b[n], write out[n]
             const total_bytes = 3 * n * @sizeOf(f32);
             const total_flops = n;
-            emitJson("add", be_name, median_ns, computeGbps(total_bytes, median_ns), computeGflops(total_flops, median_ns), iters);
+            emitJson("add", be_name, timing, computeGbps(total_bytes, timing.min_ns), computeGflops(total_flops, timing.min_ns), iters);
         },
 
         .mul => {
@@ -1951,11 +2010,11 @@ fn benchKernel(kernel: Kernel, be: Backend, be_name: []const u8, n: usize, k: us
                 .norm_out = out,
                 .n = n,
             };
-            const median_ns = collectMedian(runMul, &ctx, iters);
+            const timing = collectTiming(runMul, &ctx, iters);
             if (validate) validateVsCpu(runMul, refillNone, &ctx, ctx.norm_out.?, allocator, io, @tagName(kernel), be_name);
             const total_bytes = 3 * n * @sizeOf(f32);
             const total_flops = n;
-            emitJson("mul", be_name, median_ns, computeGbps(total_bytes, median_ns), computeGflops(total_flops, median_ns), iters);
+            emitJson("mul", be_name, timing, computeGbps(total_bytes, timing.min_ns), computeGflops(total_flops, timing.min_ns), iters);
         },
 
         .rope => {
@@ -1976,13 +2035,13 @@ fn benchKernel(kernel: Kernel, be: Backend, be_name: []const u8, n: usize, k: us
                 .n_heads = n_heads,
                 .head_dim = head_dim,
             };
-            const median_ns = collectMedian(runRope, &ctx, iters);
+            const timing = collectTiming(runRope, &ctx, iters);
             if (validate) validateVsCpu(runRope, refillX, &ctx, x, allocator, io, @tagName(kernel), be_name);
             // In-place: read + write total elements
             const total_bytes = 2 * total * @sizeOf(f32);
             // Flops: ~4 ops per element (2 rotations × 2 muls); sin/cos precomputed
             const total_flops = 4 * total;
-            emitJson("rope", be_name, median_ns, computeGbps(total_bytes, median_ns), computeGflops(total_flops, median_ns), iters);
+            emitJson("rope", be_name, timing, computeGbps(total_bytes, timing.min_ns), computeGflops(total_flops, timing.min_ns), iters);
         },
 
         .sdpa, .sdpa_turbo4, .sdpa_turbo3, .sdpa_turbo2 => {
@@ -2072,7 +2131,7 @@ fn benchKernel(kernel: Kernel, be: Backend, be_name: []const u8, n: usize, k: us
                 .kv_type_k = kv_type,
                 .kv_type_v = kv_type,
             };
-            const median_ns = collectMedian(runSdpa, &ctx, iters);
+            const timing = collectTiming(runSdpa, &ctx, iters);
             if (validate) validateVsCpu(runSdpa, refillNone, &ctx, ctx.sdpa_out.?, allocator, io, @tagName(kernel), be_name);
 
             // Bandwidth: turbo reads fewer bytes from KV cache
@@ -2090,7 +2149,7 @@ fn benchKernel(kernel: Kernel, be: Backend, be_name: []const u8, n: usize, k: us
                 .sdpa_turbo2 => "sdpa_turbo2",
                 else => "sdpa",
             };
-            emitJson(kernel_name, be_name, median_ns, computeGbps(total_bytes, median_ns), computeGflops(total_flops, median_ns), iters);
+            emitJson(kernel_name, be_name, timing, computeGbps(total_bytes, timing.min_ns), computeGflops(total_flops, timing.min_ns), iters);
         },
     }
 }
@@ -2435,7 +2494,7 @@ test "fuzz: micro_bench pure functions" {
                 _ = &eprintKernelList;
                 _ = &parseCli;
                 _ = &getArgValue;
-                _ = &collectMedian;
+                _ = &collectTiming;
                 _ = &wrapWords;
             }
 

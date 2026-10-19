@@ -38,6 +38,10 @@ BASELINES = "benchmarks/baselines.json"
 # Matches the "> 5% regression needs a written justification" rule in
 # CLAUDE.md, so the gate and the policy cannot drift apart.
 DEFAULT_TOLERANCE_PCT = 5.0
+# Benchmark runs per entry. The gate keeps the fastest, which is the sample
+# least contaminated by whatever else the machine was doing; see
+# `best_decode_tps`. More runs cost wall clock and buy a tighter floor.
+BENCHMARK_REPEATS = 3
 # Determinism runs are short: the check is whether two runs agree, not how
 # fast they are.
 DETERMINISM_TOKENS = 32
@@ -130,11 +134,27 @@ def run_greedy(binary: Path, entry: dict[str, Any], root: Path) -> str:
     return proc.stdout
 
 
+def best_decode_tps(binary: Path, entry: dict[str, Any], root: Path) -> float:
+    """Fastest decode throughput over `BENCHMARK_REPEATS` runs.
+
+    `--benchmark` times one real generation, so each sample carries whatever
+    else the machine was doing. Contention only ever adds time, so the
+    fastest run holds the least of it and is the only figure here that does
+    not move with load. A mean or a median moves with it directly: agave's
+    Metal GEMM measured 156 and 332 GFLOP/s for one shape minutes apart on a
+    median, and 161.5-161.9 on a minimum.
+    """
+    best = 0.0
+    for _ in range(BENCHMARK_REPEATS):
+        measured = run_benchmark(binary, entry, root)
+        best = max(best, float(measured.get("decode_tps", 0.0)))
+    return best
+
+
 def check_entry(binary: Path, entry: dict[str, Any], root: Path, tolerance: float) -> tuple[str, float, list[str]]:
     """Measure one entry. Returns its name, decode tok/s and any failures."""
     failures: list[str] = []
-    measured = run_benchmark(binary, entry, root)
-    decode_tps = float(measured.get("decode_tps", 0.0))
+    decode_tps = best_decode_tps(binary, entry, root)
 
     baseline = entry.get("decode_tps")
     if baseline is not None:

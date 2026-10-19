@@ -113,10 +113,15 @@ Two things to carry forward rather than relearn:
   under a non-constant bound is dynamically indexed, which Metal spills out
   of registers; it measured below both NR=1 and NR=4 everywhere. Any future
   tiling needs one kernel per NR, the way `gemv_tiled.metal` does it.
-- `agave-bench` varies about 2x run to run on the same shape (4096² Q8_0 GEMM
-  measured 155.9 and 332.2 GFLOP/s minutes apart). A single measurement
-  cannot support a perf claim here. Interleave candidate and baseline binaries
-  and take the best of several runs each, or use `zig build gate`.
+- The rejection was re-measured after `agave-bench` switched to reporting the
+  minimum instead of the median, interleaving the two binaries and taking the
+  best of three runs each. NR=4 is slower at every shape and gets worse with
+  size: -8.3% at 1024², -12.7% at 2048², -6.8% at n_out 4096 / n_in 1024,
+  -18.2% at n_out 1024 / n_in 4096, -22.9% at 4096², -26.4% at 8192x4096.
+  The original median-based numbers were not trustworthy; these are.
+- A single run is still not a measurement on Apple silicon: the GPU picks one
+  of two power states about 2x apart per process. See
+  [benchmarks/README.md](../benchmarks/README.md).
 
 ---
 

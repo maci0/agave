@@ -549,7 +549,7 @@ pub fn build(b: *std.Build) void {
         for (k_values) |kv| {
             for (kernels) |kern| {
                 const run = b.addRunArtifact(exe_bench);
-                run.addArgs(&.{ kern, "--backend", validate_backend, "--n", "1024", "--k", kv, "--iters", "3", "--validate" });
+                run.addArgs(&.{ kern, "--backend", validate_backend, "--n", "1024", "--k", kv, "--iters", "3", "--warmup-ms", "0", "--validate" });
                 run.expectExitCode(0);
                 validate_step.dependOn(&run.step);
             }
