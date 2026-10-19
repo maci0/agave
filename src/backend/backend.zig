@@ -1375,6 +1375,28 @@ pub const BackendState = struct {
         return @intCast(workers + 1);
     }
 
+    /// Abort when a GPU backend failed to build its own kernels.
+    ///
+    /// A missing driver or absent device is an environment fact and falling
+    /// back to CPU for it is the point of `--backend auto`. A shader that
+    /// does not compile is not: the device is there and the kernels in this
+    /// repo are wrong. Continuing on CPU hides a broken build behind a
+    /// warning and relabels its output as the GPU's, which is how a bad
+    /// kernel ships and how a benchmark reports CPU numbers under a GPU
+    /// name. Matches the fail-closed rule for a missing kernel at load.
+    ///
+    /// Compared by name so one helper covers backends with unrelated error
+    /// sets.
+    fn failClosedOnKernelDefect(name: []const u8, err: anyerror) void {
+        if (std.mem.eql(u8, @errorName(err), "ShaderCompileFailed")) {
+            std.log.err(
+                "{s}: kernel compilation failed. This is a defect in agave's shaders, not a missing device, so there is no fallback.",
+                .{name},
+            );
+            @panic("GPU kernel compilation failed");
+        }
+    }
+
     /// Initialize the requested compute backend, with automatic fallback.
     /// Must be called on a stack-allocated `BackendState`, the `be` field
     /// stores pointers into the struct's own backend fields.
@@ -1400,6 +1422,9 @@ pub const BackendState = struct {
         self.cpu_be.pool = &self.pool.?;
         self.be = blk: {
             switch (backend_choice) {
+                // Every GPU arm below funnels its init error through
+                // `failClosedOnKernelDefect` before considering the CPU
+                // fallback. See its doc comment for why.
                 .cpu => {
                     if (comptime build_options.enable_cpu) {
                         break :blk .{ .cpu = &self.cpu_be };
@@ -1410,6 +1435,7 @@ pub const BackendState = struct {
                 .metal => {
                     if (comptime build_options.enable_metal and builtin.os.tag == .macos) {
                         self.metal_be = MetalBackend.init(allocator) catch |err| {
+                            failClosedOnKernelDefect("Metal", err);
                             if (comptime build_options.enable_cpu) {
                                 std.log.warn("Metal unavailable ({s}), falling back to CPU", .{@errorName(err)});
                                 break :blk .{ .cpu = &self.cpu_be };
@@ -1432,6 +1458,7 @@ pub const BackendState = struct {
                 .vulkan => {
                     if (comptime build_options.enable_vulkan) {
                         self.vulkan_be = VulkanBackend.init(allocator, device_id) catch |err| {
+                            failClosedOnKernelDefect("Vulkan", err);
                             if (comptime build_options.enable_cpu) {
                                 std.log.warn("Vulkan unavailable ({s}), falling back to CPU", .{@errorName(err)});
                                 break :blk .{ .cpu = &self.cpu_be };
@@ -1448,6 +1475,7 @@ pub const BackendState = struct {
                 .cuda => {
                     if (comptime build_options.enable_cuda) {
                         self.cuda_be = CudaBackend.init(allocator, device_id) catch |err| {
+                            failClosedOnKernelDefect("CUDA", err);
                             if (comptime build_options.enable_cpu) {
                                 std.log.warn("CUDA unavailable ({s}), falling back to CPU", .{@errorName(err)});
                                 break :blk .{ .cpu = &self.cpu_be };
@@ -1465,6 +1493,7 @@ pub const BackendState = struct {
                 .rocm => {
                     if (comptime build_options.enable_rocm) {
                         self.rocm_be = RocmBackend.init(allocator, device_id) catch |err| {
+                            failClosedOnKernelDefect("ROCm", err);
                             if (comptime build_options.enable_cpu) {
                                 std.log.warn("ROCm unavailable ({s}), falling back to CPU", .{@errorName(err)});
                                 break :blk .{ .cpu = &self.cpu_be };
@@ -1482,6 +1511,7 @@ pub const BackendState = struct {
                 .webgpu => {
                     if (comptime build_options.enable_webgpu) {
                         self.webgpu_be = WebGpuBackend.init(allocator) catch |err| {
+                            failClosedOnKernelDefect("WebGPU", err);
                             if (comptime build_options.enable_cpu) {
                                 std.log.warn("WebGPU unavailable ({s}), falling back to CPU", .{@errorName(err)});
                                 break :blk .{ .cpu = &self.cpu_be };
@@ -3124,4 +3154,22 @@ test "fuzz: all backend functions" {
             }
         }
     }.f, .{});
+}
+
+test "a shader compile failure is fatal, a missing device is not" {
+    // The fallback exists for a machine without the driver. A shader that
+    // does not compile means agave's own kernels are broken with the device
+    // right there, and continuing on CPU relabels CPU output as the GPU's.
+    // Only the name is compared, so backends with unrelated error sets share
+    // one guard.
+    try std.testing.expect(std.mem.eql(u8, @errorName(error.ShaderCompileFailed), "ShaderCompileFailed"));
+    // Everything an absent device reports must stay fallback-eligible.
+    for ([_]anyerror{
+        error.NoDevice,
+        error.LibraryNotFound,
+        error.OutOfMemory,
+        error.DeviceCreationFailed,
+    }) |err| {
+        try std.testing.expect(!std.mem.eql(u8, @errorName(err), "ShaderCompileFailed"));
+    }
 }

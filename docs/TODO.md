@@ -52,6 +52,33 @@ and Vulkan (gfx1100) despite full kernel coverage.
 
 ---
 
+## Tried and rejected
+
+### Output-row tiling in the Metal Q8_0 GEMM (2026-10-19)
+
+`gemm_q8_0` runs one threadgroup per output row, so every threadgroup streams
+the whole of X: at `n_out = n_in = 4096` with 4 tokens that is 268 MB of X
+traffic against 18 MB of W. Holding 4 rows per threadgroup should cut the X
+passes fourfold, which is why `gemv_q8_0` carries `q8_0_nr = 4`.
+
+Measured on an M4 Pro, NR=4 is **slower at every shape**: -3% at 1024², -8%
+at n_out 4096 / n_in 1024, -11% at 2048², -19% at n_out 1024 / n_in 4096, and
+-44% at 4096². Tiling divides the grid by NR along with the traffic, and the
+M-series GPU wants the threadgroups more than it wants the bandwidth. Reverted.
+
+Two things to carry forward rather than relearn:
+
+- A runtime row count is far worse than either fixed value. `sums[r][ti]`
+  under a non-constant bound is dynamically indexed, which Metal spills out
+  of registers; it measured below both NR=1 and NR=4 everywhere. Any future
+  tiling needs one kernel per NR, the way `gemv_tiled.metal` does it.
+- `agave-bench` varies about 2x run to run on the same shape (4096² Q8_0 GEMM
+  measured 155.9 and 332.2 GFLOP/s minutes apart). A single measurement
+  cannot support a perf claim here. Interleave candidate and baseline binaries
+  and take the best of several runs each, or use `zig build gate`.
+
+---
+
 ## Performance
 
 | # | Issue | Status |
