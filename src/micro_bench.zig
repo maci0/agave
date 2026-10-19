@@ -151,6 +151,7 @@ const Kernel = enum {
     gemv_fp8_e4m3,
     gemv_fp8_e5m2,
     gemm_q8_0,
+    gemm_q4_0,
     rms_norm_batched,
     rope_batched,
     rms_norm_multi,
@@ -1406,6 +1407,35 @@ fn benchKernel(kernel: Kernel, be: Backend, be_name: []const u8, n: usize, k: us
             emitJson("gemm_q8_0", be_name, median_ns, computeGbps(total_bytes, median_ns), computeGflops(2 * n_tok * n * k, median_ns), iters);
         },
 
+        .gemm_q4_0 => {
+            const n_tok = batched_n_tok;
+            const x = page.alloc(f32, n_tok * k) catch return;
+            defer page.free(x);
+            const y = page.alloc(f32, n_tok * n) catch return;
+            defer page.free(y);
+            const nb = (k + quant_group_size - 1) / quant_group_size;
+            const row_bytes = nb * q4_0_block_bytes;
+            const w = page.alloc(u8, n * row_bytes) catch return;
+            defer page.free(w);
+
+            fillSyntheticF32(x, synthetic_x_mod, synthetic_x_scale, synthetic_x_offset);
+            fillSyntheticQ4_0(w, n, k);
+
+            var ctx = BenchCtx{
+                .be = be,
+                .x = x,
+                .y = y,
+                .n_tok = n_tok,
+                .n = n,
+                .k = k,
+                .td = TensorData{ .data = w.ptr, .dtype = .q4_0 },
+            };
+            const median_ns = collectMedian(runGemm, &ctx, iters);
+            if (validate) validateVsCpu(runGemm, refillNone, &ctx, y, allocator, io, @tagName(kernel), be_name);
+            const total_bytes = n * row_bytes + n_tok * (k + n) * @sizeOf(f32);
+            emitJson("gemm_q4_0", be_name, median_ns, computeGbps(total_bytes, median_ns), computeGflops(2 * n_tok * n * k, median_ns), iters);
+        },
+
         .rms_norm_batched => {
             const n_tok = batched_n_tok;
             const x = page.alloc(f32, n_tok * n) catch return;
@@ -1673,7 +1703,41 @@ fn benchKernel(kernel: Kernel, be: Backend, be_name: []const u8, n: usize, k: us
             emitJson(@tagName(kernel), be_name, median_ns, computeGbps(2 * n * @sizeOf(f32), median_ns), 0, iters);
         },
 
-        .gemv_multi, .gemv_t, .emb_lookup => {
+        .gemv_t => {
+            // gemvT reads Q8_0 blocks, not f32 rows: `in_dim` rows of
+            // ceil(out_dim/32) blocks, transposed against the normal GEMV
+            // layout. It used to share the f32 branch below with gemv_multi
+            // and emb_lookup, so both the kernel and the reference decoded
+            // f32 bytes as Q8_0. That compares two readings of garbage, and
+            // it reported a flat 1.0 relative error because Metal flushes the
+            // denormal f16 scales those bytes decode to while the CPU keeps
+            // them.
+            const x = page.alloc(f32, k) catch return;
+            defer page.free(x);
+            const y = page.alloc(f32, n) catch return;
+            defer page.free(y);
+            const blocks_per_row = (n + quant_group_size - 1) / quant_group_size;
+            const w = page.alloc(u8, k * blocks_per_row * q8_0_block_bytes) catch return;
+            defer page.free(w);
+
+            fillSyntheticF32(x, synthetic_x_mod, synthetic_x_scale, synthetic_x_offset);
+            // Rows are the input dimension and each row spans the outputs.
+            fillSyntheticQ8_0(w, k, n);
+
+            var ctx = BenchCtx{
+                .be = be,
+                .x = x,
+                .y = y,
+                .n = n,
+                .k = k,
+                .td = TensorData{ .data = w.ptr, .dtype = .q8_0 },
+            };
+            const median_ns = collectMedian(runGemvT, &ctx, iters);
+            if (validate) validateVsCpu(runGemvT, refillNone, &ctx, y, allocator, io, @tagName(kernel), be_name);
+            emitJson("gemv_t", be_name, median_ns, computeGbps(w.len + (n + k) * @sizeOf(f32), median_ns), 0, iters);
+        },
+
+        .gemv_multi, .emb_lookup => {
             const x = page.alloc(f32, k) catch return;
             defer page.free(x);
             const y = page.alloc(f32, n) catch return;

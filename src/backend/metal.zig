@@ -2062,8 +2062,15 @@ pub const MetalBackend = struct {
         setBuf(enc, y_ref, 2);
         setBytes(enc, @ptrCast(&od), @sizeOf(u32), 3);
         setBytes(enc, @ptrCast(&id), @sizeOf(u32), 4);
-        // One threadgroup per output element
-        self.endEncode1D(enc, self.pipe_gemv_t_q8_0, out_dim);
+        // One threadgroup per output element: the kernel reads `tgid` as the
+        // output index and strides the threadgroup's threads over `in_dim`
+        // before a threadgroup reduction. `endEncode1D` dispatches `out_dim`
+        // *threads*, which gave `ceil(out_dim / tg)` groups instead, so all
+        // but the first few outputs were never written. Its threadgroup size
+        // is also the pipeline maximum, which on Apple GPUs is 1024 and
+        // overruns the kernel's 8-entry reduction scratch; `threadgroup_size`
+        // is the 256 that scratch is sized for.
+        self.endEncodeThreadgroups(enc, out_dim, threadgroup_size);
     }
 
     // ── Add Scaled ────────────────────────────────────────────

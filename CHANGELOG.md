@@ -13,6 +13,7 @@ must still appear under **Changed** or **Breaking** below. See
 
 ### Fixed
 - Speculative decoding corrupted recurrent state on hybrid models. Verification rewinds the target with `setKvSeqLen` and replays the accepted prefix, which is exact for attention and a no-op for the DeltaNet conv and recurrence states, so the replay double-consumed the prefix and drifted further every round. Affected Qwen 3.5 and Qwen4-Exp on `--spec-mode self`, `ddtree` and `mtp`, and on the tree-verify replay path.
+- Three Metal kernels produced wrong results. `gemm_q8_0` and `gemm_q4_0` truncated the quantization block count that is also their row stride, so any input width off a 32-element multiple read every row after the first from the wrong offset; their tail block also ran past the token's row into the next token's activations. `gemv_t` was dispatched as `out_dim` threads instead of the `out_dim` threadgroups it is written for, leaving most outputs unwritten. `zig build validate -Dvalidate-backend=metal` now passes; it reported three failures before.
 - `--spec-mode` silently disabled `--top-k`, `--top-p`, `--min-p` and `--xtc-*`: verification compared draft tokens against an untruncated softmax and drew its bonus token with truncation off, so speculative and non-speculative decoding sampled from different distributions.
 
 ### Added

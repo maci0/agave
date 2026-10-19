@@ -524,17 +524,18 @@ pub fn build(b: *std.Build) void {
     const validate_step = b.step("validate", "Validate every GPU kernel against the CPU backend");
     {
         const kernels = [_][]const u8{
-            "gemv_f32",         "gemv_f16",      "gemv_bf16",      "gemv_q8_0",
-            "gemv_q4_0",        "gemv_q4_1",     "gemv_q5_0",      "gemv_q2_k",
-            "gemv_q3_k",        "gemv_q4_k",     "gemv_q5_k",      "gemv_q6_k",
-            "gemv_iq4_nl",      "gemv_iq4_xs",   "gemv_tq1_0",     "gemv_tq2_0",
-            "gemv_fp8_e4m3",    "gemv_fp8_e5m2", "gemm_q8_0",      "rms_norm_batched",
-            "rope_batched",     "sdpa_prefill",  "rms_norm_multi", "rms_norm",
-            "silu",             "gelu",          "softmax",        "l2_norm",
-            "add",              "mul",           "rope",           "add_aliased",
-            "silu_mul_aliased", "deinterleave",  "split_q_gate",   "add_rms_norm",
-            "rms_norm_add",     "sigmoid_mul",   "gelu_mul",       "clamped_silu_mul",
-            "add_scaled",       "gemv_multi",    "gemv_t",         "emb_lookup",
+            "gemv_f32",         "gemv_f16",         "gemv_bf16",    "gemv_q8_0",
+            "gemv_q4_0",        "gemv_q4_1",        "gemv_q5_0",    "gemv_q2_k",
+            "gemv_q3_k",        "gemv_q4_k",        "gemv_q5_k",    "gemv_q6_k",
+            "gemv_iq4_nl",      "gemv_iq4_xs",      "gemv_tq1_0",   "gemv_tq2_0",
+            "gemv_fp8_e4m3",    "gemv_fp8_e5m2",    "gemm_q8_0",    "gemm_q4_0",
+            "rms_norm_batched", "rope_batched",     "sdpa_prefill", "rms_norm_multi",
+            "rms_norm",         "silu",             "gelu",         "softmax",
+            "l2_norm",          "add",              "mul",          "rope",
+            "add_aliased",      "silu_mul_aliased", "deinterleave", "split_q_gate",
+            "add_rms_norm",     "rms_norm_add",     "sigmoid_mul",  "gelu_mul",
+            "clamped_silu_mul", "add_scaled",       "gemv_multi",   "gemv_t",
+            "emb_lookup",
         };
         // Deliberately absent:
         //   rope_mrope     - CPU and Metal only; it panics on ROCm and Vulkan by
