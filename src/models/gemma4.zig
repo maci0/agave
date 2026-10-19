@@ -27,6 +27,7 @@ const quant = @import("../ops/quant.zig");
 const perf = @import("../perf.zig");
 const kv_quant = @import("../ops/kv_quant.zig");
 const kv_evict = @import("../ops/kv_evict.zig");
+const kv_window = @import("../kvcache/window.zig");
 const prefix_header = @import("../kvcache/prefix_header.zig");
 const kvcache = @import("../kvcache/manager.zig");
 const block_alloc_mod = @import("../kvcache/block_allocator.zig");
@@ -267,6 +268,14 @@ pub const Gemma4Model = struct {
     layer_values: [][]f32 = &.{},
     /// Per-layer KV dimension (nkv * hd for that layer).
     layer_kvd: [max_layers]usize = @splat(0),
+    /// Slots allocated per layer. A sliding-window layer holds two windows
+    /// rather than the whole context; a global layer holds `max_seq_len`.
+    layer_kv_cap: [max_layers]usize = @splat(0),
+    /// Absolute position stored at slot 0 of each layer. Nonzero only on a
+    /// sliding layer that has compacted at least once.
+    layer_kv_base: [max_layers]usize = @splat(0),
+    /// One-shot guard so a skipped eviction logs once, not every interval.
+    evict_window_warned: bool = false,
 
     // These fields are kept for Model vtable compatibility (ensureKvBlock, resetKvCache)
     paged_cache: PagedKvCache = undefined,
@@ -785,7 +794,17 @@ pub const Gemma4Model = struct {
                 self.layer_keys[i] = &.{};
                 self.layer_values[i] = &.{};
             } else {
-                const slot_size = max_sl * self.layer_kvd[i];
+                // A sliding-window layer can never read past its window, so
+                // it holds two windows rather than the whole context and
+                // compacts when it reaches the end (src/kvcache/window.zig).
+                // At a 32k context with a 1024 window that is 16x less per
+                // sliding layer, and most of Gemma 4's layers are sliding.
+                const slots = if (!is_gl and sliding_window > 0)
+                    kv_window.capacityFor(sliding_window, default_chunk_size, max_sl)
+                else
+                    max_sl;
+                self.layer_kv_cap[i] = slots;
+                const slot_size = slots * self.layer_kvd[i];
                 self.layer_keys[i] = try allocator.alloc(f32, slot_size);
                 self.layer_values[i] = try allocator.alloc(f32, slot_size);
             }
@@ -1288,13 +1307,17 @@ pub const Gemma4Model = struct {
                 self.be.ropeBatched(self.pf_k.ptr, self.pf_positions.ptr, n_tok, nkv, hd, rd, self.sl_rope_theta);
             }
 
-            // Write K/V to cache for all tokens
+            // Write K/V to cache for all tokens. Reserve the whole batch
+            // first so a sliding layer's base is fixed for every write below
+            // and for the attention loop that reads them back.
             self.be.sync();
+            if (n_tok > 0) _ = self.prepareKvBatch(li, self.pf_positions[0], n_tok);
+            const kv_base = self.kvBase(li);
             const kv_view = self.getLayerKvView(li);
             for (0..n_tok) |t| {
-                const pos = self.pf_positions[t];
-                const k_off = @as(usize, pos) * kv_dim;
-                const v_off = @as(usize, pos) * kv_dim;
+                const pos = @as(usize, self.pf_positions[t]) - kv_base;
+                const k_off = pos * kv_dim;
+                const v_off = pos * kv_dim;
                 @memcpy(kv_view.keys[k_off..][0..kv_dim], self.pf_k[t * kv_dim ..][0..kv_dim]);
                 @memcpy(kv_view.values[v_off..][0..kv_dim], self.pf_v[t * kv_dim ..][0..kv_dim]);
             }
@@ -1323,14 +1346,17 @@ pub const Gemma4Model = struct {
         const kv_values_bytes: []u8 = std.mem.sliceAsBytes(kv_view.values);
         const scale: f32 = attn_scale;
 
+        // Local coordinates: the write loop above fixed this layer's base
+        // for the whole batch, so every index here is relative to it.
+        const attn_base = self.kvBase(li);
         for (0..n_tok) |t| {
-            const pos = self.pf_positions[t];
-            const sl = @as(usize, pos) + 1;
+            const pos = @as(usize, self.pf_positions[t]) - attn_base;
+            const sl = pos + 1;
 
             // For shared layers, re-read source K/V at current position
             if (!has_own_kv) {
-                const k_off = @as(usize, pos) * kv_dim;
-                const v_off = @as(usize, pos) * kv_dim;
+                const k_off = pos * kv_dim;
+                const v_off = pos * kv_dim;
                 @memcpy(self.k_buf[0..kv_dim], kv_view.keys[k_off..][0..kv_dim]);
                 @memcpy(self.v_buf[0..kv_dim], kv_view.values[v_off..][0..kv_dim]);
             } else {
@@ -1622,6 +1648,9 @@ pub const Gemma4Model = struct {
     /// Reset the KV cache position for a new conversation.
     pub fn resetCache(self: *Gemma4Model) void {
         model_mod.resetKvCache(self);
+        // A stale base would place the next sequence's first token deep into
+        // the cache, or trip the assert in `place`.
+        self.layer_kv_base = @splat(0);
     }
 
     /// Signal an in-progress forward pass to abort. Thread-safe.
@@ -1651,6 +1680,11 @@ pub const Gemma4Model = struct {
     /// kv_seq_len).
     pub fn exportKvPrefix(self: *Gemma4Model, dst: []u8, n_tokens: usize) usize {
         if (n_tokens > self.kv_seq_len or n_tokens > self.max_seq_len) return 0;
+        // The blob is positions [0, n_tokens) read from slot 0 onward. Once
+        // a sliding layer has compacted, slot 0 is not position 0 and the
+        // older part of the prefix is gone, so there is no such blob to
+        // hand out.
+        if (self.anyLayerCompacted()) return 0;
         if (!prefix_header.write(dst, self.prefixHeader(n_tokens))) return 0;
         var offset: usize = prefix_header.Header.size;
         for (self.layer_keys, self.layer_values, 0..) |keys, vals, i| {
@@ -1676,6 +1710,12 @@ pub const Gemma4Model = struct {
     /// byte-size math below.
     pub fn importKvPrefix(self: *Gemma4Model, src: []const u8, n_tokens: usize) bool {
         if (n_tokens > self.max_seq_len) return false;
+        // An import writes positions [0, n_tokens) from slot 0, so it only
+        // means anything on a cache whose slot 0 is still position 0. The
+        // bases are reset here because a successful import defines a fresh
+        // sequence; a windowed layer too small for the blob is caught by
+        // the per-layer length check below.
+        self.layer_kv_base = @splat(0);
         // The body arrives over POST /v1/kv_cache, so it is untrusted. A
         // length check alone lets a blob from another architecture, another
         // cache geometry or another RoPE base restore cleanly and then decode
@@ -1733,6 +1773,19 @@ pub const Gemma4Model = struct {
     fn evictKvCache(self: *Gemma4Model) !void {
         const seq_len = self.kv_seq_len;
         if (seq_len == 0) return;
+
+        // Eviction scores and rewrites positions by absolute index. Once a
+        // sliding layer has compacted, slot 0 is no longer position 0, so
+        // those indices name the wrong tokens. The two do not compose yet;
+        // skipping is the safe half, since the window has already dropped
+        // what eviction would have been choosing between on those layers.
+        if (self.anyLayerCompacted()) {
+            if (!self.evict_window_warned) {
+                self.evict_window_warned = true;
+                std.log.warn("kv eviction skipped: a sliding-window layer has compacted its cache, and eviction indexes by absolute position", .{});
+            }
+            return;
+        }
 
         // Lazy-allocate scratch buffers on first eviction (init-phase allocation, not hot path).
         if (self.eviction_scores.len == 0) {
@@ -1802,6 +1855,60 @@ pub const Gemma4Model = struct {
 
     /// Get flat f32 view of KV cache for a layer (resolves shared KV mapping).
     /// Returns the per-layer KV buffers with correct per-layer kvd stride.
+    /// Local slot for absolute position `pos` in `layer`'s cache, compacting
+    /// the live window down to slot 0 first when `pos` would land past the
+    /// end.
+    ///
+    /// A global layer keeps base 0 and returns `pos` unchanged, so only a
+    /// sliding layer that has run past two windows ever moves anything.
+    /// Must be called before any index into that layer's cache for this
+    /// position, and exactly once per position: it is what advances the base.
+    fn prepareKvSlot(self: *Gemma4Model, layer: usize, pos: usize) usize {
+        return self.prepareKvBatch(layer, pos, 1);
+    }
+
+    /// Local slot for the first of `n` consecutive positions starting at
+    /// `first`, compacting once beforehand if the batch would not fit.
+    ///
+    /// Reserving the whole batch up front is what keeps the base fixed from
+    /// a token's write until the attention that reads it: prefill writes a
+    /// batch and then attends to it, and a base that moved in between would
+    /// leave the earlier tokens' indices pointing at the wrong slots.
+    fn prepareKvBatch(self: *Gemma4Model, layer: usize, first: usize, n: usize) usize {
+        const src = self.kv_source[layer];
+        const cap = self.layer_kv_cap[src];
+        const is_windowed = cap > 0 and cap < self.max_seq_len;
+        if (!is_windowed) return first;
+
+        const base = self.layer_kv_base[src];
+        const p = kv_window.placeBatch(self.sliding_window, cap, base, first, n);
+        if (p.move_from) |from| {
+            const kvd = self.layer_kvd[src];
+            const keys = self.layer_keys[src];
+            const vals = self.layer_values[src];
+            const moved = p.keep * kvd;
+            std.mem.copyForwards(f32, keys[0..moved], keys[from * kvd ..][0..moved]);
+            std.mem.copyForwards(f32, vals[0..moved], vals[from * kvd ..][0..moved]);
+            self.layer_kv_base[src] = p.base;
+        }
+        return p.local;
+    }
+
+    /// Absolute position held at slot 0 of this layer's cache.
+    fn kvBase(self: *const Gemma4Model, layer: usize) usize {
+        return self.layer_kv_base[self.kv_source[layer]];
+    }
+
+    /// Whether any layer's slot 0 has moved off absolute position 0.
+    /// Anything that indexes the cache by absolute position has to check
+    /// this first.
+    fn anyLayerCompacted(self: *const Gemma4Model) bool {
+        for (self.layer_kv_base[0..self.n_layers]) |b| {
+            if (b != 0) return true;
+        }
+        return false;
+    }
+
     fn getLayerKvView(self: *Gemma4Model, layer: usize) kvcache.KvF32View {
         const src_layer = self.kv_source[layer];
         return .{
@@ -1938,6 +2045,17 @@ pub const Gemma4Model = struct {
         // For has_own_kv: append new K/V and attend. For shared: attend to source's existing cache.
         t = self.perf.start();
 
+        // Slot this position occupies in the layer's cache. Equal to
+        // kv_seq_len on a global layer; on a sliding layer the cache holds
+        // two windows and this compacts when it fills, so every index below
+        // is local to the cache rather than absolute in the sequence. The
+        // source layer of a shared pair already advanced the base, so this
+        // only reads it back.
+        const kv_pos = if (has_own_kv)
+            self.prepareKvSlot(li, self.kv_seq_len)
+        else
+            self.kv_seq_len - self.kvBase(li);
+
         const kv_view = self.getLayerKvView(li);
         const src_kvd = self.layer_kvd[src_layer];
         const kv_keys_bytes: []u8 = std.mem.sliceAsBytes(kv_view.keys);
@@ -1946,13 +2064,13 @@ pub const Gemma4Model = struct {
 
         // For shared layers, we use the full seq_len+1 because the source layer
         // already wrote its K/V at position kv_seq_len earlier in this forward pass.
-        const sl = self.kv_seq_len + 1;
+        const sl = kv_pos + 1;
 
         // For shared layers, re-read the source's K/V from cache at current position
         // so the SDPA "append" is a harmless no-op (writes same data back).
         if (!has_own_kv) {
-            const k_off = self.kv_seq_len * src_kvd;
-            const v_off = self.kv_seq_len * src_kvd;
+            const k_off = kv_pos * src_kvd;
+            const v_off = kv_pos * src_kvd;
             @memcpy(self.k_buf[0..src_kvd], kv_view.keys[k_off..][0..src_kvd]);
             @memcpy(self.v_buf[0..src_kvd], kv_view.values[v_off..][0..src_kvd]);
         }
@@ -1961,7 +2079,11 @@ pub const Gemma4Model = struct {
         // the full image region so each query attends to ALL image positions
         // bidirectionally. The KV cache already has all entries from Pass 1.
         // We force the windowed path which does NOT apply a causal mask.
-        if (self.non_causal_attn and self.image_batch_end > 0) {
+        // The image region is absolute, the cache is local: on a sliding
+        // layer that has compacted, the part of the image older than the
+        // window is gone, which is what a sliding layer can see anyway.
+        const image_local_end = self.image_batch_end -| self.kvBase(li);
+        if (self.non_causal_attn and image_local_end > 0) {
             attn_ops.scaledDotProductAttention(
                 self.q_buf.ptr,
                 kv_keys_bytes,
@@ -1973,10 +2095,10 @@ pub const Gemma4Model = struct {
                 nh,
                 nkv,
                 hd,
-                self.kv_seq_len,
+                kv_pos,
                 scale,
                 self.be,
-                .{ .start = 0, .len = self.image_batch_end },
+                .{ .start = 0, .len = image_local_end },
                 0,
                 .f32,
                 .f32,
@@ -2003,7 +2125,7 @@ pub const Gemma4Model = struct {
                 nh,
                 nkv,
                 hd,
-                self.kv_seq_len,
+                kv_pos,
                 scale,
                 self.be,
                 .{ .start = start, .len = win },
@@ -2023,7 +2145,7 @@ pub const Gemma4Model = struct {
                 nh,
                 nkv,
                 hd,
-                self.kv_seq_len,
+                kv_pos,
                 scale,
                 self.be,
                 .{ .start = 0, .len = sl },
@@ -2057,7 +2179,7 @@ pub const Gemma4Model = struct {
                 nh,
                 nkv,
                 hd,
-                self.kv_seq_len,
+                kv_pos,
                 scale,
                 self.be,
                 null,

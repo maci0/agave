@@ -5741,6 +5741,7 @@ test {
     _ = @import("server/scheduler.zig");
     _ = @import("sim_clock.zig");
     _ = @import("kvcache/prefix_header.zig");
+    _ = @import("kvcache/window.zig");
     _ = @import("kvcache/block_allocator.zig");
     _ = @import("kvcache/view.zig");
     _ = @import("kvcache/manager.zig");
