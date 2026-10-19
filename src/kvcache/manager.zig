@@ -202,6 +202,14 @@ pub const PagedKvCache = struct {
 
 /// Maximum children per radix tree node. Token IDs are hashed into buckets.
 const radix_fanout = 256;
+/// Depth bound for the iterative walks over the tree. Every node holds at
+/// least one token, so the tree cannot be deeper than it has nodes; the walk
+/// stack is sized from that rather than recursing on untrusted token input.
+const radix_max_depth: usize = 64;
+/// Node slots one insert must have free before it starts walking. A radix
+/// insert creates at most a split node plus a new child; the margin covers
+/// the walk reaching a second split.
+const radix_insert_reserve: usize = 4;
 /// Hard cap on total RadixTree nodes. LRU eviction is not deployed yet, so
 /// without a bound the tree grows with every distinct prompt prefix for the
 /// lifetime of the server. Once the cap is reached insert() fails with
@@ -229,6 +237,14 @@ const RadixNode = struct {
     ref_count: u16 = 1,
     /// Last access timestamp for LRU eviction.
     last_access: i64 = 0,
+
+    /// A node with no children. Only these are safe to evict: see `lruLeaf`.
+    fn isLeaf(self: *const RadixNode) bool {
+        for (self.children) |child| {
+            if (child != null) return false;
+        }
+        return true;
+    }
 
     fn init(allocator: Allocator, tokens: []const u32, block_ids: []const u32) !*RadixNode {
         const node = try allocator.create(RadixNode);
@@ -264,7 +280,16 @@ pub const PrefixMatch = struct { matched: usize, blocks: []const u32 };
 /// Supports insert (cache a token sequence) and match (find longest cached prefix).
 /// Bounded by `radix_max_nodes` live nodes; insert() returns error.RadixTreeFull
 /// at the cap so long-lived servers cannot grow the tree without limit.
-/// LRU eviction tracking is implemented via `last_access` timestamps; eviction policy not yet deployed.
+/// At the cap an insert evicts the least recently used leaf (`evictLru`)
+/// rather than refusing, so a long-lived server keeps caching after warm-up.
+/// Only leaves are evictable, and eviction happens before the insert walk
+/// starts so no pointer into the tree is live while a node is freed.
+///
+/// Eviction is uniform across layers. A hybrid sliding-window model could
+/// free more: the SWA layers' KV older than the window is dead while the
+/// full-attention layers' is not, so those blocks are reclaimable without
+/// dropping the prefix. That needs `block_ids` split by layer class, which
+/// it is not today, and the model's per-layer window exposed here.
 pub const RadixTree = struct {
     root: *RadixNode,
     allocator: Allocator,
@@ -275,6 +300,9 @@ pub const RadixTree = struct {
     /// Avoids full tree walk for repeated prefix queries (e.g., same system prompt).
     hash_cache: std.AutoHashMap(u64, HashCacheEntry) = undefined,
     hash_cache_inited: bool = false,
+    /// Block pool evicted nodes return their blocks to. Null when the tree is
+    /// only a prefix index and owns no physical blocks.
+    blocks: ?*PagedKvCache = null,
 
     const HashCacheEntry = struct { matched: usize, node: *RadixNode, query_len: usize, verify_hash: u64 };
     const hash_cache_max_entries: usize = 64;
@@ -400,6 +428,7 @@ pub const RadixTree = struct {
 
     /// Insert a token sequence with its associated block IDs into the tree.
     pub fn insert(self: *RadixTree, tokens: []const u32, block_ids: []const u32) !void {
+        self.reserveNodes();
         self.invalidateHashCache();
         var node = self.root;
         var pos: usize = 0;
@@ -547,6 +576,75 @@ pub const RadixTree = struct {
         if (self.hash_cache_inited) self.hash_cache.clearRetainingCapacity();
     }
 
+    /// Evict until one insert's worth of nodes fits, or nothing is left to
+    /// evict.
+    ///
+    /// Runs before the insert walk starts, never during it: `evictLru` frees
+    /// a node, and mid-walk that node can be the one the walk is standing on
+    /// or an ancestor of it. Doing it up front means no pointer into the tree
+    /// is live when anything is freed.
+    fn reserveNodes(self: *RadixTree) void {
+        var attempts: usize = 0;
+        while (self.node_count + radix_insert_reserve > radix_max_nodes) : (attempts += 1) {
+            // A tree of nothing but interior nodes has no evictable leaf;
+            // stop rather than spin, and let createNode refuse.
+            if (attempts >= radix_insert_reserve) break;
+            if (!self.evictLru()) break;
+        }
+    }
+
+    /// A leaf and the parent slot holding it.
+    const LeafSlot = struct { parent: *RadixNode, bucket: u8, node: *RadixNode };
+
+    /// Least recently used evictable leaf, or null when the tree is just the
+    /// root or every leaf is still referenced.
+    ///
+    /// Only leaves are evictable. An interior node's blocks hold the prefix
+    /// every descendant continues from, so freeing one would leave the
+    /// subtree naming blocks the pool has already handed to someone else.
+    fn lruLeaf(self: *RadixTree) ?LeafSlot {
+        var best: ?LeafSlot = null;
+        var best_access: i64 = std.math.maxInt(i64);
+        var stack: [radix_max_depth]*RadixNode = undefined;
+        var depth: usize = 0;
+        stack[0] = self.root;
+        depth = 1;
+        while (depth > 0) {
+            depth -= 1;
+            const node = stack[depth];
+            for (&node.children, 0..) |*slot, bucket| {
+                const child = slot.* orelse continue;
+                if (child.isLeaf()) {
+                    if (child.ref_count > 0 and child.last_access < best_access) {
+                        best_access = child.last_access;
+                        best = .{ .parent = node, .bucket = @intCast(bucket), .node = child };
+                    }
+                } else if (depth < stack.len) {
+                    stack[depth] = child;
+                    depth += 1;
+                }
+            }
+        }
+        return best;
+    }
+
+    /// Drop the least recently used leaf, returning its blocks to `blocks`
+    /// when one is attached. Returns false when nothing could be evicted.
+    ///
+    /// The tree is bounded at `radix_max_nodes`, and before this existed it
+    /// simply stopped caching once full: a long-lived server warmed up, hit
+    /// the cap, and every later prefix missed no matter how hot it was.
+    pub fn evictLru(self: *RadixTree) bool {
+        const slot = self.lruLeaf() orelse return false;
+        if (self.blocks) |pool| {
+            for (slot.node.block_ids) |id| pool.freeBlock(id);
+        }
+        slot.parent.children[slot.bucket] = null;
+        self.destroyNode(slot.node);
+        self.invalidateHashCache();
+        return true;
+    }
+
     /// Free the entire radix tree (all nodes and their token/block arrays).
     pub fn deinit(self: *RadixTree) void {
         if (self.hash_cache_inited) self.hash_cache.deinit();
@@ -665,26 +763,97 @@ test "RadixTree insert is bounded by radix_max_nodes" {
     // Grow one chain along a single root branch: every successful insert
     // appends exactly one node, so the cap is reached without exhausting
     // root's fanout slots.
-    var reached_cap = false;
+    //
+    // Reaching the cap no longer ends caching. It used to return
+    // RadixTreeFull from then on, so a long-lived server stopped caching
+    // after warm-up and missed on every prefix however hot. Inserts now
+    // evict the least recently used leaf and keep going; the invariant that
+    // survives is the node bound, not the refusal.
     var len: usize = 1;
     while (len <= radix_max_nodes + 64) : (len += 1) {
         const tokens = try allocator.alloc(u32, len);
         defer allocator.free(tokens);
         for (tokens, 0..) |*t, i| t.* = @intCast(i);
-        if (tree.insert(tokens, &.{})) |_| {
-            try std.testing.expect(tree.node_count <= radix_max_nodes);
-        } else |err| {
-            try std.testing.expectEqual(error.RadixTreeFull, err);
-            reached_cap = true;
-            break;
-        }
+        try tree.insert(tokens, &.{});
+        try std.testing.expect(tree.node_count <= radix_max_nodes);
     }
-    try std.testing.expect(reached_cap);
-    try std.testing.expectEqual(radix_max_nodes, tree.node_count);
-
-    // A full tree still serves matches; no further growth is possible.
+    // Well past the old cap and still serving.
+    try std.testing.expect(tree.node_count > 0);
     try std.testing.expectEqual(@as(usize, 1), tree.matchPrefix(&.{0}).matched);
-    try std.testing.expectEqual(error.RadixTreeFull, tree.insert(&.{ @intCast(radix_max_nodes * 3), 42 }, &.{}));
+    try tree.insert(&.{ @intCast(radix_max_nodes * 3), 42 }, &.{});
+    try std.testing.expect(tree.node_count <= radix_max_nodes);
+}
+
+test "RadixTree evicts the least recently used leaf" {
+    const allocator = std.testing.allocator;
+    var tree = try RadixTree.init(allocator);
+    defer tree.deinit();
+
+    try tree.insert(&.{ 1, 2 }, &.{});
+    try tree.insert(&.{ 3, 4 }, &.{});
+    try tree.insert(&.{ 5, 6 }, &.{});
+    try std.testing.expectEqual(@as(usize, 4), tree.node_count);
+
+    // Touch the first two so the third is coldest. matchPrefix updates
+    // last_access, which is what eviction orders on.
+    _ = tree.matchPrefix(&.{ 1, 2 });
+    _ = tree.matchPrefix(&.{ 3, 4 });
+
+    try std.testing.expect(tree.evictLru());
+    try std.testing.expectEqual(@as(usize, 3), tree.node_count);
+    // The cold branch is gone, the touched ones remain.
+    try std.testing.expectEqual(@as(usize, 0), tree.matchPrefix(&.{ 5, 6 }).matched);
+    try std.testing.expectEqual(@as(usize, 2), tree.matchPrefix(&.{ 1, 2 }).matched);
+    try std.testing.expectEqual(@as(usize, 2), tree.matchPrefix(&.{ 3, 4 }).matched);
+}
+
+test "RadixTree eviction returns blocks to the pool" {
+    const allocator = std.testing.allocator;
+    var paged = try PagedKvCache.init(allocator, 2, 64, 8, 16);
+    defer paged.deinit();
+    var tree = try RadixTree.init(allocator);
+    defer tree.deinit();
+    tree.blocks = &paged;
+
+    const b0 = paged.allocBlock() orelse return error.TestUnexpectedResult;
+    const b1 = paged.allocBlock() orelse return error.TestUnexpectedResult;
+    const before = paged.freeCount();
+    try tree.insert(&.{ 7, 8 }, &.{ b0, b1 });
+
+    // Evicting the node has to hand its blocks back, or the pool leaks a
+    // block per evicted prefix until it cannot serve a request.
+    try std.testing.expect(tree.evictLru());
+    try std.testing.expectEqual(before + 2, paged.freeCount());
+}
+
+test "RadixTree eviction never frees a node with children" {
+    // An interior node's blocks are the prefix every descendant continues
+    // from. Freeing one would leave the subtree naming blocks the pool has
+    // handed to someone else.
+    const allocator = std.testing.allocator;
+    var tree = try RadixTree.init(allocator);
+    defer tree.deinit();
+
+    // One chain: root -> A -> B. Only B is a leaf.
+    try tree.insert(&.{ 1, 2 }, &.{});
+    try tree.insert(&.{ 1, 2, 3, 4 }, &.{});
+    const before = tree.node_count;
+    try std.testing.expect(before >= 2);
+
+    try std.testing.expect(tree.evictLru());
+    try std.testing.expectEqual(before - 1, tree.node_count);
+    // The interior prefix survives; only the deeper leaf went.
+    try std.testing.expectEqual(@as(usize, 2), tree.matchPrefix(&.{ 1, 2 }).matched);
+}
+
+test "RadixTree eviction reports when nothing can be evicted" {
+    const allocator = std.testing.allocator;
+    var tree = try RadixTree.init(allocator);
+    defer tree.deinit();
+    // Root alone has no evictable leaf, and the root itself is never a
+    // candidate: evicting it would leave the tree without a walk origin.
+    try std.testing.expect(!tree.evictLru());
+    try std.testing.expectEqual(@as(usize, 1), tree.node_count);
 }
 
 test "tokenBucket distributes different IDs to different buckets" {

@@ -137,6 +137,7 @@ Two things to carry forward rather than relearn:
 | Scattered-row prefetch for the Qwen4Exp PLE table (`Format.prefetchRows`) | llama.cpp |
 | Throughput + greedy-determinism release gate (`zig build gate`) | Atlas |
 | Qwen4-Exp QSA Q/K/V batched into one `gemvMulti` dispatch (Qwen 3.5 already had it) | vLLM |
+| Prefix-cache LRU eviction (`RadixTree.evictLru`); at the cap an insert evicts instead of refusing | SGLang |
 | `/v1/systemone` decision endpoint (noul / choice / score by logit read) | llama.cpp / vLLM / SGLang |
 | Tool-call and reasoning delimiters read from the chat template, not server literals | vLLM |
 | KV prefix wire format carries a header (version, geometry, RoPE bases) | llama.cpp |
@@ -156,6 +157,7 @@ Two things to carry forward rather than relearn:
 | # | Feature | Impact | Source |
 |---|---------|--------|--------|
 | 14 | gRPC server (HTTP/2) | Lower overhead serving, use nginx/envoy for now | vLLM |
+| 33 | SWA-aware prefix-cache retention | Higher hit rate per byte on Gemma 4 and Llama 4. SGLang measured DeepSeek-V4-Flash token hit rate 43.8% → 60.8% and mean TTFT 1.57s → 1.07s. Needs `RadixNode.block_ids` split by layer class plus the model's per-layer window reaching `src/kvcache/manager.zig`: the win is freeing the sliding-window layers' KV once it ages past the window while keeping the full-attention layers', which one flat block list per node cannot express. LRU eviction (the prerequisite) shipped. | SGLang |
 
 ### Low Priority
 
