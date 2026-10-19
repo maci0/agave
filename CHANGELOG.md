@@ -18,6 +18,7 @@ must still appear under **Changed** or **Breaking** below. See
 ### Added
 - `zig build gate` checks decode throughput against `benchmarks/baselines.json` at a 5% tolerance and requires two greedy runs at one seed to match byte for byte. Baselines ship empty and are recorded per machine with `python3 scripts/perf-gate.py --update-baselines`.
 - Qwen4-Exp hints the PLE table rows a token hashes to before reading them, instead of taking one blocking page fault per row.
+- `POST /v1/systemone` answers typed decision questions (`noul`, `choice`, `score`) about a state. Each question is one prefill and the answer is the softmax over its label tokens, so nothing is generated and `usage.output_tokens` is always `0`. Matches the shapes llama.cpp, vLLM, SGLang, Ollama and LM Studio converged on this quarter. See [docs/API.md](docs/API.md#post-v1systemone).
 
 ### Breaking
 - `GET`/`POST /v1/kv_cache` blobs now carry a 40-byte header naming the format version, cache geometry and RoPE bases. Import refuses anything that disagrees with the loaded model, where before a same-sized blob from another model restored and then decoded nonsense. Blobs exported by 0.13.0 or earlier are rejected; re-export them. See [docs/API.md](docs/API.md#cross-instance-kv-cache-sharing).

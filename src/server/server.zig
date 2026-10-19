@@ -39,6 +39,15 @@ const image_mod = @import("../image.zig");
 const engine_version = @import("build_options").version;
 const grammar_mod = @import("../grammar.zig");
 const prefix_header = @import("../kvcache/prefix_header.zig");
+const systemone = @import("systemone.zig");
+
+/// Prompt scratch for one decision read: the state plus the question's
+/// instructions and labelled options. A question past this is a 400 rather
+/// than a silently clipped state.
+const systemone_prompt_buf_size: usize = 32 * 1024;
+/// Response scratch for `/v1/systemone`. Bounded by `max_questions` answers,
+/// each carrying at most `max_choices` labelled probabilities.
+const systemone_response_buf_size: usize = 256 * 1024;
 
 const Mutex = Io.Mutex;
 
@@ -439,6 +448,7 @@ const known_endpoints = [_]KnownEndpoint{
     .{ .path = "/v1/chat", .allow = "POST, OPTIONS", .msg = "Use POST." },
     .{ .path = "/v1/chat/regenerate", .allow = "POST, OPTIONS", .msg = "Use POST." },
     .{ .path = "/v1/conversations", .allow = "GET, POST, OPTIONS", .msg = "Use GET or POST." },
+    .{ .path = "/v1/systemone", .allow = "POST, OPTIONS", .msg = "Use POST." },
     .{ .path = "/v1/tokenize", .allow = "POST, OPTIONS", .msg = "Use POST." },
     .{ .path = "/v1/detokenize", .allow = "POST, OPTIONS", .msg = "Use POST." },
     .{ .path = "/v1/models", .allow = "GET, OPTIONS", .msg = "Use GET." },
@@ -1028,6 +1038,102 @@ fn lockModelWithScheduler() void {
 /// Release the scheduler's model mutex acquired by lockModelWithScheduler().
 fn unlockModelWithScheduler() void {
     if (g_server.request_manager) |rm| rm.model_mutex.unlock(g_server.io);
+}
+
+/// Outcome of reading one decision question's label probabilities.
+const ReadOutcome = union(enum) {
+    ok,
+    /// A label the tokenizer does not render as a single token. The read
+    /// looks at one position, so there is nothing to report for it.
+    multi_token_label: []const u8,
+    prompt_too_long,
+    forward_failed,
+};
+
+/// Read one question: prefill its prompt and softmax the label logits.
+///
+/// Writes `q.labelCount()` probabilities into `probs`. The caller holds
+/// `g_server.mutex` and the scheduler's model mutex, because this resets and
+/// refills the shared KV cache.
+fn readDecision(
+    state: []const u8,
+    q: systemone.Question,
+    probs: []f32,
+    input_tokens: *usize,
+) ReadOutcome {
+    var prompt_buf: [systemone_prompt_buf_size]u8 = undefined;
+    const prompt = systemone.renderPrompt(&prompt_buf, state, q) orelse return .prompt_too_long;
+
+    var label_ids: [systemone.max_choices]u32 = undefined;
+    for (0..q.labelCount()) |i| {
+        const label = q.label(i);
+        label_ids[i] = systemone.resolveLabelToken(g_server.tokenizer, g_server.allocator, label) orelse
+            return .{ .multi_token_label = label };
+    }
+
+    const token_ids = g_server.tokenizer.encode(prompt) catch return .forward_failed;
+    defer g_server.allocator.free(token_ids);
+    if (token_ids.len == 0) return .forward_failed;
+    input_tokens.* += token_ids.len;
+
+    // Each question is its own read. Sharing the cache across questions would
+    // need the prompts to share a prefix exactly, and the per-question text
+    // sits after the state, so the saving would not survive a question whose
+    // instructions differ in length.
+    g_server.model.resetCache();
+    _ = g_server.model.prefill(token_ids) catch return .forward_failed;
+
+    const logits = g_server.model.getLogits();
+    var label_logits: [systemone.max_choices]f32 = undefined;
+    for (0..q.labelCount()) |i| {
+        if (label_ids[i] >= logits.len) return .forward_failed;
+        label_logits[i] = logits[label_ids[i]];
+    }
+    systemone.labelProbabilities(label_logits[0..q.labelCount()], probs[0..q.labelCount()]);
+    return .ok;
+}
+
+/// Serialize one answer in the System One shape for its question type.
+fn writeDecisionAnswer(w: *std.Io.Writer, q: systemone.Question, probs: []const f32) !void {
+    var key_buf: [systemone.max_name_len * 2]u8 = undefined;
+    const name = json.jsonEscapeInto(&key_buf, q.name) orelse q.name;
+    try w.print("\"{s}\":{{\"type\":\"", .{name});
+    switch (q.kind) {
+        .noul => {
+            // Index 0 is "yes", so its mass is the probability the answer is
+            // true, which is the whole answer for this type.
+            try w.print("noul\",\"noul\":{d:.6}}}", .{probs[0]});
+        },
+        .choice => {
+            const top = systemone.peak(probs);
+            var val_buf: [systemone.max_option_len * 2]u8 = undefined;
+            const chosen = json.jsonEscapeInto(&val_buf, q.options[top.index].value) orelse q.options[top.index].value;
+            try w.print("choice\",\"choice\":\"{s}\",\"confidence\":{d:.6},\"probabilities\":{{", .{ chosen, top.probability });
+            for (q.options, probs, 0..) |opt, p, i| {
+                if (i > 0) try w.writeAll(",");
+                var opt_buf: [systemone.max_option_len * 2]u8 = undefined;
+                const label = json.jsonEscapeInto(&opt_buf, opt.value) orelse opt.value;
+                try w.print("\"{s}\":{d:.6}", .{ label, p });
+            }
+            try w.writeAll("}}");
+        },
+        .score => {
+            const top = systemone.peak(probs);
+            try w.print("score\",\"score\":{d:.6},\"confidence\":{d:.6},\"legend\":{{", .{ systemone.expectedScore(probs), top.probability });
+            for (q.options, 0..) |opt, i| {
+                if (i > 0) try w.writeAll(",");
+                var opt_buf: [systemone.max_option_len * 2]u8 = undefined;
+                const label = json.jsonEscapeInto(&opt_buf, opt.value) orelse opt.value;
+                try w.print("\"{d}\":\"{s}\"", .{ i, label });
+            }
+            try w.writeAll("},\"probabilities\":{");
+            for (probs, 0..) |p, i| {
+                if (i > 0) try w.writeAll(",");
+                try w.print("\"{d}\":{d:.6}", .{ i, p });
+            }
+            try w.writeAll("}}");
+        },
+    }
 }
 
 /// Snapshot the model's KV sequence length with the model excluded.
@@ -2824,6 +2930,103 @@ fn handleRequest(stream: http.TcpStream, req: http.HttpRequest) void {
         g_server.metrics.recordTokens(@intCast(gen.stats.tokens_generated));
         g_server.metrics.recordCompletion();
 
+        logRequestDone(method, path, 200, elapsedMs(request_start));
+        return;
+    }
+
+    // ── /v1/systemone: typed decision questions answered by a logit read ──────
+    if (is_post and std.mem.eql(u8, path, "/v1/systemone")) {
+        logRequest(method, path);
+        g_server.metrics.recordRequest();
+        var decision_req = systemone.parseRequest(g_server.allocator, req.body) catch |err| {
+            const msg: []const u8 = switch (err) {
+                error.MalformedRequest => "Provide a state and a questions object",
+                error.QuestionCount => "questions must hold 1 to 64 entries",
+                error.UnknownQuestionType => "question type must be noul, choice or score",
+                error.OptionCount => "choice needs 2 to 26 criteria, score needs 2 to 10 levels",
+                error.DuplicateOption => "criteria must not repeat a value",
+                error.TooLong => "a question name or option is too long",
+                error.OutOfMemory => "Out of memory",
+            };
+            if (err == error.OutOfMemory) {
+                sendJsonError(stream, "500 Internal Server Error", "server_error", msg);
+                g_server.metrics.recordFailure();
+                logRequestDone(method, path, 500, elapsedMs(request_start));
+            } else {
+                sendJsonErrorEx(stream, "400 Bad Request", "invalid_request_error", msg, "questions", "invalid_value");
+                g_server.metrics.recordClientError();
+                logRequestDone(method, path, 400, elapsedMs(request_start));
+            }
+            return;
+        };
+        defer decision_req.deinit();
+
+        const resp_buf = g_server.allocator.alloc(u8, systemone_response_buf_size) catch {
+            sendJsonError(stream, "500 Internal Server Error", "server_error", "Out of memory");
+            g_server.metrics.recordFailure();
+            logRequestDone(method, path, 500, elapsedMs(request_start));
+            return;
+        };
+        defer g_server.allocator.free(resp_buf);
+
+        var w = std.Io.Writer.fixed(resp_buf);
+        var input_tokens: usize = 0;
+        var failure: ?ReadOutcome = null;
+        {
+            g_server.mutex.lockUncancelable(g_server.io);
+            defer g_server.mutex.unlock(g_server.io);
+            lockModelWithScheduler();
+            defer unlockModelWithScheduler();
+            // The reads rewrite the shared KV cache, so whatever prefix the
+            // server had cached no longer describes it.
+            defer g_server.clearCachedPromptIds();
+
+            w.writeAll("{\"answers\":{") catch {};
+            for (decision_req.questions, 0..) |q, qi| {
+                var probs: [systemone.max_choices]f32 = undefined;
+                switch (readDecision(decision_req.state, q, &probs, &input_tokens)) {
+                    .ok => {},
+                    else => |bad| {
+                        failure = bad;
+                        break;
+                    },
+                }
+                if (qi > 0) w.writeAll(",") catch {};
+                writeDecisionAnswer(&w, q, probs[0..q.labelCount()]) catch {};
+            }
+        }
+        if (failure) |bad| {
+            switch (bad) {
+                .multi_token_label => |label| {
+                    var msg_buf: [160]u8 = undefined;
+                    const msg = std.fmt.bufPrint(&msg_buf, "label '{s}' is not a single token for this model's tokenizer", .{label}) catch "a label is not a single token for this model's tokenizer";
+                    sendJsonErrorEx(stream, "400 Bad Request", "invalid_request_error", msg, "questions", "invalid_value");
+                    g_server.metrics.recordClientError();
+                    logRequestDone(method, path, 400, elapsedMs(request_start));
+                },
+                .prompt_too_long => {
+                    sendJsonErrorEx(stream, "400 Bad Request", "invalid_request_error", "state and question do not fit the prompt buffer", "state", "invalid_value");
+                    g_server.metrics.recordClientError();
+                    logRequestDone(method, path, 400, elapsedMs(request_start));
+                },
+                else => {
+                    sendJsonError(stream, "500 Internal Server Error", "server_error", "Decision read failed");
+                    g_server.metrics.recordFailure();
+                    logRequestDone(method, path, 500, elapsedMs(request_start));
+                },
+            }
+            return;
+        }
+        // output_tokens is 0 by construction: a decision is read off the
+        // logits, never generated.
+        w.print("}},\"model\":\"{s}\",\"usage\":{{\"input_tokens\":{d},\"output_tokens\":0}}}}", .{ g_server.model_name, input_tokens }) catch {
+            sendJsonError(stream, "500 Internal Server Error", "server_error", "Response too large");
+            g_server.metrics.recordFailure();
+            logRequestDone(method, path, 500, elapsedMs(request_start));
+            return;
+        };
+        sendJson(stream, w.buffered());
+        g_server.metrics.recordCompletion();
         logRequestDone(method, path, 200, elapsedMs(request_start));
         return;
     }
@@ -10028,4 +10231,74 @@ test "a recorded generation failure replays as a failure, not a success" {
     defer retry.replay.deinit(std.testing.allocator);
     try std.testing.expectEqualStrings("500 Internal Server Error", retry.replay.status_line);
     try std.testing.expectEqual(@as(u16, 500), statusCodeOf(retry.replay.status_line));
+}
+
+test "writeDecisionAnswer emits the System One shape per question type" {
+    var buf: [1024]u8 = undefined;
+
+    {
+        var w = std.Io.Writer.fixed(&buf);
+        const q = systemone.Question{ .name = "urgent", .kind = .noul };
+        // Index 0 is "yes", so the answer is its mass, not the argmax label.
+        try writeDecisionAnswer(&w, q, &[_]f32{ 0.99, 0.01 });
+        try std.testing.expectEqualStrings(
+            "\"urgent\":{\"type\":\"noul\",\"noul\":0.990000}",
+            w.buffered(),
+        );
+    }
+
+    {
+        var w = std.Io.Writer.fixed(&buf);
+        var options = [_]systemone.Option{ .{ .value = "low" }, .{ .value = "high" } };
+        const q = systemone.Question{ .name = "tier", .kind = .choice, .options = &options };
+        try writeDecisionAnswer(&w, q, &[_]f32{ 0.25, 0.75 });
+        const out = w.buffered();
+        try std.testing.expect(std.mem.indexOf(u8, out, "\"choice\":\"high\"") != null);
+        try std.testing.expect(std.mem.indexOf(u8, out, "\"confidence\":0.750000") != null);
+        try std.testing.expect(std.mem.indexOf(u8, out, "\"low\":0.250000") != null);
+        try std.testing.expect(std.mem.indexOf(u8, out, "\"high\":0.750000") != null);
+    }
+
+    {
+        var w = std.Io.Writer.fixed(&buf);
+        var levels = [_]systemone.Option{
+            .{ .value = "calm" },
+            .{ .value = "mildly annoyed" },
+            .{ .value = "angry" },
+        };
+        const q = systemone.Question{ .name = "mood", .kind = .score, .options = &levels };
+        try writeDecisionAnswer(&w, q, &[_]f32{ 0.07, 0.91, 0.02 });
+        const out = w.buffered();
+        // Probability-weighted mean of the indices, so it lands off a level.
+        try std.testing.expect(std.mem.indexOf(u8, out, "\"score\":0.950000") != null);
+        try std.testing.expect(std.mem.indexOf(u8, out, "\"legend\":{\"0\":\"calm\",\"1\":\"mildly annoyed\",\"2\":\"angry\"}") != null);
+        try std.testing.expect(std.mem.indexOf(u8, out, "\"2\":0.020000") != null);
+    }
+}
+
+test "writeDecisionAnswer escapes names and option values" {
+    // Question names and choice values are caller supplied, so a quote in
+    // either would otherwise break out of the JSON string it sits in.
+    var buf: [1024]u8 = undefined;
+    var w = std.Io.Writer.fixed(&buf);
+    var options = [_]systemone.Option{ .{ .value = "a\"b" }, .{ .value = "c" } };
+    const q = systemone.Question{ .name = "say \"hi\"", .kind = .choice, .options = &options };
+    try writeDecisionAnswer(&w, q, &[_]f32{ 0.9, 0.1 });
+    const out = w.buffered();
+    try std.testing.expect(std.mem.startsWith(u8, out, "\"say \\\"hi\\\"\":"));
+    try std.testing.expect(std.mem.indexOf(u8, out, "\"choice\":\"a\\\"b\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "\"a\\\"b\":0.900000") != null);
+}
+
+test "known_endpoints route /v1/systemone as POST only" {
+    var found = false;
+    for (known_endpoints) |ep| {
+        if (std.mem.eql(u8, ep.path, "/v1/systemone")) {
+            found = true;
+            try std.testing.expectEqualStrings("POST, OPTIONS", ep.allow);
+            // Decisions read the model, so the route is never public.
+            try std.testing.expectEqual(AuthPolicy.required, ep.auth);
+        }
+    }
+    try std.testing.expect(found);
 }

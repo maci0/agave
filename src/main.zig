@@ -5734,11 +5734,13 @@ test {
     _ = @import("tokenizer/tokenizer.zig");
     _ = @import("server/server.zig");
     _ = @import("server/json.zig");
+    _ = @import("server/systemone.zig");
     _ = @import("server/tools.zig");
     _ = @import("server/rate_limiter.zig");
     _ = @import("server/metrics.zig");
     _ = @import("server/scheduler.zig");
     _ = @import("sim_clock.zig");
+    _ = @import("kvcache/prefix_header.zig");
     _ = @import("kvcache/block_allocator.zig");
     _ = @import("kvcache/view.zig");
     _ = @import("kvcache/manager.zig");

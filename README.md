@@ -330,6 +330,7 @@ light or dark setting.
 | `/v1/chat` | POST | Built-in web chat UI |
 | `/v1/chat/regenerate` | POST | Regenerate last assistant response |
 | `/v1/conversations` | GET, POST | Conversation management |
+| `/v1/systemone` | POST | Typed decision questions (noul, choice, score) answered by a logit read |
 | `/v1/tokenize` | POST | Count tokens in text |
 | `/v1/detokenize` | POST | Convert token IDs to text |
 | `/health` | GET | Health check |
