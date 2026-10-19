@@ -1343,7 +1343,13 @@ pub const Gemma4Model = struct {
             // Copy this token's Q from pf_q
             @memcpy(self.q_buf[0..qkv_dim], self.pf_q[t * qkv_dim ..][0..qkv_dim]);
 
-            if (!is_global and self.sliding_window > 0 and hd > gpu_sdpa_max_head_dim) {
+            // Every sliding-window layer takes the window now, whatever the
+            // head dim. `scaledDotProductAttention` turns a window that ends
+            // at the current position into a shifted cache base and keeps
+            // the backend's fused kernel, so there is no longer a reason to
+            // skip the window for small heads and attend to the whole
+            // sequence instead.
+            if (!is_global and self.sliding_window > 0) {
                 const win: usize = @min(sl, self.sliding_window);
                 const start: usize = if (sl > self.sliding_window) sl - self.sliding_window else 0;
                 attn_ops.scaledDotProductAttention(
@@ -1975,9 +1981,15 @@ pub const Gemma4Model = struct {
                 .f32,
                 .f32,
             );
-        } else if (!is_global and self.sliding_window > 0 and hd > gpu_sdpa_max_head_dim) {
-            // CPU windowed SDPA only for large-head SWA (hd > 256). For hd ≤ 256,
-            // fall through to Metal SDPA, CPU windowed is broken for 12B GQA (nkv=8).
+        } else if (!is_global and self.sliding_window > 0) {
+            // Every sliding-window layer takes the window now, whatever the
+            // head dim. Small heads used to fall through to an unwindowed
+            // backend SDPA, so the layer attended to the whole sequence once
+            // it grew past the window; the CPU windowed loop was avoided
+            // because it is wrong for 12B GQA (nkv=8).
+            // `scaledDotProductAttention` now serves a window that ends at
+            // the current position from the backend's fused kernel on a
+            // shifted cache base, so neither workaround is needed.
             const win: usize = @min(sl, self.sliding_window);
             const start: usize = if (sl > self.sliding_window) sl - self.sliding_window else 0;
             attn_ops.scaledDotProductAttention(

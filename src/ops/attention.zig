@@ -82,6 +82,51 @@ pub fn scaledDotProductAttention(
         return;
     }
 
+    // A window that ends at the current position is the same call on a
+    // shifted cache base: positions [start, start+len) are a contiguous
+    // slice, and the backend appends the new K/V at slice index
+    // `seq_len - start`, which is where the current token belongs. So a
+    // sliding-window layer keeps the fused kernel instead of dropping to the
+    // CPU loop below, and it reads `len` positions instead of all of them.
+    //
+    // This is what made sliding-window attention correct on the GPU path at
+    // all: callers skipped the CPU windowed path for small head dims and
+    // passed no window instead, so the layer attended to the entire sequence
+    // once it grew past the window.
+    //
+    // A window that ends earlier (a prefix range, as the image-batch caller
+    // uses) is not a suffix slice and falls through.
+    if (window) |w| {
+        const ends_at_current = w.len > 0 and
+            (std.math.add(usize, w.start, w.len) catch 0) == seq_len + 1;
+        const start_elems = std.math.mul(usize, w.start, kvd) catch std.math.maxInt(usize);
+        if (score_offset == 0 and ends_at_current and
+            kv_quant.kvSliceable(kv_type_k, start_elems) and
+            kv_quant.kvSliceable(kv_type_v, start_elems))
+        {
+            const k_off = kv_quant.kvByteOffset(kv_type_k, start_elems);
+            const v_off = kv_quant.kvByteOffset(kv_type_v, start_elems);
+            if (k_off <= kv_keys.len and v_off <= kv_values.len) {
+                be.sdpa(
+                    q,
+                    kv_keys[k_off..],
+                    kv_values[v_off..],
+                    k_buf.ptr,
+                    v_buf.ptr,
+                    attn_out,
+                    nh,
+                    nkv,
+                    hd,
+                    w.len - 1,
+                    scale,
+                    kv_type_k,
+                    kv_type_v,
+                );
+                return;
+            }
+        }
+    }
+
     // Windowed / offset fallback, explicit KV append + CPU-side SDPA loop.
     // Sync first to flush any pending GPU ops (no-op on CPU backend).
     be.sync();
@@ -1020,4 +1065,128 @@ test "fuzz: all attention functions" {
             }
         }
     }.f, .{});
+}
+
+test "windowed sdpa attends to the window, not the whole sequence" {
+    // A sliding-window layer used to reach the backend with no window at
+    // all, so it attended to every position once the sequence grew past the
+    // window. Here positions 0 and 1 are outside the window and carry a
+    // value no in-window position has: if they leak in, the output moves.
+    const hd: usize = 4;
+    const kvd: usize = hd; // nh = nkv = 1
+    const seq_len: usize = 5;
+
+    var kv_keys_f32: [256]f32 = @splat(0);
+    var kv_values_f32: [256]f32 = @splat(0);
+    // Every cached position has the same key, so attention is uniform over
+    // whatever is in range and the output is the mean of those values.
+    for (0..seq_len) |t| {
+        for (0..hd) |d| {
+            kv_keys_f32[t * kvd + d] = 1.0;
+            // Outside the window (t < 2) a value the result must not show.
+            kv_values_f32[t * kvd + d] = if (t < 2) 100.0 else 1.0;
+        }
+    }
+    const kv_keys = std.mem.sliceAsBytes(&kv_keys_f32);
+    const kv_values = std.mem.sliceAsBytes(&kv_values_f32);
+
+    var k_buf: [hd]f32 = @splat(1.0);
+    var v_buf: [hd]f32 = @splat(1.0);
+    var q: [hd]f32 = @splat(1.0);
+    var attn_out: [hd]f32 = @splat(0);
+    var scores: [64]f32 = @splat(0);
+
+    const BackendState = @import("../backend/backend.zig").BackendState;
+    var threaded = std.Io.Threaded.init(std.testing.allocator, .{});
+    defer threaded.deinit();
+    var bs = BackendState{};
+    bs.init(std.testing.allocator, .cpu, threaded.io(), 0);
+    defer if (bs.pool) |*p| p.deinit();
+
+    // Window covers absolute positions 2..5 inclusive of the new token at 5,
+    // so start + len == seq_len + 1 and the slice path applies.
+    scaledDotProductAttention(
+        &q,
+        kv_keys,
+        kv_values,
+        &k_buf,
+        &v_buf,
+        &attn_out,
+        &scores,
+        1,
+        1,
+        hd,
+        seq_len,
+        1.0,
+        bs.be,
+        .{ .start = 2, .len = 4 },
+        0,
+        .f32,
+        .f32,
+    );
+
+    // Four equal-key positions all holding 1.0: the mean is 1.0. Any leak
+    // from position 0 or 1 pulls it toward 100.
+    for (0..hd) |i| {
+        try std.testing.expectApproxEqAbs(@as(f32, 1.0), attn_out[i], 1e-4);
+    }
+}
+
+test "windowed sdpa matches the unwindowed result when the window covers everything" {
+    // start == 0 with a full-length window is the degenerate case, and it
+    // must not drift from the plain path just because it takes the slice
+    // branch.
+    const hd: usize = 4;
+    const seq_len: usize = 3;
+
+    var keys_a: [256]f32 = @splat(0);
+    var vals_a: [256]f32 = @splat(0);
+    for (0..seq_len) |t| {
+        for (0..hd) |d| {
+            keys_a[t * hd + d] = @floatFromInt(t + 1);
+            vals_a[t * hd + d] = @floatFromInt((t + 1) * 2);
+        }
+    }
+    var keys_b = keys_a;
+    var vals_b = vals_a;
+
+    const k_buf: [hd]f32 = @splat(0.5);
+    const v_buf: [hd]f32 = @splat(3.0);
+    var q: [hd]f32 = @splat(0.25);
+    var out_windowed: [hd]f32 = @splat(0);
+    var out_plain: [hd]f32 = @splat(0);
+    var scores: [64]f32 = @splat(0);
+
+    const BackendState = @import("../backend/backend.zig").BackendState;
+    var threaded = std.Io.Threaded.init(std.testing.allocator, .{});
+    defer threaded.deinit();
+    var bs = BackendState{};
+    bs.init(std.testing.allocator, .cpu, threaded.io(), 0);
+    defer if (bs.pool) |*p| p.deinit();
+
+    var kb = k_buf;
+    var vb = v_buf;
+    scaledDotProductAttention(&q, std.mem.sliceAsBytes(&keys_a), std.mem.sliceAsBytes(&vals_a), &kb, &vb, &out_windowed, &scores, 1, 1, hd, seq_len, 1.0, bs.be, .{ .start = 0, .len = seq_len + 1 }, 0, .f32, .f32);
+
+    var kb2 = k_buf;
+    var vb2 = v_buf;
+    scaledDotProductAttention(&q, std.mem.sliceAsBytes(&keys_b), std.mem.sliceAsBytes(&vals_b), &kb2, &vb2, &out_plain, &scores, 1, 1, hd, seq_len, 1.0, bs.be, null, 0, .f32, .f32);
+
+    for (0..hd) |i| {
+        try std.testing.expectApproxEqAbs(out_plain[i], out_windowed[i], 1e-5);
+    }
+}
+
+test "kvSliceable refuses a base that would cut a packed block" {
+    const kvq = @import("kv_quant.zig");
+    // Element-addressable types re-base anywhere.
+    try std.testing.expect(kvq.kvSliceable(.f32, 7));
+    try std.testing.expect(kvq.kvSliceable(.f16, 7));
+    // Block-packed types only on a block boundary; a mid-block base would
+    // silently shift every position in the window.
+    try std.testing.expect(kvq.kvSliceable(.q8_0, 64));
+    try std.testing.expect(!kvq.kvSliceable(.q8_0, 65));
+    try std.testing.expect(!kvq.kvSliceable(.turbo4, 1));
+    // Two interleaved planes: a single shifted base cannot describe it.
+    try std.testing.expect(!kvq.kvSliceable(.nvfp4_ds_mla, 0));
 }
