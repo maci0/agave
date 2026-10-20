@@ -212,5 +212,39 @@ class DocsWorkflowPathsTest(unittest.TestCase):
         self.assertTrue(any("docs-check.yml" in e for e in errors), errors)
 
 
+class EmDashTest(unittest.TestCase):
+    def _errors(self, files: dict[str, str]) -> list[str]:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for rel, text in files.items():
+                path = root / rel
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(text, encoding="utf-8")
+            with patch.object(check_docs, "ROOT", root):
+                return check_docs.check_em_dashes()
+
+    def test_clean_prose_reports_nothing(self) -> None:
+        self.assertEqual(self._errors({"a.md": "No long dash here, just a comma.\n"}), [])
+
+    def test_em_dash_in_prose_is_reported(self) -> None:
+        errors = self._errors({"docs/a.md": "line one\nthe fix shipped — resolving it\n"})
+        self.assertEqual(len(errors), 1, errors)
+        self.assertIn("docs/a.md:2", errors[0])
+
+    def test_code_span_is_exempt(self) -> None:
+        self.assertEqual(self._errors({"a.md": "quoting bad writing: `shipped — resolving it`\n"}), [])
+
+    def test_fenced_block_is_exempt(self) -> None:
+        self.assertEqual(self._errors({"a.md": "intro\n\n```\nbad — prose\n```\n\nouttro\n"}), [])
+
+    def test_prose_after_a_closed_fence_is_still_checked(self) -> None:
+        errors = self._errors({"a.md": "```\nfine — fine\n```\nnot — fine\n"})
+        self.assertEqual(len(errors), 1, errors)
+        self.assertIn("a.md:4", errors[0])
+
+    def test_skipped_directories_are_ignored(self) -> None:
+        self.assertEqual(self._errors({"vendor/a.md": "x — y\n", ".scratch/b.md": "x — y\n"}), [])
+
+
 if __name__ == "__main__":
     sys.exit(not unittest.main(exit=False).result.wasSuccessful())

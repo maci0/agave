@@ -45,6 +45,10 @@ def find_root() -> Path:
 
 ROOT = find_root()
 
+# Directories whose markdown is not ours to style: build output, vendored
+# third-party source, and scratch space.
+SKIP_DIRS = {".scratch", "node_modules", "zig-out", ".zig-cache", ".git", "vendor"}
+
 
 def check_links() -> list[str]:
     errors: list[str] = []
@@ -71,6 +75,36 @@ LINE_REF_RE = re.compile(
     r"(?:\.\./)?((?:src|web|scripts|docs|tests|tools|research)/[A-Za-z0-9_./-]+\.(?:zig|ts|js|py|sh|md|html)"
     r"|Dockerfile|docker-compose\.yml|build\.zig\.zon):(\d+)(?:-(\d+))?"
 )
+
+
+def check_em_dashes() -> list[str]:
+    """No em dashes in committed markdown.
+
+    AGENTS.md "Prose" bans them: use a comma, period, colon, or parentheses.
+    They are the most reliable punctuation tell of machine-written prose, and
+    25 had accumulated across nine files before anything checked, so this is
+    a gate rather than something left to review.
+
+    Code spans and fenced blocks are exempt: an em dash inside a quoted
+    command or a sample of bad writing is the subject, not the voice.
+    """
+    errors: list[str] = []
+    fence_re = re.compile(r"^\s*```")
+    code_span_re = re.compile(r"`[^`]*`")
+    for f in sorted(ROOT.rglob("*.md")):
+        rel = f.relative_to(ROOT)
+        if any(part in SKIP_DIRS for part in rel.parts):
+            continue
+        in_fence = False
+        for n, raw in enumerate(f.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
+            if fence_re.match(raw):
+                in_fence = not in_fence
+                continue
+            if in_fence:
+                continue
+            if "—" in code_span_re.sub("", raw):
+                errors.append(f"{rel}:{n}: em dash; use a comma, period, colon, or parentheses")
+    return errors
 
 
 def check_doc_line_refs() -> list[str]:
@@ -629,6 +663,7 @@ def check_docs_workflow_paths() -> list[str]:
 def main() -> int:
     errors: list[str] = []
     errors.extend(check_links())
+    errors.extend(check_em_dashes())
     errors.extend(check_doc_line_refs())
     errors.extend(check_diagram_counts())
     errors.extend(check_kernel_constants())

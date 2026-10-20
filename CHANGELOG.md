@@ -111,7 +111,7 @@ must still appear under **Changed** or **Breaking** below. See
 - A `--pp` rank whose peers are unreachable, or one started with no `--peers`
   where UDP discovery found none, now exits non-zero with the reason. Before:
   the rank kept `pp_degree=1` and ran every layer itself, so each rank
-  duplicated the whole model and the pipeline never formed — a multi-node run
+  duplicated the whole model and the pipeline never formed, so a multi-node run
   answered from N copies of the model with no error anywhere. After: the rank
   logs the port, the errno or the missing peer, and exits. The same was already
   true for `--tp`; this closes the `--pp` side. `docs/PARALLELISM.md` records
@@ -199,7 +199,7 @@ must still appear under **Changed** or **Breaking** below. See
   `Sec-Fetch-Site: cross-site` with 403, checked before the `Host` and
   `Origin` checks. Before: a hostile page could drive the mutating routes with
   the victim's ambient access, because a cross-site HTML form POST omits
-  `Origin` in some browsers and a cross-site form GET never sends one — the
+  `Origin` in some browsers and a cross-site form GET never sends one, so the
   two headers the check compared could not see those requests. After: they are
   rejected and logged as `cross-origin/cross-site request rejected (no API
   key)`. Clients that send neither header (curl, SDKs, health probes) are

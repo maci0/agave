@@ -1,8 +1,8 @@
-# DS4 Flash 0731 — 2-Node DGX Spark Performance Handoff
+# DS4 Flash 0731: 2-Node DGX Spark Performance Handoff
 
 **Goal:** match vLLM on 2× DGX Spark (~50 tok/s single stream, 300-500 concurrent).
 **Status:** OPEN handoff, not a decision record. Scope: the unmeasured DS4 2-node decode and the instrumentation cleanup below. The performance numbers already in the tree (`docs/BENCHMARKS.md`, `docs/DS4_BENCHMARK.md`) are the canonical record; this file is the working log behind them.
-**Last updated:** 2026-10-01 (status line reconciled with the code: step 4, removing the `DS4PERF`/`FFNPERF`/`TPPERF` instrumentation, is done — no such symbols remain in `src/` or `scripts/`; steps 1–3 and 5 are still open).
+**Last updated:** 2026-10-01 (status line reconciled with the code: step 4, removing the `DS4PERF`/`FFNPERF`/`TPPERF` instrumentation, is done, and no such symbols remain in `src/` or `scripts/`; steps 1–3 and 5 are still open).
 
 ## Environment (verified)
 
@@ -10,10 +10,10 @@
 - GB10 (sm_121), 121.7GB unified, CUDA 13.0, aarch64, NCCL 2.31.2. RoCE: `10.0.1.1`/`10.0.1.2`; management `192.168.0.x`.
 - Model: `~/models/ds4-flash-0731` (155.4GB, 48 shards; hidden=4096, 43 layers, 256 experts, ff=2048).
 - Zig: spark1 `~/zig/zig`, spark2 `~/zig-aarch64-linux-0.16.0/zig`. Repo rsynced to `~/agave`.
-- **GPU clocks:** `sudo -n nvidia-smi -lgc 2418,2418` on both nodes (min=max keeps the memory/P0 state up). The `gb10-clockcap` container re-caps to `-lgc 0,2200` every 300s — `docker update --restart=no gb10-clockcap && docker stop gb10-clockcap`.
-- **CRITICAL: `docker stop vllm-ds4-0731` on BOTH nodes before benchmarking** — the vLLM container re-holds ~95GB GPU memory and blocks agave with `cuMemAlloc` error 700 (OOM) even with 105GB system free.
+- **GPU clocks:** `sudo -n nvidia-smi -lgc 2418,2418` on both nodes (min=max keeps the memory/P0 state up). The `gb10-clockcap` container re-caps to `-lgc 0,2200` every 300s, so `docker update --restart=no gb10-clockcap && docker stop gb10-clockcap`.
+- **CRITICAL: `docker stop vllm-ds4-0731` on BOTH nodes before benchmarking**: the vLLM container re-holds ~95GB GPU memory and blocks agave with `cuMemAlloc` error 700 (OOM) even with 105GB system free.
 
-## Launch procedure (rank 0 FIRST — rank 1's connect has NO retry)
+## Launch procedure (rank 0 FIRST, because rank 1's connect has NO retry)
 
 ```bash
 # spark1 (rank 0): NCCL env + nohup ./zig-out/bin/agave ~/models/ds4-flash-0731 \
@@ -28,45 +28,45 @@ NCCL_NET_GDR_LEVEL=3 NCCL_IB_PCI_RELAXED_ORDERING=1 NCCL_IB_RETRY_CNT=7 NCCL_IB_
 ## Key changes (committed `27a2ec8`)
 
 1. **Batched expert gemv kernel** (`gemv_mxfp4_st_batched.zig` + PTX + `gemvMxfp4StBatched` in cuda.zig + ffnLayer wiring): one launch for all active experts' gate+up / down via device pointer tables. The sustained memory traffic keeps the GB10 memory clock ramped (per-expert 25µs bursts left it idle, 4.2MB reads costing 2-5ms each). Tiny model: FFN 26ms → 1ms/layer, 39 → 272 tok/s.
-2. **Async H2D re-uploads for heap act buffers** (getInputBuf/getInPlaceBuf/findContaining): blocking null-stream copies ~2ms each. Async H2D FAILS (`CUDA_ERROR_INVALID_VALUE`) on mmap'd memory — weights (getOrUpload) stay blocking.
-3. **Free large repacked host buffers after their device upload** (`fmt.freeRepackedTensor` in doGemv) — the ~26GB fp8→bf16 attention repacks are dead weight once uploaded (prevents the OOM).
+2. **Async H2D re-uploads for heap act buffers** (getInputBuf/getInPlaceBuf/findContaining): blocking null-stream copies ~2ms each. Async H2D FAILS (`CUDA_ERROR_INVALID_VALUE`) on mmap'd memory, so weights (getOrUpload) stay blocking.
+3. **Free large repacked host buffers after their device upload** (`fmt.freeRepackedTensor` in doGemv): the ~26GB fp8→bf16 attention repacks are dead weight once uploaded (prevents the OOM).
 4. Fuse: SEQUENTIAL repack reads, then RANDOM + DONTNEED the shard pages (SEQUENTIAL readahead otherwise leaves ~155GB RSS and OOMs the resident copy).
-5. Out-of-range expert routing ids skipped (tiny-random emits ids up to 240 vs 128-expert tables) — the CPU path always tolerated this; CUDA now skips too.
+5. Out-of-range expert routing ids skipped (tiny-random emits ids up to 240 vs 128-expert tables). The CPU path always tolerated this; CUDA now skips too.
 6. Resident machinery (session 1, commit `27388be`): device-copy local experts + scales + residual weights, DONTNEED the dead mmap pages, no UMA pinning, dedicated CUDA stream + deferred-sync batching (drains measured 0-1ms).
 
 ## Gotchas
 
-- **spark2's sshd hangs under load** (banner timeout, ping OK) — recovery has required a reboot (the node came back "up 2 min"). Ask the user to reboot it if unreachable.
+- **spark2's sshd hangs under load** (banner timeout, ping OK). Recovery has required a reboot (the node came back "up 2 min"). Ask the user to reboot it if unreachable.
 - `pkill -f "zig-out/bin/aga[v]e /home"` (the `[v]` avoids killing your own ssh).
 - If `zig build test` fails here, check `docs/TODO.md` first: suite breakage is tracked there, not in this note.
 
 ## Next steps
 
 1. Reboot/verify spark2, then the standard 2-node launch → measure the Flash decode with the batched kernel (expect the FFN to drop from ~2s toward the bandwidth floor).
-2. If the attention (~400ms) persists, the per-call syncs (q_a→rmsNorm→q_b chains) are the tax — batch or GPU-ize the attention gemvs.
-3. GPU SDPA/kvDot kernel for the attention scores (CPU now — grows with context).
-4. ~~Remove the TEMP instrumentation (DS4PERF/FFNPERF/TPPERF/CUDA timers), then commit.~~ Done — no such symbols remain in `src/` or `scripts/`.
+2. If the attention (~400ms) persists, the per-call syncs (q_a→rmsNorm→q_b chains) are the tax, so batch or GPU-ize the attention gemvs.
+3. GPU SDPA/kvDot kernel for the attention scores (CPU now, and it grows with context).
+4. ~~Remove the TEMP instrumentation (DS4PERF/FFNPERF/TPPERF/CUDA timers), then commit.~~ Done, no such symbols remain in `src/` or `scripts/`.
 5. Concurrency/numseq testing (`--numseq`, server mode) toward the 300-500 concurrent target.
 
 ---
 
-## Session 3 update (post-reboot driver regression — committed `9ca7558`)
+## Session 3 update (post-reboot driver regression, committed `9ca7558`)
 
-**Symptom:** after the node reboots, the agave fails with `CUDA_ERROR_OUT_OF_MEMORY` (700) at the FIRST drain's D2H, then cascades — on BOTH nodes, ALL code states (batched on/off, async/blocking copies), even the very first commit (`27388be`). The tiny standin ran ONCE at 272 tok/s before the reboots; the same code never ran again.
+**Symptom:** after the node reboots, the agave fails with `CUDA_ERROR_OUT_OF_MEMORY` (700) at the FIRST drain's D2H, then cascades, on BOTH nodes, ALL code states (batched on/off, async/blocking copies), even the very first commit (`27388be`). The tiny standin ran ONCE at 272 tok/s before the reboots; the same code never ran again.
 
 **Exhaustive C-harness validation (passes on the same fresh nodes):**
 - cuMemAlloc of every size in the agave's sequence (512B → 128KB, 36 allocs, 720KB total)
 - H2D/D2H blocking + async, from/to stack, malloc heap, 64MB anon mmap, and the mmap'd model shard
 - Small D2H sizes (4B → 1KB)
 - The agave's PTX module load + `silu_kernel` and `gemv_f32_kernel` (n=24, k=2048, smem 32, on a stream) launch + execution with correct results
-- With `CUDA_LAUNCH_BLOCKING=1`, the agave's own launch returns 700 — but the identical C launch passes.
+- With `CUDA_LAUNCH_BLOCKING=1`, the agave's own launch returns 700, but the identical C launch passes.
 
 **Conclusion:** every individual CUDA operation works from a C process; the failure is specific to the agave process's state and cannot be isolated remotely. Likely suspects for the user: the driver version after the reboot, a UVA/address-space collision with the Zig allocator's buffers, or the process's context state.
 
 **On-node debugging needed (user):**
-1. Run the vLLM on a fresh node — if it serves, the driver is healthy for other CUDA apps.
+1. Run the vLLM on a fresh node: if it serves, the driver is healthy for other CUDA apps.
 2. Run the agave locally with `CUDA_LAUNCH_BLOCKING=1` + `CUDA_VISIBLE_DEVICES=0` and read the console output.
 3. Check `journalctl -k` / `dmesg` (root) for the NVMe/UMA driver faults during the run.
 4. Consider a driver reinstall or update.
 
-**Commits:** `9ca7558` (all-blocking copies — the fresh driver rejects async copies from unpinned host memory; the batched kernel stays) + the NULL-scale guard. The batched kernel's FFN win (26ms → 1ms/layer) is preserved in the code.
+**Commits:** `9ca7558` (all-blocking copies, since the fresh driver rejects async copies from unpinned host memory; the batched kernel stays) + the NULL-scale guard. The batched kernel's FFN win (26ms → 1ms/layer) is preserved in the code.

@@ -1,9 +1,9 @@
 # Agave brand
 
-How Agave looks and talks: the mark, the palette, type, icons, the component
-rules the linter enforces, and the wording rules. The chat UI tokens in
+How Agave looks and talks. The chat UI tokens in
 [src/web/ui/theme.css](../../src/web/ui/theme.css) are the source of truth for
-color values; this page names them and says where each one goes.
+color values; this page names them, says where each one goes, and gives the
+component and wording rules the linter enforces.
 
 <p align="center">
   <picture>
