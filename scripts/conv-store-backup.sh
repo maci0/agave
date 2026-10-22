@@ -793,7 +793,8 @@ do_self_test() {
     cp -- "$store" "$tmp/cache/agave/conversations.json.corrupt"
     cp -- "$store" "$tmp/cache/agave/conversations.json.overflow"
     cp -- "$store" "$tmp/cache/agave/conversations.json.deleted"
-    ( KEEP_SNAPSHOT=2; AGAVE_BACKUP_DIR="$tmp/backups" XDG_CACHE_HOME="$tmp/cache" do_backup ) >/dev/null
+    # Keep all four sidecars here so this case isolates dated retention.
+    ( KEEP=1; KEEP_SNAPSHOT=4; AGAVE_BACKUP_DIR="$tmp/backups" XDG_CACHE_HOME="$tmp/cache" do_backup ) >/dev/null
     rm -f -- "$tmp/cache/agave/conversations.json.corrupt" "$tmp/cache/agave/conversations.json.overflow" "$tmp/cache/agave/conversations.json.deleted"
     [[ "$(find "$tmp/backups" -name 'conversations-corrupt-*.json' | wc -l)" -ge 1 ]] || {
         echo "conv-store-backup: self-test FAILED: dated-backup rotation deleted the quarantined-store copy" >&2
