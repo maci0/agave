@@ -529,8 +529,7 @@ fi
 # "numpy" and "torch" with no specifier) resolves to versions the manifest no
 # longer allows, and `uv sync --frozen` then installs what the lock says rather
 # than what the manifest pins. `uv lock --check` re-resolves from the lock, so
-# it needs no network. Dirs with no lock (research/kernels/tilelang installs
-# torch from a hardware-specific index) are out of scope: nothing to compare.
+# it needs no network.
 if ! command -v uv >/dev/null 2>&1; then
     echo "check-pins: uv not on PATH, skipping the uv.lock freshness check"
 else
@@ -549,14 +548,14 @@ else
         rm -rf "$cache"
         return "$status"
     }
-    for dir in tests research/kernels; do
+    for dir in tests research/kernels research/kernels/tilelang; do
         [[ -f "$dir/pyproject.toml" && -f "$dir/uv.lock" ]] || continue
         if ! uv_check_ok "$dir"; then
             echo "check-pins: $dir/uv.lock disagrees with $dir/pyproject.toml; run 'uv lock' in $dir" >&2
             exit 1
         fi
     done
-    echo "uv lock OK: tests/uv.lock, research/kernels/uv.lock match their pyproject.toml"
+    echo "uv lock OK: tests/uv.lock, research/kernels/uv.lock, research/kernels/tilelang/uv.lock match their pyproject.toml"
 fi
 
 # Every third-party requirement names one version. A range ("torch>=2.10",
