@@ -151,17 +151,33 @@ pub fn encode(
 ) ![]u8 {
     var buf: std.ArrayList(u8) = .empty;
     errdefer buf.deinit(allocator);
+    // Pre-size to avoid log-growth reallocs and copies: 64MiB store cap,
+    // title/content escapes expand at most 6x.
+    var estimated: usize = 256;
+    for (convs) |conv| {
+        estimated += conv.title.len * 6 + 64;
+        for (conv.messages) |msg| {
+            estimated += msg.content.len * 6 + 64;
+            if (msg.tool_call_id) |tcid| estimated += tcid.len * 6 + 32;
+        }
+    }
+    try buf.ensureTotalCapacity(allocator, estimated);
 
     try buf.appendSlice(allocator, "{\"version\":");
     try buf.print(allocator, "{d},\"active_id\":{d},\"next_id\":{d},\"conversations\":[", .{
         format_version, active_id, next_id,
     });
 
+    // Write escapes directly into `buf` after reserving worst-case 6x.
+    // `jsonEscape` allocated a temp copy per string; the pre-reserved
+    // capacity makes a direct append avoid that alloc+copy entirely.
     for (convs, 0..) |conv, ci| {
         if (ci > 0) try buf.append(allocator, ',');
-        const title_esc = try json.jsonEscape(allocator, conv.title);
-        defer if (title_esc.ptr != conv.title.ptr) allocator.free(title_esc);
-        try buf.print(allocator, "{{\"id\":{d},\"title\":\"{s}\",\"messages\":[", .{ conv.id, title_esc });
+        try buf.appendSlice(allocator, "{\"id\":");
+        try buf.print(allocator, "{d}", .{conv.id});
+        try buf.appendSlice(allocator, ",\"title\":\"");
+        try appendEscaped(allocator, &buf, conv.title);
+        try buf.appendSlice(allocator, "\",\"messages\":[");
         for (conv.messages, 0..) |msg, mi| {
             if (mi > 0) try buf.append(allocator, ',');
             const role_str: []const u8 = switch (msg.role) {
@@ -169,13 +185,15 @@ pub fn encode(
                 .assistant => "assistant",
                 .tool => "tool",
             };
-            const content_esc = try json.jsonEscape(allocator, msg.content);
-            defer if (content_esc.ptr != msg.content.ptr) allocator.free(content_esc);
-            try buf.print(allocator, "{{\"role\":\"{s}\",\"content\":\"{s}\"", .{ role_str, content_esc });
+            try buf.appendSlice(allocator, "{\"role\":\"");
+            try buf.appendSlice(allocator, role_str);
+            try buf.appendSlice(allocator, "\",\"content\":\"");
+            try appendEscaped(allocator, &buf, msg.content);
+            try buf.appendSlice(allocator, "\"");
             if (msg.tool_call_id) |tcid| {
-                const tcid_esc = try json.jsonEscape(allocator, tcid);
-                defer if (tcid_esc.ptr != tcid.ptr) allocator.free(tcid_esc);
-                try buf.print(allocator, ",\"tool_call_id\":\"{s}\"", .{tcid_esc});
+                try buf.appendSlice(allocator, ",\"tool_call_id\":\"");
+                try appendEscaped(allocator, &buf, tcid);
+                try buf.appendSlice(allocator, "\"");
             }
             try buf.appendSlice(allocator, "}");
         }
@@ -184,6 +202,48 @@ pub fn encode(
     try buf.appendSlice(allocator, "]}");
 
     return buf.toOwnedSlice(allocator);
+}
+
+/// Append `src` JSON-escaped to `buf`, writing exactly the escaped bytes.
+/// Falls back to `json.jsonEscape` when the pre-reserved capacity is
+/// insufficient (should not happen after `encode`'s estimate, but safe).
+fn appendEscaped(allocator: Allocator, buf: *std.ArrayList(u8), src: []const u8) !void {
+    // Cheap path: no specials → copy verbatim without scanning for UTF-8 validity.
+    // `jsonEscape` also handles invalid UTF-8; detect that via its step logic
+    // by falling through to the alloc path when any byte needs escaping.
+    var needs_escape = false;
+    for (src) |c| {
+        if (c < 0x20 or c == '"' or c == '\\') {
+            needs_escape = true;
+            break;
+        }
+    }
+    if (!needs_escape) {
+        // Still need to validate UTF-8 exactly like jsonEscape does.
+        var i: usize = 0;
+        while (i < src.len) {
+            const seq_len = std.unicode.utf8ByteSequenceLength(src[i]) catch {
+                needs_escape = true;
+                break;
+            };
+            if (i + seq_len > src.len) {
+                needs_escape = true;
+                break;
+            }
+            _ = std.unicode.utf8Decode(src[i..][0..seq_len]) catch {
+                needs_escape = true;
+                break;
+            };
+            i += seq_len;
+        }
+        if (!needs_escape) {
+            try buf.appendSlice(allocator, src);
+            return;
+        }
+    }
+    const esc = try json.jsonEscape(allocator, src);
+    defer if (esc.ptr != src.ptr) allocator.free(esc);
+    try buf.appendSlice(allocator, esc);
 }
 
 /// Load a store from `path`. FileNotFound if missing. Quarantines a corrupt

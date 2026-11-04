@@ -17,6 +17,13 @@ fn allocateSeqTableImpl(allocator: Allocator, n_layers: usize) !SeqBlockTable {
     return .{ .block_table = block_table, .seq_len = 0 };
 }
 
+fn freeSeqTableImpl(allocator: Allocator, seq_table: *SeqBlockTable) void {
+    for (seq_table.block_table) |layer_table| {
+        if (layer_table.len > 0) allocator.free(layer_table);
+    }
+    allocator.free(seq_table.block_table);
+}
+
 /// BlockAllocator manages SeqBlockTable creation and physical block allocation.
 pub const BlockAllocator = struct {
     cache: *PagedKvCache,
@@ -44,18 +51,15 @@ pub const BlockAllocator = struct {
     /// Each layer gets its own independent block so layers don't overwrite
     /// each other's KV cache data.
     pub fn appendBlock(self: *BlockAllocator, seq_table: *SeqBlockTable) !void {
+        // Check capacity first so we don't partially allocate on OOB.
+        if (self.cache.freeCount() < seq_table.block_table.len) return error.OutOfBlocks;
         var allocated: usize = 0;
         errdefer {
-            // Roll back: free blocks already appended to earlier layers
             for (seq_table.block_table[0..allocated]) |*layer_table| {
                 const bid = layer_table.*[layer_table.len - 1];
                 self.cache.freeBlock(bid);
-                if (layer_table.len > 1) {
-                    layer_table.* = self.allocator.realloc(layer_table.*, layer_table.len - 1) catch layer_table.*;
-                }
             }
         }
-
         for (seq_table.block_table) |*layer_table| {
             const block_id = self.cache.allocBlock() orelse return error.OutOfBlocks;
             errdefer self.cache.freeBlock(block_id);
@@ -64,26 +68,18 @@ pub const BlockAllocator = struct {
             layer_table.* = new_table;
             allocated += 1;
         }
-
         seq_table.seq_len += self.cache.block_size;
     }
 
     /// Free all blocks and memory associated with a SeqBlockTable.
     pub fn freeSeqTable(self: *BlockAllocator, seq_table: *SeqBlockTable) void {
         if (seq_table.block_table.len == 0) return;
-
-        // Free physical blocks from ALL layers (each layer has its own blocks)
         for (seq_table.block_table) |layer_table| {
             for (layer_table) |block_id| {
                 self.cache.freeBlock(block_id);
             }
         }
-
-        // Free block_table arrays (skip comptime empty slices from init)
-        for (seq_table.block_table) |layer_table| {
-            if (layer_table.len > 0) self.allocator.free(layer_table);
-        }
-        self.allocator.free(seq_table.block_table);
+        freeSeqTableImpl(self.allocator, seq_table);
     }
 
     /// Map (layer, logical_block_idx) to physical block ID via indirection.
@@ -114,18 +110,15 @@ pub const TieredBlockAllocator = struct {
     /// Append a new physical block to each layer of the sequence table.
     /// Each layer gets its own independent block.
     pub fn appendBlock(self: *TieredBlockAllocator, seq_table: *SeqBlockTable) !void {
+        const free_ct = self.cache.vram_free_list.items.len + self.cache.ram_free_list.items.len + self.cache.ssd_free_list.items.len;
+        if (free_ct < seq_table.block_table.len) return error.OutOfBlocks;
         var allocated: usize = 0;
         errdefer {
-            // Roll back: free blocks already appended to earlier layers
             for (seq_table.block_table[0..allocated]) |*layer_table| {
                 const bid = layer_table.*[layer_table.len - 1];
                 self.cache.freeBlock(bid);
-                if (layer_table.len > 1) {
-                    layer_table.* = self.allocator.realloc(layer_table.*, layer_table.len - 1) catch layer_table.*;
-                }
             }
         }
-
         for (seq_table.block_table) |*layer_table| {
             const block_id = self.cache.allocBlock() catch return error.OutOfBlocks;
             errdefer self.cache.freeBlock(block_id);
@@ -134,26 +127,18 @@ pub const TieredBlockAllocator = struct {
             layer_table.* = new_table;
             allocated += 1;
         }
-
         seq_table.seq_len += self.cache.block_size;
     }
 
     /// Free all blocks and memory associated with a SeqBlockTable.
     pub fn freeSeqTable(self: *TieredBlockAllocator, seq_table: *SeqBlockTable) void {
         if (seq_table.block_table.len == 0) return;
-
-        // Free physical blocks from ALL layers (each layer has its own blocks)
         for (seq_table.block_table) |layer_table| {
             for (layer_table) |block_id| {
                 self.cache.freeBlock(block_id);
             }
         }
-
-        // Free block_table arrays (skip comptime empty slices from init)
-        for (seq_table.block_table) |layer_table| {
-            if (layer_table.len > 0) self.allocator.free(layer_table);
-        }
-        self.allocator.free(seq_table.block_table);
+        freeSeqTableImpl(self.allocator, seq_table);
     }
 };
 
