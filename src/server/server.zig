@@ -3090,6 +3090,12 @@ fn handleRequest(stream: http.TcpStream, req: http.HttpRequest) void {
         } else {
             // Import under inference mutex: concurrent generate must not read torn KV.
             // Clear prefix-cache IDs: blob has no token IDs, so bookkeeping would lie.
+            // `importKvPrefix` overwrites the live KV state, so an orchestrator
+            // retry after a lost response would clobber whatever generation
+            // advanced the cache since the first import. Run it through the
+            // replay ledger so a retried POST (same `X-Request-Id`) is refused
+            // while in flight and replays the recorded response after it.
+            if (resolveIdempotency(stream, method, path, request_start)) return;
             const ok = blk: {
                 g_server.mutex.lockUncancelable(g_server.io);
                 defer g_server.mutex.unlock(g_server.io);
@@ -3106,12 +3112,14 @@ fn handleRequest(stream: http.TcpStream, req: http.HttpRequest) void {
             if (!ok) {
                 sendJsonErrorEx(stream, "400 Bad Request", "invalid_request_error", "KV import failed (size mismatch or unsupported)", "n_tokens", "kv_import_failed");
                 g_server.metrics.recordClientError();
+                g_server.releaseIdempotencyKey();
                 logRequestDone(method, path, 400, elapsedMs(request_start));
                 return;
             }
             var import_buf: [clear_response_buf_size]u8 = undefined;
             const import_resp = std.fmt.bufPrint(&import_buf, "{{\"imported\":{d}}}", .{n_tokens}) catch "{\"ok\":true}";
             sendJson(stream, import_resp);
+            g_server.completeIdempotencyKey("200 OK", "application/json", import_resp);
             g_server.metrics.recordCompletion();
             logRequestDone(method, path, 200, elapsedMs(request_start));
         }
@@ -3795,12 +3803,20 @@ fn handleRequest(stream: http.TcpStream, req: http.HttpRequest) void {
             clearPendingVision();
         };
 
-        // Handle REPL-style commands in the chat interface
+        // Handle REPL-style commands in the chat interface. `/clear` and
+        // `/reset` run through the replay ledger like the turn they
+        // finalize: their snapshot sidecar copy is bounded (one copy per
+        // distinct store bytes, `snapshotAlreadyKept` skips an identical
+        // repeat), so a retry after a lost response does not exhaust the
+        // 8-slot set. `/model` and `/help` are read-only queries and stay
+        // outside the ledger.
         const trimmed = std.mem.trim(u8, decoded, " \t\r\n");
         if (trimmed.len > 0 and trimmed[0] == '/') {
-            const cmd_html = handleChatCommand(trimmed);
-            if (cmd_html) |html| {
+            const destructive = std.mem.eql(u8, trimmed, "/clear") or std.mem.eql(u8, trimmed, "/reset");
+            if (destructive and resolveIdempotency(stream, method, path, request_start)) return;
+            if (handleChatCommand(trimmed)) |html| {
                 sendHtml(stream, html);
+                if (destructive) g_server.completeIdempotencyKey("200 OK", "text/html; charset=utf-8", html);
                 g_server.metrics.recordCompletion();
                 logRequestDone(method, path, 200, elapsedMs(request_start));
                 return;
@@ -4044,12 +4060,12 @@ fn snapshotBeforeDeletion() void {
 /// Handle a `/`-prefixed chat message. Returns the reply HTML, or null when
 /// `cmd` is not a command and should go to the model as a message.
 ///
-/// Deliberately outside the replay ledger: this runs before
-/// `claimIdempotencyKey`, so a retry is not deduplicated. Every command here is
-/// naturally idempotent (a reset of already-reset state), which is what makes
-/// that safe. A command that appends, pops, or otherwise steps the
-/// conversation must move behind `claimIdempotencyKey` first; otherwise it
-/// silently loses its retry protection.
+/// `/clear` and `/reset` run through the replay ledger at the call site before
+/// this is reached, so a retry after a lost response does not repeat the
+/// snapshot sidecar they take. `/model` and `/help` are read-only queries and
+/// stay outside the ledger. Any future command that appends, pops, or
+/// otherwise steps the conversation must run through `claimIdempotencyKey`
+/// first; otherwise it silently loses its retry protection.
 fn handleChatCommand(cmd: []const u8) ?[]const u8 {
     if (std.mem.eql(u8, cmd, "/clear")) {
         snapshotBeforeDeletion();
