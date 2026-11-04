@@ -299,16 +299,24 @@ fn fail(comptime fmt: []const u8, args: anytype) u8 {
 const fetch_stall_timeout_sec: i64 = 60;
 
 /// Apply SO_RCVTIMEO to the socket backing `req` so the body read cannot block
-/// forever. Advisory: a socket that cannot take the option is left untimed.
+/// forever. Advisory: a socket that cannot take the option (an already-released connection) warns and
+/// leaves the read untimed rather than failing the request.
 fn setFetchSocketTimeout(req: std.http.Client.Request, seconds: i64) void {
-    const conn = req.connection orelse return;
+    const conn = req.connection orelse {
+        writeErr("Warning: connection already released, no read timeout set\n");
+        return;
+    };
     const timeout = std.posix.timeval{ .sec = seconds, .usec = 0 };
     std.posix.setsockopt(
         conn.stream_reader.stream.socket.handle,
         std.posix.SOL.SOCKET,
         std.posix.SO.RCVTIMEO,
         std.mem.asBytes(&timeout),
-    ) catch {};
+    ) catch |err| {
+        var buf: [256]u8 = undefined;
+        const line = std.fmt.bufPrint(&buf, "Warning: could not set the {d}s read timeout ({}); a stalled connection must be interrupted with Ctrl+C\n", .{ seconds, err }) catch return;
+        writeErr(line);
+    };
 }
 
 fn fetchBody(
