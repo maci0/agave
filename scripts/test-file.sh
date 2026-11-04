@@ -136,7 +136,7 @@ fi
 # 13 files in src/ `@import("build_options")`: the compile-time enable-* flags
 # and version the build system generates, so a standalone `zig test` has no such
 # module and fails with "no module named 'build_options' available". The build
-# writes exactly one options.zig under .zig-cache/c/, and it is what the suite
+# writes exactly one options.zig under .zig-cache/o/, and it is what the suite
 # itself compiles against, so reuse it rather than inventing a second copy that
 # could disagree with build.zig. A fresh clone with no build yet has none; say
 # so instead of failing on a name the contributor did not write.
@@ -145,7 +145,7 @@ if [[ -f "$ROOT/build.zig.zon" ]]; then
     expected_ver="$(sed -n 's/^[[:space:]]*\.version[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$ROOT/build.zig.zon" | head -n1)"
 fi
 options_module=""
-for candidate in .zig-cache/c/*/options.zig; do
+for candidate in .zig-cache/o/*/options.zig; do
     [[ -f "$candidate" ]] || continue
     options_module="$candidate"
     if [[ -n "$expected_ver" ]] && grep -q "version: \[\]const u8 = \"$expected_ver\"" "$candidate" 2>/dev/null; then
@@ -154,7 +154,7 @@ for candidate in .zig-cache/c/*/options.zig; do
 done
 if [[ -z "$options_module" ]]; then
     echo "test-file: this file needs the build_options module, and .zig-cache has none yet." >&2
-    echo "  Run \`zig build\` once (it writes .zig-cache/c/*/options.zig), then rerun." >&2
+    echo "  Run \`zig build\` once (it writes .zig-cache/o/*/options.zig), then rerun." >&2
     echo "  Or reach the same tests through the build, which wires it for you:" >&2
     echo "    zig build test -Dtest-filter=<name>" >&2
     exit 1

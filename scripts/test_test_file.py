@@ -58,7 +58,7 @@ class Fixture:
     """A staged tree the real test-file.sh can run against.
 
     The script derives its root from BASH_SOURCE and reads only `.zigversion`,
-    the target file and `.zig-cache/c/*/options.zig`, so staging those three is
+    the target file and `.zig-cache/o/*/options.zig`, so staging those three is
     enough for the script to run its real validation over real file shapes.
     """
 
@@ -94,7 +94,7 @@ class Fixture:
 
     def options(self) -> Path:
         """The build-generated build_options module the real build writes."""
-        cache = self.root / ".zig-cache" / "c" / "deadbeefdeadbeefdeadbeefdeadbeef"
+        cache = self.root / ".zig-cache" / "o" / "deadbeefdeadbeefdeadbeefdeadbeef"
         cache.mkdir(parents=True, exist_ok=True)
         path = cache / "options.zig"
         path.write_text(
@@ -293,7 +293,7 @@ class TestEndToEnd(unittest.TestCase):
     """
 
     def test_import_outside_module_path_runs_through_the_bridge(self) -> None:
-        if not list((REPO / ".zig-cache" / "c").glob("*/options.zig")):
+        if not list((REPO / ".zig-cache" / "o").glob("*/options.zig")):
             self.skipTest("no build_options module; run `zig build` once")
 
         direct = subprocess.run(
