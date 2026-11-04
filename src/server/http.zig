@@ -395,3 +395,43 @@ pub const security_headers = security_headers_base ++ "Cache-Control: no-store\r
 pub const document_cache_headers =
     "Cache-Control: private, no-cache\r\n" ++
     "Vary: Accept-Encoding\r\n";
+
+test "fuzz: HTTP request-line, header, and host parsers" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *std.testing.Smith) !void {
+            var raw: [512]u8 = undefined;
+            smith.bytesWithHash(&raw, 0);
+            const len = smith.indexWithHash(raw.len + 1, 1);
+            const fuzzed = raw[0..len];
+            if (parseRequestLine(fuzzed)) |r| {
+                try std.testing.expect(r.method.len <= fuzzed.len);
+                try std.testing.expect(r.path.len <= fuzzed.len);
+                try std.testing.expect(r.query.len <= fuzzed.len);
+            }
+            _ = getHeaderValue(fuzzed, "content-length");
+            _ = getHeaderValue(fuzzed, "host");
+            _ = getHeaderValue(fuzzed, "accept-encoding");
+            _ = parseContentLength(fuzzed);
+            _ = hasHeader(fuzzed, "transfer-encoding");
+            _ = acceptsEncoding(fuzzed, "gzip");
+            _ = isCrossSiteFetch(fuzzed);
+            if (getHeaderValue(fuzzed, "host")) |host| {
+                _ = hostnameFromHost(host);
+                _ = isLoopbackHttpHost(host);
+                if (getHeaderValue(fuzzed, "origin")) |origin| {
+                    _ = originMatchesHost(origin, host);
+                }
+            }
+            var id_buf: [64]u8 = undefined;
+            const n = sanitizeClientRequestId(fuzzed, &id_buf);
+            try std.testing.expect(n <= id_buf.len);
+            if (n > 0) {
+                for (id_buf[0..n]) |c| {
+                    try std.testing.expect(std.ascii.isAlphanumeric(c) or c == '-' or c == '_' or c == '.');
+                }
+            }
+            _ = extractQueryParam(fuzzed, "key");
+            _ = splitPathQuery(fuzzed);
+        }
+    }.f, .{});
+}

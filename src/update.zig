@@ -799,3 +799,42 @@ test "update: printUsage writes to stdout with Silencer" {
     defer s.release();
     printUsage();
 }
+
+test "fuzz: parseRelease over hostile GitHub API JSON" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *std.testing.Smith) !void {
+            const alloc = std.testing.allocator;
+            var arena = std.heap.ArenaAllocator.init(alloc);
+            defer arena.deinit();
+            // Half the inputs splice fuzzed bytes into a plausible release
+            // envelope so the parser reaches field validation, not just the
+            // top-level JSON check.
+            var raw: [1024]u8 = undefined;
+            smith.bytesWithHash(&raw, 0);
+            const len = smith.indexWithHash(raw.len + 1, 1);
+            const fuzzed = raw[0..len];
+            var env_buf: [2048]u8 = undefined;
+            const body: []const u8 = if (smith.boolWeightedWithHash(1, 1, 2)) blk: {
+                const built = std.fmt.bufPrint(&env_buf, "{{\"tag_name\":\"{s}\",\"html_url\":\"{s}\",\"assets\":{s}", .{
+                    fuzzed,
+                    fuzzed,
+                    fuzzed,
+                }) catch fuzzed;
+                break :blk built;
+            } else fuzzed;
+            const rel = parseRelease(arena.allocator(), body) catch return;
+            try std.testing.expect(rel.tag.len <= body.len);
+            try std.testing.expect(rel.page.len <= body.len);
+            for (rel.assets) |a| {
+                try std.testing.expect(a.name.len <= body.len);
+                try std.testing.expect(a.url.len <= body.len);
+                // assetUrl roundtrip: a listed asset must resolve to itself.
+                try std.testing.expectEqualStrings(a.url, assetUrl(rel, a.name).?);
+            }
+            // formatCurrent/formatNewRelease must not panic on any tag/page.
+            var buf: [1024]u8 = undefined;
+            _ = formatCurrent(&buf, "agave", "0.0.0", rel.tag) catch {};
+            _ = formatNewRelease(&buf, rel.tag, "0.0.0") catch {};
+        }
+    }.f, .{});
+}
