@@ -167,3 +167,118 @@ test "merge appends distinct request tools" {
     const n = reg.mergeInto(&req, &out);
     try std.testing.expectEqual(@as(u32, 2), n);
 }
+
+test "fuzz: registry register/dispose/unregister/merge state machine" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *std.testing.Smith) !void {
+            const names = [_][]const u8{
+                "alpha", "beta", "gamma", "delta",
+                "search", "code",  "x",     "",
+            };
+            const n_ops = smith.indexWithHash(24, 0) + 1;
+
+            var reg = Registry{};
+            var handles: [max_tools]?Handle = @splat(null);
+            var next_handle: usize = 0;
+
+            for (0..n_ops) |op| {
+                const kind = smith.indexWithHash(4, @truncate(op + 1));
+                switch (kind) {
+                    0 => {
+                        // Register a (possibly duplicate) name.
+                        const name = names[smith.indexWithHash(names.len, @truncate(op + 2))];
+                        const had = reg.hasName(name);
+                        const before = reg.count();
+                        const res = reg.register(.{
+                            .name = name,
+                            .description = "fuzz",
+                            .parameters_json = "{}",
+                        });
+                        if (res) |h| {
+                            // Success implies the name was absent and a slot freed.
+                            try std.testing.expect(!had);
+                            try std.testing.expectEqual(before + 1, reg.count());
+                            try std.testing.expect(reg.hasName(name));
+                            try std.testing.expect(h.slot < max_tools);
+                            if (next_handle < handles.len) {
+                                handles[next_handle % handles.len] = h;
+                                next_handle += 1;
+                            }
+                        } else |err| {
+                            // Failure leaves the registry untouched.
+                            try std.testing.expectEqual(before, reg.count());
+                            if (err == error.DuplicateName) try std.testing.expect(had);
+                            if (err == error.RegistryFull) try std.testing.expectEqual(@as(u32, max_tools), before);
+                        }
+                    },
+                    1 => {
+                        // Dispose a handle (idempotent, may be stale).
+                        if (next_handle > 0) {
+                            const idx = smith.indexWithHash(next_handle, @truncate(op + 3)) % handles.len;
+                            if (handles[idx]) |h| h.dispose();
+                        }
+                        // Unregister a raw slot id, in or out of range.
+                        const slot = smith.valueWithHash(u32, @truncate(op + 4));
+                        reg.unregister(slot);
+                    },
+                    2 => {
+                        // hasName / count agree with the slots.
+                        const name = names[smith.indexWithHash(names.len, @truncate(op + 5))];
+                        var expected = false;
+                        var occupied: u32 = 0;
+                        for (reg.slots) |s| {
+                            if (s) |t| {
+                                occupied += 1;
+                                if (std.mem.eql(u8, t.name, name)) expected = true;
+                            }
+                        }
+                        try std.testing.expectEqual(occupied, reg.count());
+                        try std.testing.expectEqual(expected, reg.hasName(name));
+                        try std.testing.expect(reg.count() <= max_tools);
+                    },
+                    else => {
+                        // mergeInto: output names are unique, count within
+                        // bounds, and request tools win on a name clash.
+                        var req_buf: [4]?Tool = @splat(null);
+                        const req_len = smith.indexWithHash(req_buf.len + 1, @truncate(op + 6));
+                        for (0..req_len) |ri| {
+                            if (smith.boolWeightedWithHash(1, 1, 1)) {
+                                req_buf[ri] = .{
+                                    .name = names[smith.indexWithHash(names.len, @truncate(op + ri + 7))],
+                                    .description = "request",
+                                    .parameters_json = "{\"r\":true}",
+                                };
+                            }
+                        }
+                        var out: [max_tools + 4]?Tool = @splat(null);
+                        const n = reg.mergeInto(&req_buf, &out);
+                        try std.testing.expect(n <= out.len);
+                        try std.testing.expect(n <= max_tools + req_len);
+                        // Uniqueness of output names.
+                        for (out[0..n], 0..) |a, ai| {
+                            const ta = a orelse continue;
+                            for (out[ai + 1 .. n]) |b| {
+                                if (b) |tb| try std.testing.expect(!std.mem.eql(u8, ta.name, tb.name));
+                            }
+                        }
+                        // A request tool that clamped into `out` carries the
+                        // request description, not the registry one.
+                        for (out[0..n]) |entry| {
+                            if (entry) |t| {
+                                if (std.mem.eql(u8, t.description, "request")) {
+                                    var in_req = false;
+                                    for (req_buf) |r| {
+                                        if (r) |rt| {
+                                            if (std.mem.eql(u8, rt.name, t.name)) in_req = true;
+                                        }
+                                    }
+                                    try std.testing.expect(in_req);
+                                }
+                            }
+                        }
+                    },
+                }
+            }
+        }
+    }.f, .{});
+}

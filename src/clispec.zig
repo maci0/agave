@@ -295,3 +295,88 @@ test "schema document is clispec 0.3" {
     try std.testing.expect(std.mem.indexOf(u8, filtered, "\"name\":\"version\"") == null);
     try std.testing.expectError(error.Unknown, renderSchema(&buf, "0.13.0", &.{"nope"}));
 }
+
+test "fuzz: clispec output scan and schema path" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *std.testing.Smith) !void {
+            // Splice fuzzed bytes into a plausible argv so the output-mode
+            // parser reaches value validation, not just the token boundary.
+            const vocab = [_][]const u8{
+                "agave",     "--output", "--output=json", "--output=text",
+                "--output=auto", "--output=bogus", "--json", "-o", "json",
+                "text",      "auto",     "schema",          "pull",
+                "calibrate", "--",       "-ojson",          "-o",
+                "--help",    "-h",       "help",            "",
+            };
+            var arg_storage: [6][16:0]u8 = undefined;
+            var argv: [6][*:0]const u8 = undefined;
+            var storage: [6][]const u8 = undefined;
+            const n_args = smith.indexWithHash(6, 0) + 1;
+            for (0..n_args) |i| {
+                // Half the slots are exact vocabulary tokens (structure-aware
+                // seeds), half are raw fuzz bytes (hostile boundaries).
+                switch (smith.boolWeightedWithHash(1, 1, 1)) {
+                    true => {
+                        const tok = vocab[smith.indexWithHash(vocab.len, @truncate(i + 1))];
+                        storage[i] = tok;
+                        // Copy into sentinel storage so argv entries are null-terminated.
+                        const copy_len = @min(tok.len, arg_storage[i].len);
+                        @memcpy(arg_storage[i][0..copy_len], tok[0..copy_len]);
+                        arg_storage[i][copy_len] = 0;
+                        argv[i] = &arg_storage[i];
+                    },
+                    false => {
+                        var raw: [16]u8 = undefined;
+                        smith.bytesWithHash(&raw, @truncate(i + 2));
+                        const len = smith.indexWithHash(raw.len + 1, @truncate(i + 3));
+                        storage[i] = raw[0..len];
+                        const copy_len = @min(len, arg_storage[i].len);
+                        @memcpy(arg_storage[i][0..copy_len], raw[0..copy_len]);
+                        arg_storage[i][copy_len] = 0;
+                        argv[i] = &arg_storage[i];
+                    },
+                }
+            }
+            const args = std.process.Args{ .vector = argv[0..n_args] };
+
+            // scan-derived results must agree across the two readers: a bad
+            // --output is bad for both, and wantsJson is false when badOutput
+            // reports (scan stops at the first bad value).
+            const bad = badOutput(args);
+            const json = wantsJson(args);
+            if (bad != null) {
+                try std.testing.expect(!json);
+                try std.testing.expectEqualStrings(bad_output_msg, bad.?);
+            }
+            // commandWord, when present, is an exact argv token.
+            if (commandWord(args)) |word| {
+                var found = false;
+                for (storage[0..n_args]) |tok| {
+                    if (std.mem.eql(u8, tok, word)) {
+                        found = true;
+                        break;
+                    }
+                }
+                try std.testing.expect(found);
+            }
+            // schemaPath: any returned path element is a post-`schema` token
+            // that is not a flag and not a help word.
+            var path_storage: [8][]const u8 = undefined;
+            if (schemaPath(args, &path_storage)) |path| {
+                for (path) |seg| {
+                    try std.testing.expect(seg.len == 0 or seg[0] != '-');
+                    try std.testing.expect(!std.mem.eql(u8, seg, "--help"));
+                    try std.testing.expect(!std.mem.eql(u8, seg, "-h"));
+                    try std.testing.expect(!std.mem.eql(u8, seg, "help"));
+                }
+                // renderSchema over a fuzz-derived path: success implies the
+                // path matched a real command, so the doc must carry it.
+                var buf: [8192]u8 = undefined;
+                if (renderSchema(&buf, "0.0.0", path)) |doc| {
+                    try std.testing.expect(std.mem.startsWith(u8, doc, "{\"clispec\":\"0.3\""));
+                    try std.testing.expect(std.mem.endsWith(u8, doc, "\n"));
+                } else |_| {}
+            } else |_| {}
+        }
+    }.f, .{});
+}

@@ -113,3 +113,44 @@ test "providerName matches wait token" {
     try std.testing.expectEqualStrings("draft", providerName(.draft));
     try std.testing.expectEqualStrings("mtp", providerName(.mtp));
 }
+
+test "fuzz: spec caps provider requirements" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *std.testing.Smith) !void {
+            const modes = [_]SpecMode{
+                .none,      .standard, .ddtree,   .self_spec, .ngram,
+                .suffix,    .mtp,      .eagle,    .eagle3,    .mlp,
+                .lookahead, .pflash,   .dspark,   .dflash2,
+            };
+            const mode = modes[smith.indexWithHash(modes.len, 0)];
+            const caps = Caps{
+                .draft = smith.boolWeightedWithHash(1, 1, 1),
+                .mtp = smith.boolWeightedWithHash(1, 1, 2),
+            };
+
+            const req = required(mode);
+            // Cross-check unsatisfied against required/has: unsatisfied is
+            // exactly the first required provider caps lacks, or null.
+            var expected: ?Provider = null;
+            for (req) |p| {
+                if (!caps.has(p)) {
+                    expected = p;
+                    break;
+                }
+            }
+            try std.testing.expectEqual(expected, unsatisfied(mode, caps));
+
+            // providerName/howToProvide are total and non-empty over Provider.
+            const providers = [_]Provider{ .draft, .mtp };
+            for (providers) |p| {
+                try std.testing.expect(providerName(p).len > 0);
+                try std.testing.expect(howToProvide(p).len > 0);
+                _ = caps.has(p);
+            }
+            // Every required provider is a real Provider.
+            for (req) |p| {
+                try std.testing.expect(p == .draft or p == .mtp);
+            }
+        }
+    }.f, .{});
+}
