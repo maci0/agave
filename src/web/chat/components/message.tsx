@@ -197,7 +197,7 @@ const Message = memo(({ bubble, showStats, canRegenerate, onRegenerate, onRender
         )}
       >
         {bubble.image === undefined ? null : (
-          <img className="mb-2 block max-w-50 rounded-md border border-divider" src={bubble.image} alt="Attached image" />
+          <img className="mb-2 block max-w-50 rounded-md border border-divider" src={bubble.image} alt="Attached image" width={200} height={80} loading="lazy" decoding="async" />
         )}
         {isUser ? <div className="agave-prose min-w-0">{bubble.text}</div> : <MessageBody text={bubble.text} phase={bubble.phase} onRendered={handleRendered} />}
       </div>

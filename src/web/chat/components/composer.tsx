@@ -40,6 +40,9 @@ const ImagePreview = ({ src, onRemove }: { src: string; onRemove: () => void }) 
         className="block max-h-20 max-w-50 rounded-lg border border-divider"
         src={src}
         alt="Attached image preview"
+        width={200}
+        height={80}
+        decoding="async"
       />
       <Button
         type="button"
