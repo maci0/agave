@@ -34,6 +34,102 @@ const SpecialTok = struct {
     id: u32,
 };
 
+/// SPM encode trie node: longest-match is found by walking bytes until a
+/// missing child instead of trying every length. Nodes are stored in an
+/// arena slice.
+const SpmTrieNode = struct {
+    child_head: u32 = bpe_none,
+    token_id: u32 = bpe_none,
+};
+
+/// One child edge of an `SpmTrieNode`.
+const SpmTrieChild = struct {
+    byte: u8,
+    next: u32,
+    node: u32,
+};
+
+/// SPM longest-match index: byte trie over vocab tokens. Lookups walk bytes
+/// until a missing child, then use the deepest token seen — O(match length)
+/// instead of one hash per length tried. Built lazily from `id_to_token` on
+/// first SPM encode.
+const SpmTrie = struct {
+    nodes: std.ArrayList(SpmTrieNode) = .empty,
+    children: std.ArrayList(SpmTrieChild) = .empty,
+    built: bool = false,
+
+    fn deinit(self: *SpmTrie, allocator: Allocator) void {
+        self.nodes.deinit(allocator);
+        self.children.deinit(allocator);
+    }
+
+    fn ensureBuilt(self: *SpmTrie, allocator: Allocator, vocab: []const []const u8, token_to_id: *const std.StringHashMap(u32)) !void {
+        if (self.built) return;
+        try self.nodes.append(allocator, .{});
+        for (vocab) |tok| {
+            var node_idx: u32 = 0;
+            var i: usize = 0;
+            while (i < tok.len) : (i += 1) {
+                const b = tok[i];
+                var found: bool = false;
+                var cur = self.nodes.items[node_idx].child_head;
+                while (cur != bpe_none) {
+                    const child = self.children.items[cur];
+                    if (child.byte == b) {
+                        node_idx = child.node;
+                        found = true;
+                        break;
+                    }
+                    cur = child.next;
+                }
+                if (!found) {
+                    const new_idx: u32 = @intCast(self.nodes.items.len);
+                    try self.nodes.append(allocator, .{});
+                    const entry_idx: u32 = @intCast(self.children.items.len);
+                    try self.children.append(allocator, .{ .byte = b, .next = self.nodes.items[node_idx].child_head, .node = new_idx });
+                    self.nodes.items[node_idx].child_head = entry_idx;
+                    node_idx = new_idx;
+                }
+            }
+            if (token_to_id.get(tok)) |id| {
+                self.nodes.items[node_idx].token_id = id;
+            }
+        }
+        self.built = true;
+    }
+
+    /// Longest token id matching a prefix of `text`, or null.
+    fn longestMatch(self: *const SpmTrie, text: []const u8, max_reach: usize) ?struct { len: usize, id: u32 } {
+        const limit = @min(max_reach, text.len);
+        var node_idx: u32 = 0;
+        var best_len: usize = 0;
+        var best_id: u32 = bpe_none;
+        var i: usize = 0;
+        while (i < limit) : (i += 1) {
+            const b = text[i];
+            var child_idx = self.nodes.items[node_idx].child_head;
+            var next_node: u32 = bpe_none;
+            while (child_idx != bpe_none) {
+                const child = self.children.items[child_idx];
+                if (child.byte == b) {
+                    next_node = child.node;
+                    break;
+                }
+                child_idx = child.next;
+            }
+            if (next_node == bpe_none) break;
+            node_idx = next_node;
+            const tok_id = self.nodes.items[node_idx].token_id;
+            if (tok_id != bpe_none) {
+                best_len = i + 1;
+                best_id = tok_id;
+            }
+        }
+        if (best_id == bpe_none) return null;
+        return .{ .len = best_len, .id = best_id };
+    }
+};
+
 /// Lazy-invalidated BPE merge candidate. `left_gen`/`right_gen` detect stale
 /// heap entries after a neighbor merge rewrites a node's piece.
 const BpeHeapItem = struct {
@@ -72,6 +168,7 @@ pub const BpeTokenizer = struct {
     /// Dense longest-first copy of `special_tokens` for encode scans. Avoids
     /// hashing and iterator overhead at every `'<'` / `'['` in the prompt.
     special_list: std.ArrayList(SpecialTok) = .empty,
+    spm_trie: SpmTrie = .{},
     merge_map: std.StringHashMap(u32),
     byte_to_unicode: [256][]const u8 = @splat(&.{}),
     unicode_to_byte: std.StringHashMap(u8),
@@ -210,6 +307,7 @@ pub const BpeTokenizer = struct {
         self.id_to_token.deinit(self.allocator);
         self.special_tokens.deinit();
         self.special_list.deinit(self.allocator);
+        self.spm_trie.deinit(self.allocator);
         self.merge_map.deinit();
         self.unicode_to_byte.deinit();
         for (self.owned_strings.items) |s| self.allocator.free(s);
@@ -852,18 +950,21 @@ pub const BpeTokenizer = struct {
     /// Spaces are consumed and represented as ▁ (U+2581) prefix on the following
     /// word, matching the SentencePiece convention the model was trained with.
     /// A dummy ▁ prefix is prepended to the input (add_dummy_prefix=true).
-    pub fn encodeSpm(self: *const BpeTokenizer, text: []const u8) ![]u32 {
+    /// Longest match is answered by a byte trie over the vocab, so each token
+    /// costs O(match length) instead of one hash per length tried.
+    pub fn encodeSpm(self: *BpeTokenizer, text: []const u8) ![]u32 {
         return self.encodeSpmInner(text, true);
     }
 
     /// Like encodeSpm but without add_dummy_prefix, used by tokenizers
     /// (like Gemma) where ▁ prefix only appears for actual spaces.
-    pub fn encodeSpmNoDummy(self: *const BpeTokenizer, text: []const u8) ![]u32 {
+    pub fn encodeSpmNoDummy(self: *BpeTokenizer, text: []const u8) ![]u32 {
         return self.encodeSpmInner(text, false);
     }
 
-    fn encodeSpmInner(self: *const BpeTokenizer, text: []const u8, add_dummy_prefix: bool) ![]u32 {
+    fn encodeSpmInner(self: *BpeTokenizer, text: []const u8, add_dummy_prefix: bool) ![]u32 {
         if (text.len == 0) return try self.allocator.alloc(u32, 0);
+        try self.spm_trie.ensureBuilt(self.allocator, self.id_to_token.items, &self.token_to_id);
         var result: std.ArrayList(u32) = .empty;
         errdefer result.deinit(self.allocator);
         try result.ensureTotalCapacity(self.allocator, text.len);
@@ -920,19 +1021,18 @@ pub const BpeTokenizer = struct {
             var best_id: u32 = 0;
 
             // SPM uses ▁ (U+2581, 3 bytes: 0xE2 0x96 0x81) as word separator.
-            // At word boundaries, try ▁-prefixed tokens first.
+            // At word boundaries, try ▁-prefixed tokens first via the trie.
             if (word_start) {
                 var buf: [spm_prefix.len + max_spm_token_len]u8 = undefined;
                 const max_try = @min(max_reach, max_spm_token_len);
-                var tl: usize = max_try;
-                while (tl > 0) : (tl -= 1) {
-                    if (spm_prefix.len + tl > buf.len) continue;
+                const prefixed_len = spm_prefix.len + max_try;
+                if (prefixed_len <= buf.len) {
                     @memcpy(buf[0..spm_prefix.len], spm_prefix);
-                    @memcpy(buf[spm_prefix.len..][0..tl], text[start..][0..tl]);
-                    if (self.token_to_id.get(buf[0 .. spm_prefix.len + tl])) |id| {
-                        best_len = tl;
-                        best_id = id;
-                        break;
+                    @memcpy(buf[spm_prefix.len..][0..max_try], text[start..][0..max_try]);
+                    if (self.spm_trie.longestMatch(buf[0..prefixed_len], prefixed_len)) |m| {
+                        // The match includes the 3-byte ▁ prefix.
+                        best_len = m.len - spm_prefix.len;
+                        best_id = m.id;
                     }
                 }
                 // If no ▁-prefixed token matched, emit standalone ▁ as a token
@@ -948,14 +1048,9 @@ pub const BpeTokenizer = struct {
 
             // Fallback: greedy longest match without ▁ prefix
             if (best_len == 0) {
-                const max_tok_len = @min(max_reach, max_spm_token_len);
-                var try_len: usize = max_tok_len;
-                while (try_len > 0) : (try_len -= 1) {
-                    if (self.token_to_id.get(text[start..][0..try_len])) |id| {
-                        best_len = try_len;
-                        best_id = id;
-                        break;
-                    }
+                if (self.spm_trie.longestMatch(text[start..], @min(max_reach, max_spm_token_len))) |m| {
+                    best_len = m.len;
+                    best_id = m.id;
                 }
             }
 

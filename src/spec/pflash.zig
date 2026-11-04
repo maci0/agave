@@ -104,24 +104,45 @@ pub fn selectBlocks(state: *PFlashState) void {
     // operand is a safety panic in ReleaseSafe and UB in ReleaseFast.
     const max_blocks = @max(1, @as(usize, @intFromFloat(@floor(@as(f32, @floatFromInt(n_blocks)) * cfg.max_kept_ratio))));
     if (n_selected > max_blocks) {
-        // Trim lowest-scoring selected blocks until within cap
-        // Find threshold score for top max_blocks
-        const cutoff_scores = state.block_scores[0..n_blocks];
-        _ = cutoff_scores;
-        // Simple approach: unselect blocks with lowest scores until at cap
-        var remaining = n_selected;
-        var min_val: f32 = std.math.inf(f32);
-        var min_idx: usize = 0;
-        while (remaining > max_blocks) {
-            min_val = std.math.inf(f32);
+        // Trim lowest-scoring selected blocks until within cap.
+        // Collect selected (score, index) pairs once, then keep the top
+        // `max_blocks` by sorting the pair list O(sel log sel) instead of
+        // rescanning the whole block range once per excess block O(sel * n).
+        const Pair = struct { score: f32, idx: usize };
+        var pairs: [4096]Pair = undefined;
+        // Common case: fits on stack. Larger prompts fall back to the
+        // repeated-minimum scan below (still correct, just slower).
+        if (n_selected <= 4096) {
+            var pn: usize = 0;
             for (0..n_blocks) |bi| {
-                if (state.selected[bi] and state.block_scores[bi] < min_val) {
-                    min_val = state.block_scores[bi];
-                    min_idx = bi;
+                if (state.selected[bi]) {
+                    pairs[pn] = .{ .score = state.block_scores[bi], .idx = bi };
+                    pn += 1;
                 }
             }
-            state.selected[min_idx] = false;
-            remaining -= 1;
+            std.mem.sort(Pair, pairs[0..pn], {}, struct {
+                fn less(_: void, a: Pair, b: Pair) bool {
+                    return a.score > b.score;
+                }
+            }.less);
+            for (pairs[max_blocks..pn]) |pair| {
+                state.selected[pair.idx] = false;
+            }
+        } else {
+            var remaining = n_selected;
+            var min_val: f32 = std.math.inf(f32);
+            var min_idx: usize = 0;
+            while (remaining > max_blocks) {
+                min_val = std.math.inf(f32);
+                for (0..n_blocks) |bi| {
+                    if (state.selected[bi] and state.block_scores[bi] < min_val) {
+                        min_val = state.block_scores[bi];
+                        min_idx = bi;
+                    }
+                }
+                state.selected[min_idx] = false;
+                remaining -= 1;
+            }
         }
     }
 }

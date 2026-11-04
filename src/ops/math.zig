@@ -701,53 +701,65 @@ pub fn sampleToken(logits: []f32, temperature: f32, top_k: u32, top_p: f32, rng:
     }
 
     // 4. Top-p (nucleus): threshold-based filtering.
-    // Collects top candidates via min-replacement scan (O(n + insertions*k)),
-    // sorts them, finds the probability threshold where cumulative
-    // probability >= top_p, then zeroes out tokens below the threshold.
+    // Collects top candidates via min-replacement scan, sorts them descending
+    // to find the cumulative-probability threshold, then zeroes out tokens
+    // below it. Buffer stores (value, index) pairs so the threshold is
+    // applied to exactly the counted tokens, not to value-twins outside the
+    // candidate set — near-tie over-counting could otherwise exceed top_p.
     if (top_p < 1.0 and top_p > 0.0) {
-        var top_vals: [nucleus_max_candidates]f32 = undefined;
+        const Cand = struct { v: f32, idx: u32 };
+        var top_cands: [nucleus_max_candidates]Cand = undefined;
         var n_top: usize = 0;
         var mi2: usize = 0;
 
-        // Collect top-N probabilities via min-replacement scan (O(n))
-        for (logits) |v| {
+        // Collect top-N candidates via min-replacement scan over value+index.
+        for (logits, 0..) |v, i| {
             // Negated so NaN drops out too: every NaN comparison is false, so
             // `v <= 0` would admit it and poison cumsum, leaving the threshold
             // at 0 and silently disabling top-p.
             if (!(v > 0)) continue;
             if (n_top < nucleus_max_candidates) {
-                top_vals[n_top] = v;
+                top_cands[n_top] = .{ .v = v, .idx = @intCast(i) };
                 n_top += 1;
                 if (n_top == nucleus_max_candidates) {
                     // Buffer just filled, find initial minimum
                     for (1..nucleus_max_candidates) |j| {
-                        if (top_vals[j] < top_vals[mi2]) mi2 = j;
+                        if (top_cands[j].v < top_cands[mi2].v) mi2 = j;
                     }
                 }
-            } else if (v > top_vals[mi2]) {
-                top_vals[mi2] = v;
+            } else if (v > top_cands[mi2].v) {
+                top_cands[mi2] = .{ .v = v, .idx = @intCast(i) };
                 mi2 = 0;
                 for (1..nucleus_max_candidates) |j| {
-                    if (top_vals[j] < top_vals[mi2]) mi2 = j;
+                    if (top_cands[j].v < top_cands[mi2].v) mi2 = j;
                 }
             }
         }
 
-        // Sort candidates descending
-        std.mem.sort(f32, top_vals[0..n_top], {}, std.sort.desc(f32));
+        // Sort candidates descending by value.
+        std.mem.sort(Cand, top_cands[0..n_top], {}, struct {
+            fn less(_: void, a: Cand, b: Cand) bool {
+                return a.v > b.v;
+            }
+        }.less);
 
-        // Cumsum scan to find probability threshold
+        // Cumsum scan to find how many top candidates cover top_p.
         var cumsum: f32 = 0;
-        var threshold: f32 = 0;
-        for (top_vals[0..n_top]) |v| {
-            cumsum += v;
+        var keep_count: usize = n_top;
+        for (top_cands[0..n_top], 0..) |cand, ci| {
+            cumsum += cand.v;
             if (cumsum >= top_p * sum) {
-                threshold = v;
+                keep_count = ci + 1;
                 break;
             }
         }
 
-        // Apply threshold: zero out tokens below cutoff, recompute sum
+        // Zero out tokens outside the kept candidate set, recompute sum.
+        // Threshold is the minimum kept candidate value; a tie fixup below
+        // removes equal-valued tokens outside the exact kept set.
+        const threshold = if (keep_count > 0) top_cands[keep_count - 1].v else 0;
+        var has_tie: bool = false;
+        if (keep_count > 0 and keep_count < n_top) has_tie = top_cands[keep_count].v == threshold;
         sum = 0;
         {
             const thresh_v: V8 = @splat(threshold);
@@ -767,6 +779,27 @@ pub fn sampleToken(logits: []f32, temperature: f32, top_k: u32, top_p: f32, rng:
                     logits[si] = 0;
                 } else {
                     sum += logits[si];
+                }
+            }
+        }
+        // When ties straddle the cutoff, the value sweep above kept every
+        // equal-valued token, over-counting against top_p. Zero the surplus
+        // tie tokens that were not in the kept candidate set.
+        if (has_tie) {
+            for (logits, 0..) |*v, idx| {
+                if (v.* != threshold) continue;
+                // Binary search would need the full sorted list; the kept
+                // prefix is sorted, so linear scan over keep_count is bounded.
+                var kept: bool = false;
+                for (top_cands[0..keep_count]) |cand| {
+                    if (cand.idx == @as(u32, @intCast(idx))) {
+                        kept = true;
+                        break;
+                    }
+                }
+                if (!kept) {
+                    sum -= v.*;
+                    v.* = 0;
                 }
             }
         }
