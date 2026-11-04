@@ -189,9 +189,12 @@ pub fn setup(allocator: std.mem.Allocator, peers_str: []const u8, rank: u32, wor
 /// transfers on the same descriptor run with no timeout, so a large KV or
 /// allreduce payload is never cut short.
 fn setPeerSocketTimeout(fd: std.posix.fd_t, timeout_ms: i32) void {
+    // Clamp negative to 0 (disable timeout); @divTrunc/@mod on negative would
+    // produce sec=-1, usec negative, which setsockopt may misinterpret.
+    const ms = @max(timeout_ms, 0);
     const tv: std.c.timeval = .{
-        .sec = @intCast(@divTrunc(timeout_ms, 1000)),
-        .usec = @intCast(@mod(timeout_ms, 1000) * std.time.us_per_ms),
+        .sec = @intCast(@divTrunc(ms, 1000)),
+        .usec = @intCast(@mod(ms, 1000) * std.time.us_per_ms),
     };
     _ = std.c.setsockopt(fd, std.posix.SOL.SOCKET, std.posix.SO.RCVTIMEO, @ptrCast(&tv), @sizeOf(@TypeOf(tv)));
     _ = std.c.setsockopt(fd, std.posix.SOL.SOCKET, std.posix.SO.SNDTIMEO, @ptrCast(&tv), @sizeOf(@TypeOf(tv)));

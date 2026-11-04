@@ -78,7 +78,9 @@ fn nanoTimestamp() i128 {
 /// Routes through sim_clock so a clock override advances virtual time
 /// instead of blocking wall-clock time between attempts.
 fn sleepRetry(attempt: u32) void {
-    sim_clock.sleepNs(retry_base_delay_ns << @intCast(attempt));
+    // Cap shift to avoid overflow/UB at attempt >= 64; max_retries=3 so attempt<3 in practice.
+    const capped_attempt: u6 = @intCast(@min(attempt, 62));
+    sim_clock.sleepNs(retry_base_delay_ns << capped_attempt);
 }
 
 /// Validate that a filename from the API has no path traversal components

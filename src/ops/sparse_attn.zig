@@ -102,7 +102,7 @@ pub fn sparsityRatio(mask: BlockMask) f32 {
             if (mask.get(@intCast(qi), @intCast(ki))) attended += 1;
         }
     }
-    const total = nb * (nb + 1) / 2;
+    const total: u64 = if (@mod(nb, 2) == 0) (nb / 2) * (nb + 1) else nb * ((nb + 1) / 2);
     if (total == 0) return 0;
     return 1.0 - @as(f32, @floatFromInt(attended)) / @as(f32, @floatFromInt(total));
 }
