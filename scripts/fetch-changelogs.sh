@@ -54,8 +54,10 @@ fetch_github_releases() {
     # Each page is staged separately and concatenated only on success: a
     # rerun (or a page retried after a network timeout) must not append the
     # same releases twice, or the published changelog duplicates every
-    # entry page 1 already carried.
+    # entry page 1 already carried. Per-engine staged body and error log:
+    # fresh each run (STAGE is mktemp -d, empty on entry).
     : >"$STAGE/${name}.body"
+    : >"$STAGE/${name}.err"
     for page in $(seq 1 "$pages"); do
         # A page failure ends pagination; page 1 failing is the whole fetch.
         if ! gh api "repos/$repo/releases?per_page=30&page=$page" \
