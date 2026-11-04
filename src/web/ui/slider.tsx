@@ -32,9 +32,9 @@ export const Slider = ({ className, value, onValueChange, ...props }: SliderProp
     value={value}
     onChange={function (event) { onValueChange(Number(event.target.value)); }}
     className={cn(
-      'h-1.5 w-full cursor-pointer appearance-none rounded-pill bg-border accent-primary',
-      '[&::-webkit-slider-thumb]:size-5 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-pill [&::-webkit-slider-thumb]:border-2 [&::-webkit-slider-thumb]:border-primary [&::-webkit-slider-thumb]:bg-background',
-      '[&::-moz-range-thumb]:size-5 [&::-moz-range-thumb]:rounded-pill [&::-moz-range-thumb]:border-2 [&::-moz-range-thumb]:border-primary [&::-moz-range-thumb]:bg-background',
+      'h-6 w-full cursor-pointer appearance-none rounded-pill bg-border accent-primary',
+      '[&::-webkit-slider-thumb]:size-6 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-pill [&::-webkit-slider-thumb]:border-2 [&::-webkit-slider-thumb]:border-primary [&::-webkit-slider-thumb]:bg-background',
+      '[&::-moz-range-thumb]:size-6 [&::-moz-range-thumb]:rounded-pill [&::-moz-range-thumb]:border-2 [&::-moz-range-thumb]:border-primary [&::-moz-range-thumb]:bg-background',
       className,
     )}
     {...props}

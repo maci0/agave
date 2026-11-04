@@ -54,7 +54,7 @@ const ToastItem = ({ toast, onDismiss }: { toast: Toast; onDismiss: (id: number)
       <button
         type="button"
         onClick={function () { onDismiss(toast.id); }}
-        aria-label="Dismiss"
+        aria-label="Dismiss notification"
         className="inline-flex size-11 shrink-0 items-center justify-center opacity-70 transition-opacity hover:opacity-100"
       >
         <CloseIcon className="size-5" aria-hidden="true" />
@@ -203,6 +203,7 @@ return (
     aria-live="off"
     aria-busy={props.streaming}
     tabIndex={0}
+    aria-describedby="chat-scroll-hint"
     onScroll={function (event) {
       const log = event.currentTarget;
       nearBottom.current = log.scrollHeight - log.scrollTop - log.clientHeight < STICK_SLACK_PX;
@@ -219,6 +220,7 @@ return (
   >
     <Transcript {...props} />
   </div>
+  <p id="chat-scroll-hint" className="sr-only">Scrollable chat history. Use the Jump to latest button to return to the newest message.</p>
   <LogOverlay toasts={props.toasts} showJump={showJump} onJump={jumpToLatest} onDismiss={props.onDismissToast} />
   </div>
 );

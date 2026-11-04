@@ -92,7 +92,7 @@ export const AppHeader = (props: AppHeaderProps) => {
           title="Menu"
           aria-label={props.sidebarOpen ? 'Close sidebar' : 'Open sidebar'}
           aria-expanded={props.sidebarOpen}
-          aria-controls="sidebar"
+          aria-controls="sidebar-heading"
         >
           <MenuIcon className="size-5" aria-hidden="true" />
         </Button>

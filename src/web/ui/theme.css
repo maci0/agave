@@ -106,7 +106,7 @@
      text field and the composer cannot drift apart on it. Every other control
      takes the base-layer `outline`, which is the stronger of the two, so this
      is the resting treatment and not a second, weaker idea. */
-  --shadow-focus: 0 0 0 3px color-mix(in oklab, var(--color-primary) 10%, transparent);
+  --shadow-focus: 0 0 0 3px color-mix(in oklab, var(--color-primary) 60%, transparent);
   /* Anything that floats over the page: dialogs, toasts, the jump key. */
   --shadow-overlay: 0 8px 20px var(--color-shadow);
 

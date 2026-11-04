@@ -52,9 +52,10 @@ const SettingSlider = ({
         value={value}
         onValueChange={onChange}
         aria-label={label}
+        aria-describedby={`${id}-hint`}
         aria-valuetext={shown}
       />
-      <span className="mt-0.5 block font-mono text-2xs text-faint">{hint}</span>
+      <span id={`${id}-hint`} className="mt-0.5 block font-mono text-2xs text-faint">{hint}</span>
     </div>
   );
 };
