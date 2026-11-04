@@ -4,6 +4,8 @@
 <noscript><p class="p-8 text-center text-destructive-foreground">JavaScript is required to run the Agave chat UI.</p></noscript>
 <!-- The chat UI is a Preact tree (src/web/app.tsx). server.zig concatenates
      head.html + style.css + body.html + app.js into one page, so the bundle
-     lands inline in the script tag this file opens. -->
-<div id="root"></div>
+     lands inline in the script tag this file opens. The loading shell below
+     paints from the CSS alone, so the first frame is not a blank viewport
+     while the 152 KB bundle parses; createRoot replaces it on render. -->
+<div id="root"><div class="flex h-dvh flex-col overflow-hidden bg-background text-foreground"><main class="flex min-w-0 flex-1 flex-col"><div class="m-auto font-mono text-xs text-faint">Loading…</div></main></div></div>
 <script>

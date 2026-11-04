@@ -8522,11 +8522,12 @@ test "chat UI head pulls no third-party asset" {
     // Every jsDelivr script is fetched on demand by the bundle (chat/markdown.ts
     // loadMarkdown / loadHighlightJs), so nothing third-party sits on the first
     // paint. The pinned URL is the marker that the deferred loader is shipped at
-    // all. The head may resolve its hostname but must not fetch its assets.
+    // all. The head may preconnect to the CDN hostname (DNS + TLS warm-up for
+    // the deferred scripts) but must not fetch its assets.
     const head_end = std.mem.indexOf(u8, html_page, "</head>").?;
     const head = html_page[0..head_end];
     try std.testing.expect(std.mem.indexOf(u8, head, "https://cdn.jsdelivr.net/npm/") == null);
-    try std.testing.expect(std.mem.indexOf(u8, head, "rel=\"preconnect\"") == null);
+    try std.testing.expect(std.mem.indexOf(u8, head, "rel=\"preconnect\" href=\"https://cdn.jsdelivr.net\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, head, "<script src=") == null);
     try std.testing.expect(std.mem.indexOf(u8, html_page, "https://cdn.jsdelivr.net/npm/marked@") != null);
 }
