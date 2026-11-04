@@ -36,6 +36,7 @@ pub const NgramCache = struct {
         const n_slots = @min(n_cache_slots, @as(u32, @intCast(max_cache_shards)));
         if (n_slots == 0) return error.ZeroCacheSlots;
         const slots = try allocator.alloc(Slot, n_slots);
+        errdefer allocator.free(slots);
         @memset(slots, Slot{});
         const lookup = try allocator.alloc(?u32, n_shards);
         @memset(lookup, null);
@@ -52,6 +53,7 @@ pub const NgramCache = struct {
     pub inline fn touch(self: *NgramCache, shard_id: u32) bool {
         if (shard_id >= self.n_shards) return false;
         if (self.lookup[shard_id]) |slot_idx| {
+            std.debug.assert(slot_idx < self.n_slots);
             self.access_counter += 1;
             self.slots[slot_idx].last_access = self.access_counter;
             self.hits += 1;
@@ -64,6 +66,7 @@ pub const NgramCache = struct {
     pub fn admit(self: *NgramCache, shard_id: u32) u32 {
         if (shard_id >= self.n_shards) return std.math.maxInt(u32);
         if (self.lookup[shard_id]) |slot_idx| {
+            std.debug.assert(slot_idx < self.n_slots);
             self.access_counter += 1;
             self.slots[slot_idx].last_access = self.access_counter;
             return slot_idx;
@@ -133,4 +136,14 @@ test "NgramCache LRU" {
     try std.testing.expect(c.touch(0));
     try std.testing.expect(!c.touch(1));
     try std.testing.expect(c.touch(2));
+}
+
+test "NgramCache init frees slots when lookup allocation fails" {
+    const initAndDeinit = struct {
+        fn f(allocator: std.mem.Allocator) !void {
+            var cache = try NgramCache.init(allocator, 8, 2);
+            cache.deinit(allocator);
+        }
+    }.f;
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, initAndDeinit, .{});
 }
