@@ -88,5 +88,17 @@ jobs:
       - name: Run docs checks
         run: python3 scripts/check-docs.py
 
+      # Path filters above trigger on scripts/check-third-party-notices.py,
+      # scripts/test_check_third_party_notices.py, package.json, bun.lock
+      # inputs and THIRD_PARTY_NOTICES.md (DOCS_CHECK_PATH_INPUTS in
+      # scripts/check-docs.py), so the gate that reads THIRD_PARTY_NOTICES.md
+      # must run here too: the same entry point ci.yml fmt-check runs, so a
+      # notices edit cannot be red in CI and green on docs-only pushes.
+      - name: Third-party notices cover the shipped bundles
+        run: python3 scripts/check-third-party-notices.py
+
+      - name: Test the third-party notices checker
+        run: python3 scripts/test_check_third_party_notices.py
+
       - name: Test the release SemVer guard
         run: python3 scripts/test_check_docs.py

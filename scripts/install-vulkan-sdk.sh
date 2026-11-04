@@ -23,4 +23,9 @@ sudo install -m644 /tmp/lunarg-archive-keyring.asc /etc/apt/keyrings/lunarg-arch
 CODENAME=$(lsb_release -cs)
 echo "deb [signed-by=/etc/apt/keyrings/lunarg-archive-keyring.asc] https://packages.lunarg.com/vulkan/ ${CODENAME} main" | sudo tee /etc/apt/sources.list.d/lunarg-vulkan.list > /dev/null
 sudo apt-get update
-sudo apt-get install -y --no-install-recommends vulkan-sdk
+# Pinned so a LunarG republish cannot silently change the golden Vulkan leg
+# (same policy as the Zig/Debian pins in scripts/check-pins.sh, and the key
+# fingerprint above). Bump in the same change as the CI golden leg, after
+# confirming the SDK still satisfies the runner's Vulkan loader.
+VULKAN_SDK_VERSION="1.4.313.0~rc3-1lunarg24.04-1"
+sudo apt-get install -y --no-install-recommends "vulkan-sdk=${VULKAN_SDK_VERSION}"
