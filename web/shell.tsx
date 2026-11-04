@@ -197,8 +197,7 @@ const ModelBarExpanded = ({ loader, closePanel }: { loader: ModelLoader; closePa
       variant="solid"
       size="lg"
       onClick={loader.loadFromUrl}
-      disabled={loader.busy}
-      aria-busy={loader.loading}
+      disabled={loader.busy || loader.url.trim() === ''}
     >
       {loader.loading ? 'Loading…' : 'Load model'}
     </Button>
@@ -329,7 +328,9 @@ const ChatLog = ({ messages, sending, ready }: { messages: Array<Message>; sendi
   );
 };
 
-/** The product line, and the control that clears the transcript. */
+/** The product line, and the control that clears the transcript. `disabled`
+ *  while busy but always mounted: removing it on clear shifted the header
+ *  layout and made the remaining controls jump. */
 const ShellHeader = ({ ready, busy, onClear }: { ready: boolean; busy: boolean; onClear: () => void }) => (
   <header className="flex items-center justify-between gap-4 border-b border-divider bg-card px-gutter py-4 max-drawer:flex-wrap max-drawer:px-4 max-drawer:py-3">
     <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
@@ -342,11 +343,9 @@ const ShellHeader = ({ ready, busy, onClear }: { ready: boolean; busy: boolean; 
       </h1>
       <small className="text-sm text-faint">Init, parse and tokenize only. Text generation is blocked in this build.</small>
     </div>
-        {ready ? (
-          <Button type="button" size="sm" onClick={onClear} title="Clear conversation" disabled={busy}>
+        <Button type="button" size="sm" onClick={onClear} title="Clear conversation" disabled={!ready || busy}>
             Clear
           </Button>
-        ) : null}
     </header>
 );
 
@@ -363,6 +362,7 @@ type ComposerProps = {
 const Composer = ({ prompt, onPrompt, onSend, ready, sending, busy, focus }: ComposerProps) => {
   const inputRef = useRef<HTMLInputElement>(null);
   useEffect(() => { focus(); }, [focus]);
+  const hint = ready ? (busy ? 'Busy — wait for the current turn' : 'Enter to send') : 'Load a model first';
   return (
     <>
       <form
@@ -383,7 +383,7 @@ const Composer = ({ prompt, onPrompt, onSend, ready, sending, busy, focus }: Com
             className="flex-1"
             value={prompt}
             disabled={!ready || busy}
-            aria-describedby={ready ? 'input-hint' : undefined}
+            aria-describedby="input-hint"
             onChange={function (event) { onPrompt(event.target.value); }}
             onKeyDown={function (event) {
               // Ignore Enter during IME composition (CJK input).
@@ -406,8 +406,8 @@ const Composer = ({ prompt, onPrompt, onSend, ready, sending, busy, focus }: Com
           </Button>
         </div>
       </form>
-      <p id="input-hint" hidden={!ready} className="px-gutter text-center font-mono text-xs text-faint max-drawer:px-4">
-        Enter to send
+      <p id="input-hint" className="px-gutter pt-2 pb-4 text-center font-mono text-xs text-faint max-drawer:px-4">
+        {hint}
       </p>
     </>
   );

@@ -100,7 +100,9 @@ const useEngineInit = (engine: AgaveEngine, state: LoadState, onReport: Report, 
       onReport(engine.initMessage || 'Model loaded', 'info');
       state.setStatus(READY_HINT);
       state.setReady(true);
-      focusPrompt();
+      /* After the commit that enables #prompt: focusing while disabled
+         drops to body in browsers, so the focus must land post-render. */
+      setTimeout(() => { focusPrompt(); }, 0);
     } catch (error) { // oxlint-disable-line @rikalabs/no-silent-catch-fallback -- reported to the reader, not swallowed
       const cancelled = error instanceof Error && error.name === 'AbortError';
       state.setStatus(cancelled ? 'Model load cancelled.' : friendlyLoadError(error));
@@ -183,9 +185,11 @@ export const useModelLoader = (engine: AgaveEngine, onReport: Report): ModelLoad
   const [loading, setLoading] = useState(false);
   const [urlError, setUrlError] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
-  const prompt = useRef<HTMLInputElement>(null);
 
-  const focusPrompt = useCallback(() => { prompt.current?.focus(); }, []);
+  /** Focus the composer. The prompt element is owned by the shell's composer,
+   *  not by the loader: looking it up by id keeps it working straight after a
+   *  load lands, when focus would otherwise drop to the body. */
+  const focusPrompt = useCallback((): void => { document.querySelector<HTMLInputElement>('#prompt')?.focus(); }, []);
   /* The reader is looking at the URL field, and the error renders beside it,
      so focus stays where it is: the prompt is disabled until a model loads,
      and moving focus there drops it on the body instead. */
