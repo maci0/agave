@@ -613,3 +613,124 @@ test "a recycled slot stamps the new owner, not the stale one" {
     defer c.replay.deinit(testing.allocator);
     try testing.expectEqualStrings("second body", c.replay.body);
 }
+
+test "fuzz: ledger claim/complete/release over hostile keys, routes, and owners" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *std.testing.Smith) !void {
+            const allocator = std.testing.allocator;
+            var l = Ledger.init(allocator);
+            defer l.deinit();
+
+            // Fixed small space of keys/routes so collisions, replays, and
+            // cross-principal leaks are reachable within one run. Keys and
+            // routes are sized around the caps, never past them, so every
+            // generated input exercises the claimable path.
+            var key_storage: [8][max_key_len + 1]u8 = undefined;
+            var key_lens: [8]usize = undefined;
+            var route_storage: [4][max_route_len + 1]u8 = undefined;
+            var route_lens: [4]usize = undefined;
+            for (0..8) |i| {
+                var raw: [max_key_len + 1]u8 = undefined;
+                smith.bytesWithHash(&raw, @intCast(i * 11));
+                var len = smith.indexWithHash(max_key_len + 1, @intCast(i * 11 + 1));
+                if (len == 0) len = 1;
+                key_lens[i] = len;
+                @memcpy(key_storage[i][0..len], raw[0..len]);
+            }
+            for (0..4) |i| {
+                var raw: [max_route_len + 1]u8 = undefined;
+                smith.bytesWithHash(&raw, @intCast(100 + i * 11));
+                var len = smith.indexWithHash(max_route_len + 1, @intCast(101 + i * 11));
+                if (len == 0) len = 1;
+                route_lens[i] = len;
+                @memcpy(route_storage[i][0..len], raw[0..len]);
+            }
+
+            var toks: [8]u64 = undefined;
+            var steps: [8]usize = undefined;
+            var owners: [8]Owner = undefined;
+            var routes: [8]usize = undefined;
+            var n: usize = 0;
+            var now: i64 = 0;
+            const iterations = smith.indexWithHash(64, 200);
+            for (0..iterations) |_| {
+                const ki = smith.indexWithHash(8, 201);
+                const ri = smith.indexWithHash(4, 202);
+                const key = key_storage[ki][0..key_lens[ki]];
+                const route = route_storage[ri][0..route_lens[ri]];
+                const owner: Owner = @as(Owner, @intCast(smith.valueWithHash(u32, 203))) & 3;
+                now += @intCast(smith.indexWithHash(1024, 204));
+                switch (smith.indexWithHash(4, 205)) {
+                    0 => {
+                        const c = l.claim(key, route, owner, now);
+                        switch (c) {
+                            .fresh => |tok| {
+                                try std.testing.expect(tok != 0);
+                                if (n < toks.len) {
+                                    toks[n] = tok;
+                                    steps[n] = ki;
+                                    owners[n] = owner;
+                                    routes[n] = ri;
+                                    n += 1;
+                                }
+                            },
+                            .duplicate => {},
+                            .replay => |r| {
+                                try std.testing.expect(r.body.len <= max_body_len);
+                                r.deinit(allocator);
+                            },
+                        }
+                    },
+                    1 => {
+                        if (n == 0) continue;
+                        const idx = smith.indexWithHash(n, 206);
+                        var body: [16]u8 = undefined;
+                        smith.bytesWithHash(&body, @intCast(207 + idx));
+                        const bl = smith.indexWithHash(17, 208);
+                        l.complete(
+                            key_storage[steps[idx]][0..key_lens[steps[idx]]],
+                            route_storage[routes[idx]][0..route_lens[routes[idx]]],
+                            owners[idx],
+                            toks[idx],
+                            now,
+                            "200 OK",
+                            "text/html",
+                            body[0..bl],
+                        );
+                    },
+                    2 => {
+                        if (n == 0) continue;
+                        const idx = smith.indexWithHash(n, 209);
+                        l.release(
+                            key_storage[steps[idx]][0..key_lens[steps[idx]]],
+                            route_storage[routes[idx]][0..route_lens[routes[idx]]],
+                            owners[idx],
+                            toks[idx],
+                        );
+                    },
+                    else => {
+                        if (n == 0) continue;
+                        const idx = smith.indexWithHash(n, 210);
+                        l.complete(
+                            key_storage[steps[idx]][0..key_lens[steps[idx]]],
+                            route_storage[routes[idx]][0..route_lens[routes[idx]]],
+                            owners[idx] ^ 1,
+                            toks[idx],
+                            now,
+                            "500 Internal Server Error",
+                            "text/html",
+                            "poisoned",
+                        );
+                    },
+                }
+                var live_bodies: usize = 0;
+                for (&l.slots) |*s| {
+                    if (s.body.len != 0) live_bodies += 1;
+                    try std.testing.expect(s.key_len <= max_key_len);
+                    try std.testing.expect(s.route_len <= max_route_len);
+                }
+                try std.testing.expect(live_bodies <= capacity);
+            }
+        }
+    }.f, .{});
+}
