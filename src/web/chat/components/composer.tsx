@@ -150,11 +150,13 @@ const InputRow = (props: ComposerProps & {
       type="file"
       accept="image/jpeg,image/png,image/gif,image/webp"
       /* Clipped rather than `display: none`. The attach key opens the picker
-         through a ref, so the input was never reachable by keyboard, and a
-         display-hidden input is not focusable at all, which is why there is no
-         second tab stop. A clipped one keeps the programmatic path, exposes the
-         control to assistive tech with its name, and is still not a stray stop
-         in the tab order, because the attach key is the way in. */
+         through a ref, so the input is not a visible stop in the tab order:
+         removing it from the tab order (`tabIndex={-1}`) leaves the attach
+         key as the single keyboard entry point, and `aria-hidden` keeps the
+         clipped, unnamed control out of the accessibility tree. The two
+         agree: a focusable control hidden from assistive tech, or an
+         exposed control with no name, would each strand a reader (WCAG
+         4.1.2 / 2.4.7). */
       className="absolute size-px overflow-hidden border-0 p-0 opacity-0"
       tabIndex={-1}
       aria-hidden="true"

@@ -43,8 +43,7 @@ const ConversationRow = ({ conversation, streaming, onSelect, onDelete }: {
 }) => {
   const label = conversation.title ?? 'New chat';
   return (
-    <div
-      role="listitem"
+    <li
       className={cn(
         'mb-0.5 flex items-center gap-1 rounded-md border border-transparent ps-3 pe-0.5 transition-colors hover:bg-muted',
         conversation.active === true && 'border-primary/25 bg-primary/10',
@@ -74,7 +73,7 @@ const ConversationRow = ({ conversation, streaming, onSelect, onDelete }: {
       >
         <DeleteIcon className="size-4" aria-hidden="true" />
       </button>
-    </div>
+    </li>
   );
 };
 
@@ -91,7 +90,7 @@ const ConversationList = ({ conversations, loadError, streaming, onSelect, onDel
     );
   }
   return (
-    <div role="list" aria-label="Conversations">
+    <ul aria-label="Conversations" className="m-0 list-none p-0">
       {conversations.map((conversation) =>
         (
           <ConversationRow
@@ -103,7 +102,7 @@ const ConversationList = ({ conversations, loadError, streaming, onSelect, onDel
           />
         )
       )}
-    </div>
+    </ul>
   );
 };
 

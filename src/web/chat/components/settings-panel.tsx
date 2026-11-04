@@ -143,12 +143,11 @@ const SystemPromptField = ({ sampling, onChange, onClear }: {
 };
 
 export const SettingsPanel = ({ sampling, onChange, onClearSystem }: SettingsPanelProps) => (
-  <div
+  <fieldset
     id="settings-panel"
-    role="region"
-    aria-label="Sampling settings"
     className="mx-auto mb-3 agave-measure rounded-lg border border-divider bg-popover p-4"
   >
+    <legend className="font-mono text-xs font-medium text-faint">Sampling settings</legend>
     <div className="mb-3 grid grid-cols-3 gap-4 max-drawer:grid-cols-1">
       <SettingSlider
         label="Temperature"
@@ -173,5 +172,5 @@ export const SettingsPanel = ({ sampling, onChange, onClearSystem }: SettingsPan
       <MaxTokensField sampling={sampling} onChange={onChange} />
     </div>
     <SystemPromptField sampling={sampling} onChange={onChange} onClear={onClearSystem} />
-  </div>
+  </fieldset>
 );
