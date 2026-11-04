@@ -457,8 +457,11 @@ pub fn draft(state: *SpecState, draft_model: *Model, last_token: u32) u32 {
 /// `state.depth_slices[n]`. Returns the sampled token.
 fn saveDraftStep(state: *SpecState, draft_model: Model, n: u32) u32 {
     const vs = state.vocab_size;
+    std.debug.assert(n < max_draft_tokens);
+    const logits = draft_model.getLogits();
+    std.debug.assert(logits.len >= vs); // draft and target vocab must match state.vocab_size
     const dst = state.draft_log_probs[@as(usize, n) * vs ..][0..vs];
-    @memcpy(dst, draft_model.getLogits());
+    @memcpy(dst, logits[0..vs]);
     if (state.token_mask) |tm| applyFrSpecMask(dst, tm);
     logSoftmax(dst);
     const tok = math_ops.argmax(dst);
@@ -502,7 +505,8 @@ pub fn buildTokenMask(allocator: std.mem.Allocator, token_map_path: []const u8, 
         const to_read: usize = @min(read_buf.len, remaining);
         const result = std.posix.system.pread(fd, read_buf[0..to_read].ptr, to_read, @intCast(off));
         const n: isize = @bitCast(result);
-        if (n <= 0) break;
+        if (n < 0) return error.ReadError; // I/O error, not EOF (matches preadAll in kvcache/tiered.zig)
+        if (n == 0) break; // true EOF
         try content_list.appendSlice(allocator, read_buf[0..@intCast(n)]);
         off = std.math.add(usize, off, @intCast(n)) catch return error.FileTooLarge;
     }
@@ -729,7 +733,10 @@ pub fn verifyDDTree(
             current_parent = @intCast(first_child);
             var cur_child: u32 = first_child;
 
-            while (accepted < builder.n_nodes) {
+            // Bound by tree.n_nodes (compile() count), not builder.n_nodes: the
+            // target window is 1..tree.n_nodes, and any accepted chain is a
+            // path in the tree, so it cannot exceed tree.n_nodes.
+            while (accepted < tree.n_nodes) {
                 const next = target_model.treeLogits(cur_child + 1);
                 if (tree.findChild(current_parent, next)) |next_child| {
                     state.draft_tokens[accepted] = next;
