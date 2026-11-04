@@ -119,7 +119,7 @@ export const AppHeader = (props: AppHeaderProps) => {
           under it in the drawer layout so the actions keep the first row. */}
       <div className="flex min-w-0 flex-1 items-center gap-2 max-drawer:order-last max-drawer:basis-full">
         {modelResolved ? (
-          <Badge className="max-w-72 min-w-0" title={model?.id}>
+          <Badge id="model-badge" className="max-w-72 min-w-0" title={model?.id} aria-label={model?.id === undefined || model.id === '' ? 'Model: unknown' : `Model: ${model.id}`}>
             {model?.id ?? 'unknown'}
           </Badge>
         ) : (

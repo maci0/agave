@@ -101,12 +101,13 @@
 
   --animate-pulse-soft: pulse-soft 1.2s ease-in-out infinite;
 
-  /* The one soft ring a control wears, on the fields that take focus without
-     an outline of their own (Input, Textarea, the composer): written here so a
-     text field and the composer cannot drift apart on it. Every other control
-     takes the base-layer `outline`, which is the stronger of the two, so this
-     is the resting treatment and not a second, weaker idea. */
-  --shadow-focus: 0 0 0 3px color-mix(in oklab, var(--color-primary) 60%, transparent);
+  /* The one soft ring a control wears. Fields pair it with a full-strength
+     primary border, while every other control takes the base-layer `outline`,
+     so the ring never has to carry the 3:1 focus indicator (WCAG 2.4.11) on
+     its own: at 60% over the background it measured 2.6:1 (dark) and, in the
+     light scheme, 2.0:1, both below the floor. Written here so a text field
+     and the composer cannot drift apart on it. */
+  --shadow-focus: 0 0 0 3px color-mix(in oklab, var(--color-primary) 60%, transparent), 0 0 0 6px color-mix(in oklab, var(--color-primary) 30%, transparent);
   /* Anything that floats over the page: dialogs, toasts, the jump key. */
   --shadow-overlay: 0 8px 20px var(--color-shadow);
 
@@ -282,14 +283,18 @@
   .agave-prose h2 { font-size: 1.2em; }
   .agave-prose h3 { font-size: 1.1em; }
 
+  /* Inline code sits on the card fill, where primary falls below 4.5:1
+     (3.6:1 dark, 3.4:1 light), so links and code chips take foreground and
+     keep their underline or chip edge as the non-color cue. */
   .agave-prose a {
-    color: var(--color-primary);
+    color: var(--color-foreground);
     text-decoration: underline;
     text-decoration-color: color-mix(in oklab, var(--color-primary) 40%, transparent);
     text-underline-offset: 2px;
   }
 
   .agave-prose a:hover {
+    color: var(--color-primary);
     text-decoration-color: var(--color-primary);
   }
 
@@ -299,7 +304,7 @@
     padding: 2px 6px;
     border-radius: var(--radius-xs);
     font-size: 0.87em;
-    color: var(--color-primary);
+    color: var(--color-foreground);
   }
 
   .agave-prose pre {
@@ -573,16 +578,15 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .agave-reveal {
-    transition: none;
-  }
-
-  *,
   *::before,
   *::after {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
+  }
+
+  .agave-reveal {
+    transition: none;
   }
 }
 

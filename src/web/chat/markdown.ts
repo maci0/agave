@@ -155,7 +155,10 @@ const wrapTables = (root: HTMLElement): void => {
     table.before(wrapper);
     wrapper.append(table);
     for (const header of table.querySelectorAll('th')) {
-      if (header.getAttribute('scope') === null) {header.setAttribute('scope', 'col');}
+      if (header.getAttribute('scope') !== null) {continue;}
+      /* A header in the first column names its row, not its column. */
+      const cell = header.closest('td');
+      header.setAttribute('scope', cell?.cellIndex === 0 ? 'row' : 'col');
     }
   }
 };

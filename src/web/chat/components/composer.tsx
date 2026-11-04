@@ -43,6 +43,7 @@ const ImagePreview = ({ src, onRemove }: { src: string; onRemove: () => void }) 
         width={200}
         height={80}
         decoding="async"
+        draggable={false}
       />
       <Button
         type="button"
@@ -104,7 +105,7 @@ const PromptField = (props: PromptFieldProps) => (
       }
     }}
     // Min-width: 0 lets the field shrink below its intrinsic width.
-    className="max-h-50 min-h-12 min-w-0 flex-1 resize-none rounded-lg border border-input bg-background px-4 py-3 leading-normal text-base text-foreground transition outline-none focus:border-primary focus:shadow-focus disabled:opacity-50 max-drawer:text-touch"
+    className="max-h-50 min-h-12 min-w-0 flex-1 resize-none rounded-lg border border-input bg-background px-4 py-3 leading-normal text-base text-foreground transition focus-visible:border-primary focus-visible:shadow-focus disabled:opacity-50 max-drawer:text-touch"
   />
 );
 
@@ -129,10 +130,12 @@ const SendControl = ({ streaming, canSend, onStop }: { streaming: boolean; canSe
  *  `role="status"` with an `aria-label`, which a live role cannot take as an
  *  accessible name, so the "Generation speed" label reached nobody. The rate
  *  is in the turn's own stats line (`/stats`) and in the response's stats
- *  block; the readout is the glanceable one, and the tooltip names it. */
+ *  block; the readout is the glanceable one, and the tooltip plus the
+ *  screen-reader-only prefix name it for assistive technology. */
 const SpeedReadout = ({ tps }: { tps: number | null }) => (
   tps === null ? null : (
     <span title="Generation speed" className="flex items-center px-1 font-mono text-xs whitespace-nowrap text-primary">
+      <span className="sr-only">Generation speed </span>
       {fmtTokensPerSecond(tps, 1)}
     </span>
   )

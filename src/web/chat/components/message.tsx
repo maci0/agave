@@ -88,18 +88,16 @@ export const MessageBody = memo(({ text, phase, onRendered }: MessageBodyProps) 
 
 const StatsLine = ({ stats }: { stats: StreamStats }) => {
   const total = Math.trunc(stats.time) + (Math.trunc(stats.pfMs) || 0);
-  const decode = `${fmtInt(stats.tokens)} tok @ ${fmtNum(stats.tps, 2)}`;
-  const prefill = `${fmtInt(stats.pfTok)} tok @ ${fmtNum(stats.pfTps, 1)}`;
-  const decodeRate = fmtTokensPerSecond(stats.tps, 2);
-  const prefillRate = fmtTokensPerSecond(stats.pfTps, 1);
+  const decode = `${fmtInt(stats.tokens)} tok @ ${fmtNum(stats.tps, 2)} ${fmtTokensPerSecond(stats.tps, 2)}`;
+  const prefill = `${fmtInt(stats.pfTok)} tok @ ${fmtNum(stats.pfTps, 1)} ${fmtTokensPerSecond(stats.pfTps, 1)}`;
   return (
     <div className="mt-2.5 flex flex-wrap gap-x-4 border-t border-divider pt-2.5 font-mono text-2xs text-faint">
       <span>
-        decode <span className="font-medium text-primary">{decode}</span> {decodeRate}
+        decode <span className="font-medium text-primary">{decode}</span>
       </span>
       {stats.pfTok === 0 ? null : (
         <span>
-          prefill <span className="font-medium text-primary">{prefill}</span> {prefillRate}
+          prefill <span className="font-medium text-primary">{prefill}</span>
         </span>
       )}
       {stats.pfMs === 0 ? null : (
@@ -200,7 +198,7 @@ const Message = memo(({ bubble, showStats, canRegenerate, onRegenerate, onRender
         )}
       >
         {bubble.image === undefined ? null : (
-          <img className="mb-2 block max-w-50 rounded-md border border-divider" src={bubble.image} alt="Attached image" width={200} height={80} loading="lazy" decoding="async" />
+          <img className="mb-2 block max-w-50 rounded-md border border-divider" src={bubble.image} alt="Attached image" width={200} height={80} loading="lazy" decoding="async" draggable={false} />
         )}
         {isUser ? <div className="agave-prose min-w-0">{bubble.text}</div> : <MessageBody text={bubble.text} phase={bubble.phase} onRendered={handleRendered} />}
       </div>

@@ -13,10 +13,10 @@ export const fmtNum = (amount: number, digits: number, locales?: Locales): strin
 /** A tokens-per-second rate as the locale writes a unit: Intl supplies label
  *  and spacing, so callers append no hardcoded " tok/s" suffix that reads
  *  wrong where the conventions disagree. */
-export const fmtTokensPerSecond = (tps: number, digits: number = 1, locales?: Locales): string =>
+export const fmtTokensPerSecond = (tps: number, digits = 1, locales?: Locales): string =>
   tps.toLocaleString(locales, {
     style: 'unit',
-    unit: 'per-second',
+    unit: 'second',
     unitDisplay: 'short',
     minimumFractionDigits: digits,
     maximumFractionDigits: digits,

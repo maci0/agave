@@ -10,7 +10,7 @@ import { cn } from './cn';
  */
 const inputVariants = cva(
   'min-h-11 w-full rounded-md border border-input bg-background px-3 py-2 text-foreground ' +
-    'transition outline-none focus:border-primary focus:shadow-focus ' +
+    'transition focus-visible:border-primary focus-visible:shadow-focus ' +
     'disabled:pointer-events-none disabled:opacity-60',
   {
     variants: {

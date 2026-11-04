@@ -1,9 +1,16 @@
 import { expect, test } from 'bun:test';
-import { parseLocaleInt, parseLocaleNumber, truncateAnnounce, writingDirection } from './format';
+import { fmtTokensPerSecond, parseLocaleInt, parseLocaleNumber, truncateAnnounce, writingDirection } from './format';
 
 /** One user-perceived character spread over several code points. Truncating
  *  mid-cluster announces a lone ZWJ or half a flag, so each of these must come
  *  back whole or not at all. */
+test('a tokens-per-second rate formats with a valid Intl unit, not a crash', () => {
+  /* 'per-second' is not a well-formed unit identifier and threw
+     RangeError on every streaming turn, taking the response with it. */
+  expect(fmtTokensPerSecond(42.5, 1, 'en-US')).toBe('42.5 sec');
+  expect(fmtTokensPerSecond(0, 2, 'en-US')).toBe('0.00 sec');
+});
+
 const ZWJ_FAMILY = '\u{1F468}‍\u{1F469}‍\u{1F467}';
 const REGIONAL_FLAG = '\u{1F1FA}\u{1F1F8}';
 const SKIN_TONE = '\u{1F44B}\u{1F3FD}';
