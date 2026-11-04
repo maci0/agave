@@ -5237,7 +5237,7 @@ fn generateAndPrintInner(
     else
         prompt;
     defer if (format_prompt and formatted.ptr != prompt.ptr) allocator.free(formatted);
-    if (g_debug) dbg("formatted prompt ({d} bytes): [{s}]", .{ formatted.len, formatted });
+    if (g_debug) dbg("formatted prompt ({d} bytes)", .{formatted.len});
 
     const text_token_ids = switch (tok_kind) {
         .spm => tok.encodeSpm(formatted),
