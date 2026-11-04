@@ -1238,12 +1238,24 @@ test "fuzz: all spec_decode functions" {
             try std.testing.expect(s.total_accepted == accepted_val);
 
             // -- SpecState.acceptanceRate (after round) --
+            // One round with n_draft drafted and accepted_val accepted:
+            // rate is their exact quotient, bounded in [0,1] by construction.
             const rate1 = s.acceptanceRate();
-            try std.testing.expect(rate1 >= 0 and rate1 <= 1.0);
+            const expected_rate: f32 = if (s.n_draft == 0)
+                0
+            else
+                @as(f32, @floatFromInt(accepted_val)) / @as(f32, @floatFromInt(s.n_draft));
+            try std.testing.expectApproxEqAbs(expected_rate, rate1, 1e-6);
 
             // -- SpecState.meanAccepted (after round) --
+            // total_rounds == 1 and total_accepted == accepted_val, so the mean
+            // is exactly the round's acceptance (not merely non-negative).
             const mean1 = s.meanAccepted();
-            try std.testing.expect(mean1 >= 0);
+            try std.testing.expectApproxEqAbs(
+                @as(f32, @floatFromInt(accepted_val)),
+                mean1,
+                1e-6,
+            );
 
             // -- SpecState.optimalK --
             // Populate enough rounds for adaptive path
@@ -1300,12 +1312,23 @@ test "fuzz: all spec_decode functions" {
             const sampled = sampleResidual(&target_probs, &draft_lp, vocab_size, prng.random(), &sample_buf);
             try std.testing.expect(sampled < vocab_size);
 
-            // -- max_draft_tokens constant --
-            try std.testing.expect(max_draft_tokens > 0);
+            // sampleResidual is a probability distribution over vocab_size: the
+            // residual buffer must be non-negative and integrate to at most
+            // sum(target) = 1, so a regression that samples from the wrong
+            // norm (e.g. unclamped negatives cancelling positives) fails here
+            // even though the sampled index alone would still be in range.
+            var resid_sum: f32 = 0;
+            for (sample_buf) |v| {
+                try std.testing.expect(v >= 0);
+                resid_sum += v;
+            }
+            try std.testing.expect(resid_sum <= 1.0 + 1e-3);
 
-            // -- SpecResult type --
+            // SpecResult must carry the recorded acceptance through verbatim:
+            // a field swap at construction would corrupt round accounting.
             const sr = SpecResult{ .accepted = accepted_val, .next_token = 0 };
-            try std.testing.expect(sr.accepted <= max_draft_tokens);
+            try std.testing.expectEqual(accepted_val, sr.accepted);
+            try std.testing.expectEqual(@as(u32, 0), sr.next_token);
 
             // -- Model-dependent pub fns: comptime-verify reachability --
             // draftMtp, draft, draftWithLogits, verifySequential,

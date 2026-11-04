@@ -206,11 +206,16 @@ test "PerfCounters follows sim_clock override" {
 }
 
 test "PerfCounters Op enum has expected fields" {
-    // Verify the number of Op variants matches n_ops
+    // The enum and n_ops must stay in lockstep: adding a variant without
+    // bumping the array sizes (or vice versa) silently drops its timing.
     const fields = @typeInfo(Op).@"enum".field_names;
     try std.testing.expectEqual(n_ops, fields.len);
-    // Verify at least some known ops exist
-    try std.testing.expect(n_ops >= 10);
+    // Spot-check the variants report() iterates, so a rename that breaks
+    // the printed table fails here instead of shipping a blank row.
+    try std.testing.expectEqualStrings("emb_lookup", fields[@backingInt(Op.emb_lookup)]);
+    try std.testing.expectEqualStrings("rope", fields[@backingInt(Op.rope)]);
+    try std.testing.expectEqualStrings("sdpa", fields[@backingInt(Op.sdpa)]);
+    try std.testing.expectEqualStrings("deltanet", fields[@backingInt(Op.deltanet)]);
 }
 
 test "fuzz: PerfCounters" {
@@ -233,14 +238,15 @@ test "fuzz: PerfCounters" {
                 pc.addToken();
             }
 
-            // Invariant: counts match number of end() calls.
+            // Invariant: counts match number of end() calls, and the elapsed
+            // time for a fast (or frozen-clock) interval is small: a regression
+            // that accumulates a raw timestamp instead of the delta would land
+            // orders of magnitude above any plausible per-call cost.
             try std.testing.expectEqual(@as(u64, call_count), pc.counts[op_idx]);
             try std.testing.expectEqual(@as(u64, call_count), pc.n_tokens);
-
-            // Invariant: total time must be non-negative.
             var total_us: u64 = 0;
             for (pc.times_us) |t| total_us += t;
-            try std.testing.expect(total_us >= 0);
+            try std.testing.expect(total_us < @as(u64, call_count) * 1_000_000);
         }
     }.f, .{});
 }

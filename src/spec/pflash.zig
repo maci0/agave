@@ -216,11 +216,22 @@ pub fn pflashPrefill(
 // ── Tests ────────────────────────────────────────────────────────────────────
 
 test "PFlashState init and deinit" {
-    const cfg = PFlashConfig{};
+    const cfg = PFlashConfig{ .block_size = 64 };
     var state = try PFlashState.init(std.testing.allocator, cfg, 1024);
     defer state.deinit(std.testing.allocator);
-    try std.testing.expect(state.block_scores.len > 0);
-    try std.testing.expect(state.selected.len > 0);
+    // 1024 tokens / 64 per block = 16 blocks: every buffer must be sized
+    // from the config, not merely non-empty, or scoring for the tail blocks
+    // would index out of bounds in selectBlocks/buildCompressedPrompt.
+    try std.testing.expectEqual(@as(usize, 16), state.block_scores.len);
+    try std.testing.expectEqual(@as(usize, 16), state.selected.len);
+    try std.testing.expectEqual(@as(usize, 1024), state.selected_tokens.len);
+    try std.testing.expectEqual(@as(usize, 0), state.selected_len);
+    try std.testing.expectEqual(@as(usize, 0), state.orig_len);
+    // block_size == 0 must be rejected, not divide-by-zero in init.
+    try std.testing.expectError(
+        error.InvalidArgument,
+        PFlashState.init(std.testing.allocator, .{ .block_size = 0 }, 1024),
+    );
 }
 
 test "selectBlocks alpha threshold" {
@@ -230,14 +241,13 @@ test "selectBlocks alpha threshold" {
     state.orig_len = 64;
 
     // Scores: [1,2,3,4,5,6,7,8], mean=4.5, threshold=0.5*4.5=2.25
-    // Selected: blocks with score > 2.25 → blocks 2..7 (indices 2-7)
+    // Selected: blocks with score > 2.25 → indices 2..7 (6 blocks).
+    // Exact, not >=: a threshold regression (e.g. >=, or a stale mean) that
+    // keeps one extra block must fail here, not hide behind a loose bound.
     for (state.block_scores[0..8], 0..) |*s, i| s.* = @as(f32, @floatFromInt(i + 1));
     selectBlocks(&state);
-    var n: usize = 0;
-    for (state.selected[0..8]) |s| if (s) {
-        n += 1;
-    };
-    try std.testing.expect(n >= 5); // blocks 3..8 should be selected
+    const expected = [_]bool{ false, false, true, true, true, true, true, true };
+    try std.testing.expectEqualSlices(bool, &expected, state.selected[0..8]);
 }
 
 test "buildCompressedPrompt always includes last block" {
@@ -251,9 +261,10 @@ test "buildCompressedPrompt always includes last block" {
     const tokens = [_]u32{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16 };
     const compressed = buildCompressedPrompt(&state, &tokens);
 
-    // Last block (tokens 13-16) must always be included
-    try std.testing.expect(compressed.len >= 4);
-    try std.testing.expect(compressed[compressed.len - 1] == 16);
+    // Last block (tokens 13-16) must always be included, and nothing else:
+    // alpha=100 selects no block, so a regression that force-selects only
+    // the first block (or duplicates the last) must fail, not pass a >= bound.
+    try std.testing.expectEqualSlices(u32, &[_]u32{ 13, 14, 15, 16 }, compressed);
 }
 
 test "compressionRatio" {
@@ -275,9 +286,11 @@ test "selectBlocks max_kept_ratio cap" {
     for (state.block_scores[0..16]) |*s| s.* = 1.0;
     selectBlocks(&state);
 
-    // Cap at 25% of 16 blocks = 4
+    // Cap at 25% of 16 blocks = 4, exactly: the trim loop must land on the
+    // cap, not under it (a loop that over-trims by one would silently drop
+    // a block the budget allows).
     const n = countSelected(&state);
-    try std.testing.expect(n <= 4);
+    try std.testing.expectEqual(@as(usize, 4), n);
 }
 
 test "fuzz: all pflash functions" {
