@@ -242,7 +242,18 @@ pub const TieredKvCache = struct {
             const fd = try std.posix.openat(std.posix.AT.FDCWD, path, .{
                 .ACCMODE = .RDWR,
                 .CREAT = true,
-            }, 0o644);
+            }, 0o600);
+            // The spill holds prompt-derived KV state, like the conversation
+            // store. A file created 0644 by an older agave, or loosened since,
+            // stays world-readable under a create-only mode, so tighten it.
+            if (!is_freestanding) {
+                var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+                if (path.len < path_buf.len) {
+                    @memcpy(path_buf[0..path.len], path);
+                    path_buf[path.len] = 0;
+                    _ = std.c.chmod(@ptrCast(path_buf[0..path.len :0]), @as(std.c.mode_t, 0o600));
+                }
+            }
             ssd_file = .{ .handle = fd, .flags = .{ .nonblocking = false } };
             errdefer {
                 _ = std.c.close(ssd_file.?.handle);

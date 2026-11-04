@@ -27,7 +27,7 @@ is either downloaded content or derived numbers with no free-text field.
 | REPL history | process memory only, up to 256 lines, wiped on eviction and on `/clear` (`src/readline.zig:12,59,76`) | never written to disk |
 | Request logs | stderr | method, sanitized path, request id, status, duration. No prompt, reply, header value, or key (`src/server/server.zig:1221,1236`) |
 | Prometheus metrics | `/metrics`, in memory | counters and histograms only, no free-text labels |
-| SSD KV tier (opt-in) | the file named by `--kv-ssd-path`, raw per-block K/V arrays written when the tier demotes a block (`src/kvcache/tiered.zig:549`) | mode 0644, so any local user can read the prompt-derived hidden state in it; deleted on teardown, so an unclean shutdown leaves it behind (`src/kvcache/tiered.zig:245,344`) |
+| SSD KV tier (opt-in) | the file named by `--kv-ssd-path`, raw per-block K/V arrays written when the tier demotes a block (`src/kvcache/tiered.zig:549`) | owner-only mode 0600, tightened on every open; deleted on teardown, so an unclean shutdown leaves it behind (`src/kvcache/tiered.zig:245,344`) |
 | TriAttention calibration | `<model>.cal` beside the model (`src/calibrate.zig:539`) | aggregate per-head statistics, not prompt content; read only under `--kv-eviction tri` |
 
 Except for the opt-in SSD KV tier and calibration files in the rows above,

@@ -84,11 +84,10 @@ writes over the binary:
   import-only callers a separate key, or leave the route off on a
   multi-holder deployment. See T10 in
   [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md#risk-ranked-summary).
-- **`--kv-tiers vram+ram+ssd` writes KV to a world-readable file.** Demoted
-  blocks are written to the `--kv-ssd-path` file, created mode 0644
-  (`src/kvcache/tiered.zig:245,549`), while the conversation store is
-  deliberately owner-only (`src/durable_file.zig:152`). Any local user can
-  read prompt-derived hidden state from that file, and an unclean shutdown
+- **`--kv-tiers vram+ram+ssd` writes KV to disk.** Demoted
+  blocks are written to the `--kv-ssd-path` file, created mode 0600 and
+  tightened on every open (`src/kvcache/tiered.zig:245,549`), matching the
+  conversation store (`src/durable_file.zig:152`). An unclean shutdown
   leaves it in place (the delete is a teardown step, `src/kvcache/tiered.zig:344`).
   Point the tier at a private path, or leave it off. See T11.
 - **The API key does not constrain what text reaches a prompt, and text
