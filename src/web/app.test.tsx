@@ -651,15 +651,15 @@ test('clearing an empty log asks for no confirmation and clears nothing', async 
   let calls = 0;
   let announced = 0;
   globalThis.confirm = function () { calls += 1; return true; };
-  globalThis.fetch = function (input: RequestInfo | URL) {
-    const url = input instanceof Request ? input.url : String(input);
-    if (url === '/v1/conversations') { return Promise.resolve(Response.json([])); }
-    return Promise.resolve(new Response('not found', { status: 404 }));
+  // SAFETY: the stub answers only `GET /v1/conversations`, the one route this hook calls.
+  globalThis.fetch = function (_input: RequestInfo | URL, _init?: RequestInit): Promise<Response> {
+    return Promise.resolve(Response.json([]));
   } as typeof fetch;
-  let apiRef: { current: { clearAll: () => void } | null } = { current: null };
+  type ApiRef = { current: ReturnType<typeof useConversations> | null };
+  const apiRef: ApiRef = { current: null };
   const Probe = function Probe(): null {
-    const conv = useConversations({ log: useBubbleLog(), announce: function () { announced += 1; }, pushToast: VOID });
-    apiRef.current = { clearAll: conv.clearAll };
+    const conv = useConversations({ log: useBubbleLog(), announce() { announced += 1; }, pushToast: VOID });
+    apiRef.current = conv;
     return null;
   };
   root.render(<Probe />);
