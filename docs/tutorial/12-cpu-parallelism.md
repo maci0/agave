@@ -93,7 +93,7 @@ sequenceDiagram
     Note over W1,W2: Back to sleep, futexWait(&generation, 1)
 ```
 
-In Zig 0.16, futex operations go through the `Io` context (threaded from `main(Init)` via `init.io`). The thread pool stores `io` at spawn time and uses `io.futexWaitUncancelable()` / `io.futexWake()` instead of the old `std.Thread.Futex` API.
+In Zig 0.17, futex operations go through the `Io` context (threaded from `main(Init)` via `init.io`). The thread pool stores `io` at spawn time and uses `io.futexWaitUncancelable(u32, &generation.raw, expected)` / `io.futexWake(u32, &generation.raw, n)` instead of the old `std.Thread.Futex` API. The `u32` type and `.raw` address are required: the atomic wraps the futex word.
 
 ### Generation Counter Pattern
 
@@ -104,12 +104,12 @@ ThreadPool fields:
 
 Post work (main thread):
   generation.fetchAdd(1, release)       # bump generation
-  io.futexWake(&generation, n_workers)  # wake all workers
+  io.futexWake(u32, &generation.raw, n_workers)  # wake all workers
 
 Worker loop:
   local_gen = 0
   loop:
-    io.futexWaitUncancelable(&generation, local_gen)
+    io.futexWaitUncancelable(u32, &generation.raw, local_gen)
     new_gen = generation.load(acquire)
     if new_gen == local_gen: continue   # spurious wakeup
     local_gen = new_gen
@@ -219,7 +219,7 @@ flowchart TD
 
     Start --> Post
     Post --> Reset
-    Reset --> CAS{"cmpxchgWeak\n(active, 0→n_workers)"}
+    Reset --> CAS{"cmpxchgStrong\n(active, 0→n_workers)"}
     CAS -->|CAS succeeds| Wake
     CAS -->|CAS fails: pool busy| Inline
     Wake --> Split
@@ -243,13 +243,13 @@ flowchart TD
 ```text
 parallelFor(pool, total, grain, ctx, func):
   task_counter.store(0, release)
-  if active.cmpxchgWeak(0, n_workers, acq_rel, monotonic) is Some(still_active):
+  if active.cmpxchgStrong(0, n_workers, seq_cst, monotonic) is Some(still_active):
     log.err("concurrent parallelFor detected, running inline")
     func(ctx, 0, total)
     return
 
   generation.fetchAdd(1, release)
-  io.futexWake(&generation, n_workers)
+  io.futexWake(u32, &generation.raw, n_workers)
 
   pool.doWork()                          # main thread participates
 
@@ -324,9 +324,9 @@ spawn(io):
     # on spawn failure: shrink n_workers to i, stop
 
 deinit():
-  shutdown.store(true, release)
+  shutdown.store(true, seq_cst)  # see thread_pool.zig: seq_cst claim avoids deadlock
   generation.fetchAdd(1, release)
-  io.futexWake(&generation, n_workers)
+  io.futexWake(u32, &generation.raw, n_workers)
   for each worker: thread.join()
 
 parallelFor(total, grain, ctx, func):
@@ -336,14 +336,14 @@ parallelFor(total, grain, ctx, func):
     func(ctx, 0, total)                     # too small, run inline
     return
   task_counter.store(0, release)
-  if active.cmpxchgWeak(0, n_workers, acq_rel, monotonic) is Some(still_active):
+  if active.cmpxchgStrong(0, n_workers, seq_cst, monotonic) is Some(still_active):
     log.err("concurrent parallelFor detected, running inline")
     func(ctx, 0, total)
     return
   task_func, task_ctx = func, ctx
   task_total, task_grain = total, effective_grain
   generation.fetchAdd(1, release)
-  io.futexWake(&generation, n_workers)
+  io.futexWake(u32, &generation.raw, n_workers)
   doWork()                                  # main thread participates
   while active.load(acquire) != 0: spinLoopHint()
 
@@ -357,13 +357,16 @@ doWork():
 workerLoop(pool):
   local_gen = 0
   loop:
-    io.futexWaitUncancelable(&generation, local_gen)
-    if shutdown.load(acquire): return
+    io.futexWaitUncancelable(u32, &generation.raw, local_gen)
     new_gen = generation.load(acquire)
-    if new_gen == local_gen: continue        # spurious wakeup
-    local_gen = new_gen
-    pool.doWork()
-    active.fetchSub(1, release)
+    if new_gen != local_gen:
+      local_gen = new_gen
+      # Drain a posted batch even if deinit() already set shutdown;
+      # parallelFor claimed active for each worker and waits for fetchSub.
+      if active.load(acquire) != 0:
+        pool.doWork()
+        active.fetchSub(1, release)
+    if shutdown.load(seq_cst) and active.load(seq_cst) == 0: return
 ```
 
 **Implementation:** [src/thread_pool.zig](../../src/thread_pool.zig) (full `ThreadPool` struct: `init`, `spawn`, `deinit`, `parallelFor`, `doWork`, `workerLoop`).
@@ -624,7 +627,7 @@ BAD: `pool = ThreadPool.init(7)` only sets `n_workers`; calling `pool.parallelFo
 
 **Fix:** Call `spawn(io)` after the pool is at its final memory location: `pool = ThreadPool.init(7)`, then `pool.spawn(io)` to actually create the worker threads (`io` comes from `main(Init)`), then `defer pool.deinit()`.
 
-**Why separate?** Workers capture `pool` by pointer. If you spawn before the pool is at its final location (e.g., it's a stack local that gets moved), the pointer becomes invalid. The `io` parameter is the Zig 0.16 `Io` context needed for futex operations.
+**Why separate?** Workers capture `pool` by pointer. If you spawn before the pool is at its final location (e.g., it's a stack local that gets moved), the pointer becomes invalid. The `io` parameter is the Zig 0.17 `Io` context needed for futex operations.
 
 ## Performance Characteristics
 
@@ -670,7 +673,7 @@ The same atomic-counter work-distribution idea scales past one machine in [Chapt
 
 **CAS (Compare-And-Swap)**, An atomic operation that updates a value only if it currently matches an expected value; foundational for lock-free data structures.
 
-**cmpxchgWeak**, A CAS variant that may spuriously fail; faster on ARM, best used in retry loops.
+**cmpxchgStrong**, A CAS variant that may spuriously fail; faster on ARM, best used in retry loops.
 
 **false sharing**, Performance degradation when different threads write to variables sharing the same cache line, causing cross-core invalidation.
 

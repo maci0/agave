@@ -196,7 +196,7 @@ task_total = total
 task_grain = effective_grain
 task_counter.store(0, .release)
 generation.fetchAdd(1, .release)      # all writes happen-before this
-io.futexWake(&generation, n_workers)
+io.futexWake(u32, &generation.raw, n_workers)
 
 # worker thread: subscribe
 new_gen = generation.load(.acquire)   # see all writes before the release
@@ -227,7 +227,7 @@ local_gen = new_gen
 | Lock-free data structure | `.acquire` | `.release` | Synchronize data structure updates |
 | (Rare) Total order needed | `.seq_cst` | `.seq_cst` | All threads must agree on operation order |
 
-**Agave uses:** Mostly `.monotonic` for counters, `.acquire`/`.release` for handoff, **never `.seq_cst`**.
+**Agave uses:** Mostly `.monotonic` for counters, `.acquire`/`.release` for handoff, **reserved `.seq_cst` for shutdown rendezvous and CAS claims**.
 
 ## Real-World Examples from Agave
 
@@ -295,7 +295,7 @@ generation: atomic.Value(u32) = 0
 # CAS claims the pool atomically (0 -> n_workers); a concurrent parallelFor
 # call falls back to running inline. active is set *before* task fields so
 # workers can never start with stale state.
-if active.cmpxchgWeak(0, n_workers, .acq_rel, .monotonic) is still_active:
+if active.cmpxchgStrong(0, n_workers, .seq_cst, .monotonic) is still_active:
     func(ctx, 0, total)          # concurrent call: run inline instead
     return
 
@@ -306,7 +306,7 @@ task_total = total
 task_grain = effective_grain
 task_counter.store(0, .release)      # reset counter
 generation.fetchAdd(1, .release)     # publish: all task fields valid
-io.futexWake(&generation, n_workers)
+io.futexWake(u32, &generation.raw, n_workers)
 ```
 
 **Implementation:** [`src/thread_pool.zig`](../../src/thread_pool.zig) (`active` CAS claim, dispatch)
@@ -321,14 +321,17 @@ io.futexWake(&generation, n_workers)
 workerLoop(pool):
     local_gen: u32 = 0
     loop:
-        pool.io.futexWaitUncancelable(&pool.generation, local_gen)
-        if pool.shutdown.load(.acquire): return
-
+        pool.io.futexWaitUncancelable(u32, &pool.generation.raw, local_gen)
         new_gen = pool.generation.load(.acquire)   # see all task fields
-        if new_gen == local_gen: continue          # spurious wakeup, generation unchanged
-        local_gen = new_gen
-        pool.doWork()
-        pool.active.fetchSub(1, .release)          # signal completion
+        if new_gen != local_gen:
+            local_gen = new_gen
+            # Drain a posted batch even if deinit() already set shutdown;
+            # parallelFor claimed active for each worker and waits for fetchSub.
+            if pool.active.load(.acquire) != 0:
+                pool.doWork()
+                pool.active.fetchSub(1, .release)  # signal completion
+        if pool.shutdown.load(.seq_cst) and pool.active.load(.seq_cst) == 0:
+            return
 ```
 
 **Implementation:** [`src/thread_pool.zig`](../../src/thread_pool.zig) (`workerLoop`)
@@ -406,7 +409,7 @@ shutdown: atomic.Value(bool) = false
 # main thread: signal shutdown
 shutdown.store(true, .release)
 generation.fetchAdd(1, .release)
-io.futexWake(&generation, n_workers)
+io.futexWake(u32, &generation.raw, n_workers)
 
 # worker: check shutdown
 if pool.shutdown.load(.acquire): return
