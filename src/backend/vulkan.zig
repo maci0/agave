@@ -500,7 +500,7 @@ fn formatVkCachePath(buf: []u8, xdg: ?[]const u8, home: ?[]const u8) ?[]u8 {
 
 fn vkCachePath(buf: *[512]u8) ?[]u8 {
     const xdg = config.getenv("XDG_CACHE_HOME");
-    const home = config.getenv("HOME");
+    const home = config.homeDir();
     return formatVkCachePath(buf, xdg, home);
 }
 

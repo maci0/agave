@@ -52,6 +52,15 @@ pub fn getenv(name: []const u8) ?[]const u8 {
     return nonemptyEnv(std.mem.span(result));
 }
 
+/// Home directory for XDG-style cache fallbacks.
+///
+/// `%USERPROFILE%` is the Windows equivalent of `$HOME` (unset there); the
+/// claimed platforms are Linux/macOS only, so this is a fallback for running
+/// the POSIX binary under a Windows-hosted shell, not a Windows port.
+pub fn homeDir() ?[]const u8 {
+    return getenv("HOME") orelse getenv("USERPROFILE");
+}
+
 test "nonemptyEnv treats empty and whitespace as unset" {
     try std.testing.expect(nonemptyEnv(null) == null);
     try std.testing.expect(nonemptyEnv("") == null);
@@ -73,6 +82,12 @@ test "envFlagIsOne requires trimmed 1" {
 
 test "getenv returns null for a variable that is not set" {
     try std.testing.expect(getenv("AGAVE_TEST_UNSET_ENV_VAR_12345") == null);
+}
+
+test "homeDir prefers HOME over USERPROFILE" {
+    // homeDir is a thin getenv chain; its ordering is what matters.
+    const expected = getenv("HOME") orelse getenv("USERPROFILE");
+    try std.testing.expectEqual(homeDir(), expected);
 }
 
 test "unsupportedEnvFlagValue reports only values that leave the flag off" {

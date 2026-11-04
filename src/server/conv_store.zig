@@ -106,7 +106,7 @@ pub const ConvView = struct {
 /// `$HOME/.cache/agave/conversations.json`. Null if neither env var is set.
 pub fn defaultPath(buf: []u8) ?[]u8 {
     const xdg = config.getenv("XDG_CACHE_HOME");
-    const home = config.getenv("HOME");
+    const home = config.homeDir();
     return formatDefaultPath(buf, xdg, home);
 }
 

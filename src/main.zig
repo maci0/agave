@@ -92,7 +92,7 @@ const tmp_path_buf_size = 256;
 fn videoFrameBase(buf: []u8) []const u8 {
     if (config.getenv("TMPDIR")) |dir| return dir;
     if (config.getenv("XDG_CACHE_HOME")) |dir| return dir;
-    const home = config.getenv("HOME") orelse return default_tmp_base;
+    const home = config.homeDir() orelse return default_tmp_base;
     return std.fmt.bufPrint(buf, "{s}/.cache", .{home}) catch default_tmp_base;
 }
 

@@ -905,7 +905,7 @@ pub fn hfCacheDir(allocator: Allocator, repo: []const u8) (PullError || Allocato
     }
 
     // Default: $HOME/.cache/huggingface/hub/
-    const home = config.getenv("HOME") orelse {
+    const home = config.homeDir() orelse {
         eprint("Error: HOME environment variable not set\n", .{});
         return PullError.HomeNotSet;
     };
@@ -983,7 +983,7 @@ fn createSymlink(allocator: Allocator, target: []const u8, link_path: []const u8
 /// Creates `$HOME/.cache/agave/models/{org}/{repo}` pointing to the
 /// snapshot directory containing the downloaded model.
 fn createAgaveSymlink(allocator: Allocator, repo: []const u8, snapshot_dir: []const u8) void {
-    const home = config.getenv("HOME") orelse {
+    const home = config.homeDir() orelse {
         eprint("Warning: HOME not set, skipping agave model symlink\n", .{});
         return;
     };
