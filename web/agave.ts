@@ -95,6 +95,14 @@ const default_max_tokens = 100;
 /** Max `u32` the WASM `agave_generate` export accepts. */
 const max_u32 = 0xFFFF_FFFF;
 
+/** Hard cap on `maxTokens`. The engine's generation buffer holds at most this
+ * many token IDs; a larger budget would be silently truncated. */
+const max_tokens_cap = 4096;
+
+/** Hard cap on prompt bytes. Bounding the prompt keeps the tokenization
+ * buffer and the WASM allocation a caller can force to a known size. */
+const max_prompt_bytes = 256 * 1024;
+
 /** Scratch buffer for `agave_get_output` (matches `max_output_bytes` in wasm_entry). */
 const output_buf_size = 16_384;
 
@@ -477,11 +485,11 @@ class AgaveEngine {
 
     const requested = options.maxTokens;
     const out_of_range = requested !== undefined && requested !== 0
-      && (!Number.isInteger(requested) || requested < 0 || requested > max_u32);
+      && (!Number.isInteger(requested) || requested < 0 || requested > max_tokens_cap);
     if (out_of_range) {
       throw new AgaveError(
         'invalid_argument',
-        'maxTokens must be a non-negative integer that fits in 32 bits (0 uses the default)',
+        `maxTokens must be a non-negative integer up to ${max_tokens_cap} (0 uses the default)`,
       );
     }
     // Both an omitted and an explicitly zero budget mean "use the default".
@@ -490,6 +498,12 @@ class AgaveEngine {
       : requested;
     const encoder = new TextEncoder();
     const promptBytes = encoder.encode(prompt);
+    if (promptBytes.length > max_prompt_bytes) {
+      throw new AgaveError(
+        'invalid_argument',
+        `Prompt exceeds the ${max_prompt_bytes}-byte limit`,
+      );
+    }
 
     // Copy prompt to WASM memory. alloc(0) returns 0, which is not an OOM.
     let promptPtr = 0;

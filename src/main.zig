@@ -170,6 +170,11 @@ const pp_discovery_port: u16 = 49455;
 const disagg_default_port: u16 = 49456;
 /// Default maximum tokens to generate per request.
 const default_max_tokens: u32 = 512;
+/// Hard cap on `--max-tokens`. Equal to `gen_ids_buf_size`: the generation
+/// buffer cannot hold more tokens than this, so a larger budget would hit
+/// the `token_count >= gen_ids_buf.len` break silently. Rejecting at parse
+/// time is cheaper than accepting a budget the engine will not honor.
+const max_tokens_cap: u32 = 4096;
 /// Default KV cache context size when user/recipe doesn't specify.
 /// 4096 balances memory usage with practical conversation length.
 const default_ctx_size: u32 = 4096;
@@ -1079,8 +1084,8 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
 
     // Validate max-tokens
     if (parseU32(res.option("max-tokens"), "max-tokens")) |mt| {
-        if (mt == 0) {
-            eprint("Error: --max-tokens must be >= 1\n", .{});
+        if (mt == 0 or mt > max_tokens_cap) {
+            eprint("Error: --max-tokens must be between 1 and {d}\n", .{max_tokens_cap});
             usageExit();
         }
     }

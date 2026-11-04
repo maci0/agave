@@ -11,7 +11,8 @@
     }
   }
   var default_max_tokens = 100;
-  var max_u32 = 4294967295;
+  var max_tokens_cap = 4096;
+  var max_prompt_bytes = 256 * 1024;
   var output_buf_size = 16384;
   var default_wasm_url = "agave.wasm";
   var wasm_err = {
@@ -277,13 +278,16 @@
       }
       const exp = wasmExports(this.#wasm);
       const requested = options.maxTokens;
-      const out_of_range = requested !== undefined && requested !== 0 && (!Number.isInteger(requested) || requested < 0 || requested > max_u32);
+      const out_of_range = requested !== undefined && requested !== 0 && (!Number.isInteger(requested) || requested < 0 || requested > max_tokens_cap);
       if (out_of_range) {
-        throw new AgaveError("invalid_argument", "maxTokens must be a non-negative integer that fits in 32 bits (0 uses the default)");
+        throw new AgaveError("invalid_argument", `maxTokens must be a non-negative integer up to ${max_tokens_cap} (0 uses the default)`);
       }
       const maxTokens = requested === undefined || requested === 0 ? default_max_tokens : requested;
       const encoder = new TextEncoder;
       const promptBytes = encoder.encode(prompt);
+      if (promptBytes.length > max_prompt_bytes) {
+        throw new AgaveError("invalid_argument", `Prompt exceeds the ${max_prompt_bytes}-byte limit`);
+      }
       let promptPtr = 0;
       try {
         if (promptBytes.length > 0) {

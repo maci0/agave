@@ -170,13 +170,21 @@ export fn agave_generate(ctx_ptr: usize, prompt_ptr: [*]allowzero const u8, prom
         return 0;
     }
 
+    // Bound both budgets at the trust boundary: max_tokens must fit the
+    // generation buffer, and prompt_len must not force an unbounded
+    // allocation / tokenization. The JS host checks both, but a direct
+    // WASM caller can pass anything.
+    if (max_tokens > 4096 or prompt_len > 256 * 1024) {
+        writeErr(ctx, .tokenize, "Tokenize error: budget exceeds limit", .{});
+        return 0;
+    }
+
     // len 0 must not slice a null host pointer: JS `generate("")` passes ptr=0.
     if (prompt_len != 0 and @intFromPtr(prompt_ptr) == 0) {
         writeErr(ctx, .tokenize, "Tokenize error", .{});
         return 0;
     }
     const prompt: []const u8 = if (prompt_len == 0) &.{} else @as([*]const u8, @ptrCast(prompt_ptr))[0..prompt_len];
-    _ = max_tokens;
 
     // Tokenize prompt to verify pipeline
     const tok_iface = ctx.tok.tokenizer();
