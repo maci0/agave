@@ -11,7 +11,7 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const builtin = @import("builtin");
+const backend_mod = @import("backend/backend.zig");
 
 /// LRU cache for PLE ngram shards (mirrors ExpertCache but 1-D by shard).
 pub const NgramCache = struct {
@@ -101,13 +101,9 @@ pub const NgramCache = struct {
     /// Demand-page a shard via madvise(WILLNEED) on its mapped region.
     pub fn prefetch(self: *NgramCache, shard_id: u32, base_ptr: [*]const u8, shard_bytes: usize) void {
         _ = self.admit(shard_id);
-        if (comptime builtin.os.tag == .linux or builtin.os.tag == .macos) {
-            const page_size: usize = std.heap.page_size_min;
-            const addr = @intFromPtr(base_ptr) + @as(usize, shard_id) * shard_bytes;
-            const aligned = addr & ~(page_size - 1);
-            const off = addr - aligned;
-            _ = std.posix.madvise(@ptrFromInt(aligned), off + shard_bytes, std.posix.MADV.WILLNEED);
-        }
+        if (shard_bytes == 0) return;
+        const offset = @as(usize, shard_id) * shard_bytes;
+        backend_mod.hostPrefault(base_ptr + offset, shard_bytes);
     }
 
     pub fn reportStats(self: *const NgramCache) void {

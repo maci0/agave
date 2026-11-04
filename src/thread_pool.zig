@@ -188,6 +188,10 @@ pub const ThreadPool = struct {
 
         // Spin-wait for workers. GEMV chunks are microsecond-scale,
         // so spinning avoids futex syscall overhead and is simpler to reason about.
+        // Bounded: every worker claims active via fetchAdd before doWork and
+        // releases it with fetchSub after, so active reaches 0 exactly when all
+        // claimed workers finish; the main thread's own doWork detaches the
+        // last claim (see parallelFor) without help from worker completions.
         while (self.active.load(.acquire) != 0) {
             std.atomic.spinLoopHint();
         }
@@ -200,8 +204,11 @@ pub const ThreadPool = struct {
         const total = self.task_total;
         const grain = self.task_grain;
 
-        while (true) {
-            const start = self.task_counter.fetchAdd(grain, .monotonic);
+        // Bounded by total/grain claims: each iteration claims a non-empty
+        // grain until a claim lands at/past total, so the loop terminates.
+        var start: usize = 0;
+        while (start < total) {
+            start = self.task_counter.fetchAdd(grain, .monotonic);
             if (start >= total) break;
             const end = @min(start + grain, total);
             func(ctx, start, end);
