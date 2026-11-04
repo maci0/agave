@@ -125,12 +125,20 @@ fn detectCpuModel() []const u8 {
 // ── System memory & cache detection ──────────────────────────────
 
 /// Read a u64 value from a macOS sysctl by name. Returns 0 on failure.
+/// Some keys (notably `hw.l1dcachesize`/`hw.l2cachesize`/`hw.l3cachesize` on
+/// Apple Silicon) only exist as 32-bit ints, others (`hw.memsize`,
+/// `vm.page_free_count`) as 64-bit. Probe 64-bit first, then fall back to
+/// 32-bit so a 32-bit key does not report 0 on a claimed macOS target.
 fn sysctlU64(comptime name: [*:0]const u8) usize {
     if (comptime builtin.os.tag != .macos) return 0;
-    var val: u64 = 0;
+    var val64: u64 = 0;
     var len: usize = @sizeOf(u64);
-    const rc = std.c.sysctlbyname(name, @ptrCast(&val), &len, null, 0);
-    if (rc == 0) return @intCast(val);
+    if (std.c.sysctlbyname(name, @ptrCast(&val64), &len, null, 0) == 0 and len == @sizeOf(u64))
+        return @intCast(val64);
+    var val32: u32 = 0;
+    len = @sizeOf(u32);
+    if (std.c.sysctlbyname(name, @ptrCast(&val32), &len, null, 0) == 0 and len == @sizeOf(u32))
+        return @intCast(val32);
     return 0;
 }
 
