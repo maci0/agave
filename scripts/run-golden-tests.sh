@@ -36,14 +36,27 @@ fi
 
 rc=0
 failed=""
+# `zig test --test-filter` exits 0 when the filter matches no test ("All 0
+# tests passed"), so a backend name that matches nothing (typo, renamed test)
+# would report PASS without running anything. Capture the output and require
+# at least one test to have run; surface the output either way.
 for test_file in "${test_files[@]}"; do
     echo "::group::$(basename "$test_file")"
-    if zig test "$test_file" --test-filter "$backend"; then
-        echo "PASS: $test_file"
-    else
+    # `out=$(...)` under `set -e` exits the script on a failing test, so the
+    # status is captured via `||` (a list is exempt from `set -e`).
+    test_rc=0
+    out="$(zig test "$test_file" --test-filter "$backend" 2>&1)" || test_rc=$?
+    echo "$out"
+    if [[ $test_rc -ne 0 ]]; then
         rc=1
         failed="$failed $(basename "$test_file")"
         echo "::error::FAIL: $test_file ($backend backend)"
+    elif ! grep -q "All [1-9][0-9]* tests passed" <<<"$out"; then
+        rc=1
+        failed="$failed $(basename "$test_file")"
+        echo "::error::FAIL: $test_file ($backend backend): filter '$backend' matched no test"
+    else
+        echo "PASS: $test_file"
     fi
     echo "::endgroup::"
 done

@@ -2,14 +2,15 @@ name: Golden Tests
 
 on:
   # Golden tests need model weights, which GitHub-hosted runners do not have.
-  # Dispatch with `runner` set to a self-hosted label (e.g. "self-hosted",
-  # or "self-hosted,linux,agave-models") whose checkout has ./models mounted.
-  # Left empty, the matrix falls back to the GitHub-hosted labels, where the
-  # "Require local GGUF models" step fails by design.
+  # Dispatch with `runner` set to a self-hosted label (e.g. "self-hosted,linux,agave-models")
+  # whose checkout has ./models mounted. A single `runs-on` string can name
+  # several labels only as one comma-separated value; the matrix CPU/Metal/Vulkan
+  # legs then share that runner. Left empty, the matrix falls back to the
+  # GitHub-hosted labels, where the "Require local GGUF models" step fails by design.
   workflow_dispatch:
     inputs:
       runner:
-        description: "Runner label to dispatch to. Empty uses the GitHub-hosted runner from the matrix (no model weights)."
+        description: "Self-hosted runner label(s) (comma-separated, e.g. self-hosted,linux,agave-models). Empty uses the GitHub-hosted runner from the matrix (no model weights)."
         required: false
         type: string
         default: ""

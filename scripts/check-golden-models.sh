@@ -17,8 +17,11 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 # Hosted runners have no weights; self-hosted / manual runs must provide models/.
-# `find` on a missing models/ errors under set -e, hence the 2>/dev/null + || true.
-if ! find models -type f \( -name '*.gguf' -o -name '*.GGUF' \) 2>/dev/null | grep -q .; then
+# `find` on a missing models/ errors under set -e, hence the 2>/dev/null +
+# || true. `find ... -print -quit` (not `find | grep -q`): with `set -o
+# pipefail`, grep -q closing the pipe early can SIGPIPE find and make the
+# pipeline report failure even though a match was found (spurious red step).
+if ! find models -type f \( -name '*.gguf' -o -name '*.GGUF' \) -print -quit 2>/dev/null | grep -q .; then
     echo "::error::Golden tests need at least one .gguf under models/. Re-dispatch with the 'runner' input set to a self-hosted label whose checkout has ./models mounted; GitHub-hosted runners never have weights."
     exit 1
 fi
