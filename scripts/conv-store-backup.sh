@@ -181,9 +181,27 @@ acquire_backup_lock() {
         local lockdir="$dir/$LOCK_NAME.dir" pid
         while ! mkdir -- "$lockdir" 2>/dev/null; do
             pid="$(cat -- "$lockdir/pid" 2>/dev/null || printf '')"
+            # Reclaim only a lock whose pid is provably dead. A bare kill -0
+            # is not proof: a pid recorded by a dead holder can be reused by
+            # an unrelated same-uid process (cron, a shell), and that process
+            # being alive would block every later backup forever while the
+            # real holder is gone. On Linux /proc/<pid>/cmdline names the
+            # holder: this script's own argv. Where /proc is unavailable
+            # (macOS) there is no safe reclaim check, so refuse instead of
+            # guessing. A missing or empty pid file (holder killed between
+            # mkdir and the pid write) is not proof of death either; refuse
+            # and let the operator remove the directory.
             if [[ -n "$pid" ]] && ! kill -0 "$pid" 2>/dev/null; then
-                rmdir -- "$lockdir" 2>/dev/null || true
+                rm -rf -- "$lockdir" 2>/dev/null || true
                 continue
+            fi
+            if [[ -n "$pid" && -r "/proc/$pid/cmdline" ]]; then
+                local holder_cmd
+                holder_cmd="$(tr '\0' ' ' <"/proc/$pid/cmdline" 2>/dev/null || printf '')"
+                if [[ "$holder_cmd" != *conv-store-backup* ]]; then
+                    rm -rf -- "$lockdir" 2>/dev/null || true
+                    continue
+                fi
             fi
             die "another conv-store-backup run holds $lockdir; refusing to run concurrently"
         done
@@ -568,14 +586,19 @@ do_restore() {
     verify_store "$file"
     local live
     live="$(live_store_path)" || die "neither XDG_CACHE_HOME nor HOME is set; pass --store PATH"
+    # Lock for the whole restore, not just the snapshot: copy_atomic installs
+    # through a fixed "$live.tmp" name, so two restores running at once would
+    # interleave writes into the same tmp and publish a corrupt store. The
+    # backup tier lock serializes it (do_backup holds it the same way).
     # Snapshot the outgoing store before overwriting it: a restore of the wrong
     # file must be undoable without going back to the backup tier.
+    local dir
+    dir="$(backup_dir)"
+    mkdir -p -- "$dir" || die "cannot create $dir"
+    acquire_backup_lock "$dir"
+    chmod 700 -- "$dir" || die "cannot restrict permissions on $dir"
     if [[ -f "$live" ]]; then
-        local dir snap
-        dir="$(backup_dir)"
-        mkdir -p -- "$dir" || die "cannot create $dir"
-        acquire_backup_lock "$dir"
-        chmod 700 -- "$dir" || die "cannot restrict permissions on $dir"
+        local snap
         snap="$dir/conversations-prerestore-$(stamp).json"
         [[ -e "$snap" ]] && snap="${snap%.json}-$$.json"
         copy_atomic "$live" "$snap"
