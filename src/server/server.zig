@@ -2600,7 +2600,7 @@ fn handleRequest(stream: http.TcpStream, req: http.HttpRequest) void {
         defer if (formatted.ptr != fallback_content.ptr) wipeFree(g_server.allocator, @constCast(formatted));
         // encode("") allocates a zero-length slice; always free on success (not only when len > 0).
         const prompt_ids_owned = g_server.tokenizer.encode(formatted) catch |err| blk: {
-            std.log.warn("req={d} tokenizer encode failed: {}", .{ log_request_id, err });
+            std.log.err("req={d} tokenizer encode failed: {}", .{ log_request_id, err });
             break :blk null;
         };
         defer if (prompt_ids_owned) |ids| wipeFreeTokens(g_server.allocator, ids);
@@ -2764,7 +2764,7 @@ fn handleRequest(stream: http.TcpStream, req: http.HttpRequest) void {
 
         // Rate limit check (estimate prompt tokens via encode)
         const prompt_ids_c_owned = g_server.tokenizer.encode(prompt) catch |err| blk: {
-            std.log.warn("req={d} tokenizer encode failed for rate-limit estimate: {}", .{ log_request_id, err });
+            std.log.err("req={d} tokenizer encode failed for rate-limit estimate: {}", .{ log_request_id, err });
             break :blk null;
         };
         defer if (prompt_ids_c_owned) |ids| wipeFreeTokens(g_server.allocator, ids);
@@ -3175,7 +3175,7 @@ fn handleRequest(stream: http.TcpStream, req: http.HttpRequest) void {
         const formatted_rl = g_server.chat_template.format(g_server.allocator, tool_system_r, input) catch input;
         defer if (formatted_rl.ptr != input.ptr) wipeFree(g_server.allocator, @constCast(formatted_rl));
         const prompt_ids_r_owned = g_server.tokenizer.encode(formatted_rl) catch |err| blk: {
-            std.log.warn("req={d} tokenizer encode failed for rate-limit estimate: {}", .{ log_request_id, err });
+            std.log.err("req={d} tokenizer encode failed for rate-limit estimate: {}", .{ log_request_id, err });
             break :blk null;
         };
         defer if (prompt_ids_r_owned) |ids| wipeFreeTokens(g_server.allocator, ids);
@@ -3312,7 +3312,7 @@ fn handleRequest(stream: http.TcpStream, req: http.HttpRequest) void {
             g_server.chat_template.format(g_server.allocator, effective_system_m, fallback_content_m) catch fallback_content_m;
         defer if (formatted_m.ptr != fallback_content_m.ptr) wipeFree(g_server.allocator, @constCast(formatted_m));
         const prompt_ids_m_owned = g_server.tokenizer.encode(formatted_m) catch |err| blk: {
-            std.log.warn("req={d} tokenizer encode failed for rate-limit estimate: {}", .{ log_request_id, err });
+            std.log.err("req={d} tokenizer encode failed for rate-limit estimate: {}", .{ log_request_id, err });
             break :blk null;
         };
         defer if (prompt_ids_m_owned) |ids| wipeFreeTokens(g_server.allocator, ids);
@@ -4678,7 +4678,10 @@ fn generateNPre(formatted: []const u8, reset: bool, max_tokens: usize, sampling:
     var close_think_owned: ?[]u32 = null;
     defer if (close_think_owned) |ids| g_server.allocator.free(ids);
     if (sampling.thinking_budget_tokens > 0) {
-        close_think_owned = g_server.tokenizer.encode("</think>") catch null;
+        close_think_owned = g_server.tokenizer.encode("</think>") catch |err| blk: {
+            std.log.warn("req={d} tokenizing </think> marker failed ({}); thinking-budget stop detection is off", .{ log_request_id, err });
+            break :blk null;
+        };
     }
     const close_think_ids: []const u32 = close_think_owned orelse &.{};
     const vocab_texts_gen = g_server.tokenizer.getVocabTexts();
@@ -7454,7 +7457,10 @@ fn generateStream(stream: http.TcpStream, prompt: []const u8, req_id: u64, creat
         defer if (close_think_owned_s) |ids| g_server.allocator.free(ids);
         const vocab_texts_s = g_server.tokenizer.getVocabTexts();
         if (think_budget > 0) {
-            close_think_owned_s = g_server.tokenizer.encode("</think>") catch null;
+            close_think_owned_s = g_server.tokenizer.encode("</think>") catch |err| blk: {
+                std.log.warn("req={d} tokenizing </think> marker failed ({}); thinking-budget stop detection is off", .{ log_request_id, err });
+                break :blk null;
+            };
         }
         const close_think_ids_s: []const u32 = close_think_owned_s orelse &.{};
         // Check if the first token is the start of a thinking block

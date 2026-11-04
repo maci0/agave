@@ -120,10 +120,12 @@ fn formatDefaultPath(buf: []u8, xdg: ?[]const u8, home: ?[]const u8) ?[]u8 {
     return std.fmt.bufPrint(buf, "{s}/.cache/agave/conversations.json", .{h}) catch null;
 }
 
-/// Create parent directories of `path` (mkdir -p). Best-effort.
-fn ensureParent(path: []const u8) void {
+/// Create parent directories of `path` (mkdir -p). Returns the first mkdir
+/// failure so `save` can report the directory it could not create.
+fn ensureParent(path: []const u8) !void {
     const parent = std.fs.path.dirname(path) orelse return;
-    mkdirP(parent);
+    if (parent.len == 0) return;
+    try mkdirP(parent);
 }
 
 /// Serialize `convs` and atomically replace `path`.
@@ -134,7 +136,10 @@ pub fn save(
     next_id: u32,
     convs: []const ConvView,
 ) !void {
-    ensureParent(path);
+    ensureParent(path) catch |err| {
+        std.log.err("conversation store: could not create parent directory for {s}: {}", .{ path, err });
+        return err;
+    };
     const bytes = try encode(allocator, active_id, next_id, convs);
     defer allocator.free(bytes);
     try durable.replacePrivate(path, bytes);
@@ -653,17 +658,35 @@ fn quarantine(path: []const u8, data: []const u8) !void {
     std.log.warn("conversation store: quarantined corrupt file to {s}", .{dest});
 }
 
-fn mkdirP(path: []const u8) void {
+fn mkdirP(path: []const u8) !void {
     var buf: [std.fs.max_path_bytes]u8 = undefined;
-    if (path.len == 0 or path.len >= buf.len) return;
+    if (path.len == 0) return;
+    if (path.len >= buf.len) return error.NameTooLong;
     @memcpy(buf[0..path.len], path);
     buf[path.len] = 0;
-    // Walk components and mkdir each.
+    // Walk components and mkdir each. EEXIST is success; any other errno is
+    // propagated so `save` reports the directory it could not create.
+    const errno_name = struct {
+        fn f(e: @TypeOf(std.c.errno(0))) error{ MakeDirFailed, PermissionDenied, NoSpaceLeft, PathNotFound, NameTooLong } {
+            return switch (e) {
+                .PERM, .ACCES => error.PermissionDenied,
+                .NOSPC => error.NoSpaceLeft,
+                .NAMETOOLONG => error.NameTooLong,
+                else => error.MakeDirFailed,
+            };
+        }
+    }.f;
     var i: usize = if (path[0] == '/') 1 else 0;
     while (i <= path.len) : (i += 1) {
         if (i != path.len and path[i] != '/') continue;
         buf[i] = 0;
-        _ = std.c.mkdir(@ptrCast(buf[0..i :0]), 0o755);
+        const rc = std.c.mkdir(@ptrCast(buf[0..i :0]), 0o755);
+        if (rc != 0) {
+            const e = std.c.errno(rc);
+            if (i < path.len) buf[i] = '/';
+            if (e == .EXIST) continue;
+            return errno_name(e);
+        }
         if (i < path.len) buf[i] = '/';
     }
 }
