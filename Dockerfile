@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1
+# syntax=docker/dockerfile:1.28.0
 # Pin to a dated Debian tag for reproducible builds (bump with dependabot/docker).
 FROM --platform=$BUILDPLATFORM debian:bookworm-20260918-slim AS build
 
