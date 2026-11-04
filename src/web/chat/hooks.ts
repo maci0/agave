@@ -400,7 +400,12 @@ const useConversationActions = ({ log, announce, pushToast, load, setLoading, co
   }, [announce, conversationsRef, load, log, pushToast]);
 
   const clearAll = useCallback(() => {
-    if (log.bubbles.length > 0 && globalThis.confirm('Clear this conversation?') === false) {return;} // oxlint-disable-line no-alert -- native confirmation dialog is intentional UX
+    /* An empty log holds nothing to clear: ask anyway is a confirmation
+       for a no-op (the empty state is the resting state), so the click is
+       a deliberate no-op instead of a dialog about nothing. Same needle as
+       `clearChat` in the browser shell: no messages, no dialog. */
+    if (log.bubbles.length === 0) { return; }
+    if (globalThis.confirm('Clear this conversation?') === false) {return;} // oxlint-disable-line no-alert -- native confirmation dialog is intentional UX
     void clearServerConversation().then(
       () => { log.clear(); void load(); announce('Conversation cleared'); },
       () => {

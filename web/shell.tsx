@@ -164,15 +164,6 @@ const useFocusOnPanelClose = (editing: boolean, setEditing: (next: boolean) => v
   };
 };
 
-/** The model bar. A loaded model needs only its name here: the URL field, the
- *  load button and the drop zone stay three rows tall on a phone, so they fold
- *  away behind "Change model" once there is a model to prompt.
- *
- *  The fold is a focus move as well as a layout change: Done collapses the
- *  whole panel, taking the focused control with it, so a keyboard or screen
- *  reader user landed on the body and had to Tab back through the whole bar.
- *  Both ways out of the panel end at the one control the collapsed bar keeps,
- *  so focus follows the reader. */
 /** The expanded half of the model bar, split out so ModelBar itself stays
  *  under the per-function line budget now that the cancel key rides along. */
 const ModelBarExpanded = ({ loader, closePanel }: { loader: ModelLoader; closePanel: () => void }) => (
@@ -267,17 +258,40 @@ const ShellEmptyState = ({ ready }: { ready: boolean }) => (
   />
 );
 
+import { JumpToLatestIcon } from '../src/web/ui/icons';
+
+/** Pixels from the bottom that still count as "following the stream". */
+const STICK_SLACK_PX = 80;
+
 /** The log: the transcript, the empty hint, and the pending bubble. `role="log"`
  *  with no live semantics: the reader is told a turn ended through
  *  `sr-announce`, and the log itself stays silent so a new bubble, or the
- *  download status rewriting the log's surroundings, never talks over it. */
+ *  download status rewriting the log's surroundings, never talks over it.
+ *
+ *  Same stick policy as the serve UI (`src/web/chat/components/message-list.tsx`):
+ *  a reader who scrolled up to read an earlier turn is left alone when a new
+ *  bubble lands, and a "Jump to latest" button appears so they can get back.
+ *  The difference between the surfaces accounts for the difference: the serve
+ *  UI's streaming turns arrive token by token, so an unconditional stick
+ *  yanked the viewport several times a second; here a turn lands whole, so
+ *  only a window into a long history makes the difference. */
 const ChatLog = ({ messages, sending, ready }: { messages: Array<Message>; sending: boolean; ready: boolean }) => {
   const logRef = useRef<HTMLDivElement>(null);
+  const nearBottom = useRef(true);
+  const [showJump, setShowJump] = useState(false);
   useEffect(() => {
     const log = logRef.current;
-    if (log) { log.scrollTop = log.scrollHeight; }
+    if (log && nearBottom.current) { log.scrollTop = log.scrollHeight; }
   }, [messages, sending]);
+  const jumpToLatest = useCallback(() => {
+    const log = logRef.current;
+    if (!log) { return; }
+    log.scrollTop = log.scrollHeight;
+    nearBottom.current = true;
+    setShowJump(false);
+  }, []);
   return (
+    <div className="relative flex min-h-0 flex-1 flex-col">
     <div
       id="chat"
       ref={logRef}
@@ -285,6 +299,11 @@ const ChatLog = ({ messages, sending, ready }: { messages: Array<Message>; sendi
       aria-label="Chat messages"
       aria-busy={sending}
       tabIndex={0}
+      onScroll={function (event) {
+        const log = event.currentTarget;
+        nearBottom.current = log.scrollHeight - log.scrollTop - log.clientHeight < STICK_SLACK_PX;
+        setShowJump(!nearBottom.current);
+      }}
       className="agave-scroll flex-1 overflow-y-auto px-gutter py-4 max-drawer:px-4"
     >
       {messages.length === 0 ? <ShellEmptyState ready={ready} /> : null}
@@ -297,6 +316,15 @@ const ChatLog = ({ messages, sending, ready }: { messages: Array<Message>; sendi
           </div>
         </div>
       ) : null}
+    </div>
+    {showJump ? (
+      <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 flex justify-center p-4">
+        <Button type="button" variant="floating" size="sm" onClick={jumpToLatest} className="pointer-events-auto">
+          <JumpToLatestIcon className="size-4" aria-hidden="true" />
+          Jump to latest
+        </Button>
+      </div>
+    ) : null}
     </div>
   );
 };

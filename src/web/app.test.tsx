@@ -609,3 +609,64 @@ test('the copy key names the outcome it just reported', async () => {
   root.unmount();
   host.remove();
 });
+
+test('the export key names the dead end', async () => {
+  const { createRoot } = await import('react-dom/client');
+  const { AppHeader } = await import('./chat/components/app-header');
+  const host = mountHost();
+  const root = createRoot(host);
+  const base = {
+    model: null,
+    modelResolved: false,
+    ctx: null,
+    sidebarOpen: false,
+    streaming: false,
+    onOpenSidebar: VOID,
+    onRetryModel: VOID,
+    onNew: VOID,
+    onExport: VOID,
+    onClear: VOID,
+    onAbout: VOID,
+  };
+  root.render(<AppHeader {...base} exportEmpty />);
+  await tick(2);
+  const key = present(host.querySelector<HTMLButtonElement>('button[aria-label*="Export"]'), 'export key');
+  expect(key.disabled).toBe(true);
+  expect(key.getAttribute('title')).toBe('Nothing to export yet');
+  expect(key.getAttribute('aria-label')).toContain('Nothing to export yet');
+  root.render(<AppHeader {...base} exportEmpty={false} />);
+  await tick(2);
+  expect(key.disabled).toBe(false);
+  expect(key.getAttribute('title')).toBe('Export conversation');
+  expect(key.getAttribute('aria-label')).toBe('Export conversation');
+  root.unmount();
+  host.remove();
+});
+
+test('clearing an empty log asks for no confirmation and clears nothing', async () => {
+  const { createRoot } = await import('react-dom/client');
+  const { useBubbleLog, useConversations } = await import('./chat/hooks');
+  const host = mountHost();
+  const root = createRoot(host);
+  let calls = 0;
+  let announced = 0;
+  globalThis.confirm = function () { calls += 1; return true; };
+  globalThis.fetch = function (input: RequestInfo | URL) {
+    const url = input instanceof Request ? input.url : String(input);
+    if (url === '/v1/conversations') { return Promise.resolve(Response.json([])); }
+    return Promise.resolve(new Response('not found', { status: 404 }));
+  } as typeof fetch;
+  let apiRef: { current: { clearAll: () => void } | null } = { current: null };
+  const Probe = function Probe(): null {
+    const conv = useConversations({ log: useBubbleLog(), announce: function () { announced += 1; }, pushToast: VOID });
+    apiRef.current = { clearAll: conv.clearAll };
+    return null;
+  };
+  root.render(<Probe />);
+  await tick(4);
+  apiRef.current?.clearAll();
+  expect(calls).toBe(0);
+  expect(announced).toBe(0);
+  root.unmount();
+  host.remove();
+});

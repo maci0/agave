@@ -19,6 +19,8 @@ type AppHeaderProps = {
   sidebarOpen: boolean;
   /** A turn is in flight: the conversation actions wait for it, as /clear does. */
   streaming: boolean;
+  /** The log is empty: there is nothing to export, and the key says so. */
+  exportEmpty: boolean;
   onOpenSidebar: () => void;
   onRetryModel: () => void;
   onNew: () => void;
@@ -45,8 +47,13 @@ const ContextBadge = ({ ctx }: { ctx: Context | null }) => {
   );
 };
 
-/** Conversation actions. Icons carry the meaning on narrow layouts, where the
- *  labels drop to keep the header on one row. */
+/** Nothing to export, and the key says so. Kept on the header rather than
+ *  toast-on-click: a toast has to be caught to be believed, and the moment is
+ *  not an error — an empty log is the resting state. The startNew guard
+ *  ("You are already in a new conversation.") is the precedent: name the
+ *  dead end, do not make the reader guess why nothing happened. */
+const EXPORT_TIP = 'Nothing to export yet';
+
 const HeaderActions = (props: AppHeaderProps) => (
   <div className="flex flex-wrap justify-end gap-1 ms-auto">
     {/* The sidebar carries its own New key; this one covers the drawer
@@ -63,7 +70,7 @@ const HeaderActions = (props: AppHeaderProps) => (
       <NewIcon className="size-4" aria-hidden="true" />
       <span className="max-drawer:sr-only">New</span>
     </Button>
-    <Button type="button" variant="plain" size="sm" onClick={props.onExport} disabled={props.streaming} title="Export conversation" aria-label="Export conversation">
+    <Button type="button" variant="plain" size="sm" onClick={props.onExport} disabled={props.streaming || props.exportEmpty} title={props.exportEmpty ? EXPORT_TIP : 'Export conversation'} aria-label={props.exportEmpty ? `${EXPORT_TIP}. Export conversation` : 'Export conversation'}>
       <ExportIcon className="size-4" aria-hidden="true" />
       <span className="max-drawer:hidden">Export</span>
     </Button>
