@@ -78,8 +78,14 @@ elif compgen -G "$VK_DIR/*.comp" >/dev/null; then
         # Byte-compare only flags true staleness when the compiler version that
         # produced the commit is used; different glslang releases embed their
         # generator version, so treat any diff as "stale OR different tool".
-        if ! glslangValidator -V --target-env vulkan1.1 "$comp" -o "$out" >/dev/null 2>&1 \
-            || ! cmp -s "$out" "$committed"; then
+        # A compile failure is not drift: report it separately and keep its
+        # stderr, or a broken .comp looks like a stale artifact.
+        if ! glslangValidator -V --target-env vulkan1.1 "$comp" -o "$out"; then
+            echo "COMPILE_FAIL: $comp failed to compile with glslangValidator -V --target-env vulkan1.1"
+            drift=$((drift + 1))
+            continue
+        fi
+        if ! cmp -s "$out" "$committed"; then
             echo "DRIFT?: src/backend/kernels/vulkan/$name.spv differs from fresh compile"
             drift=$((drift + 1))
         fi
