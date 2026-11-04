@@ -42,19 +42,23 @@ const ConversationRow = ({ conversation, streaming, onSelect, onDelete }: {
   onDelete: (id: string) => void;
 }) => {
   const label = conversation.title ?? 'New chat';
+  /* The active row is the one the user is in. Selecting it again is a no-op,
+     and a disabled copy says so instead of loading the same log back. */
+  const isActive = conversation.active === true;
   return (
     <li
       className={cn(
-        'mb-0.5 flex items-center gap-1 rounded-md border border-transparent ps-3 pe-0.5 transition-colors hover:bg-muted',
-        conversation.active === true && 'border-primary/25 bg-primary/10',
+        'mb-0.5 flex items-center gap-1 rounded-md border border-transparent ps-3 pe-0.5 transition-colors',
+        isActive ? 'border-primary/25 bg-primary/10' : 'hover:bg-muted',
       )}
     >
       <button
         type="button"
         onClick={function () { onSelect(conversation.id); }}
         aria-label={label.trim() === '' ? 'New chat' : label}
-        aria-current={conversation.active === true ? 'true' : undefined}
-        disabled={streaming}
+        aria-current={isActive ? 'true' : undefined}
+        disabled={streaming || isActive}
+        title={isActive ? 'Current conversation' : undefined}
         className="flex min-h-11 min-w-0 flex-1 items-center rounded-sm text-start"
       >
         <span

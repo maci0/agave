@@ -277,7 +277,7 @@ const Composer = ({ settings, turn, model, image, submit, focusToken, reject }: 
 );
 
 /** The header, with the conversation actions folded in. */
-const ChatHeader = ({ model, convs, turn, chrome, focusComposer, exportConversation, exportEmpty }: {
+const ChatHeader = ({ model, convs, turn, chrome, focusComposer, exportConversation, exportEmpty, clearEmpty }: {
   model: ReturnType<typeof useModelInfo>;
   convs: ReturnType<typeof useConversations>;
   turn: ReturnType<typeof useChatTurn>;
@@ -285,6 +285,7 @@ const ChatHeader = ({ model, convs, turn, chrome, focusComposer, exportConversat
   focusComposer: () => void;
   exportConversation: () => void;
   exportEmpty: boolean;
+  clearEmpty: boolean;
 }) => (
   <AppHeader
     model={model.model}
@@ -292,6 +293,7 @@ const ChatHeader = ({ model, convs, turn, chrome, focusComposer, exportConversat
     ctx={model.context}
     streaming={turn.streaming}
     exportEmpty={exportEmpty}
+    clearEmpty={clearEmpty}
     onRetryModel={model.retry}
     onExport={exportConversation}
     onNew={function () { convs.startNew(); focusComposer(); }}
@@ -350,7 +352,7 @@ const ChatApp = () => {
 
   return (
     <ChatShell
-      header={<ChatHeader model={model} convs={convs} turn={turn} chrome={chrome} focusComposer={focusComposer} exportConversation={commands.exportConversation} exportEmpty={log.bubbles.length === 0} />}
+      header={<ChatHeader model={model} convs={convs} turn={turn} chrome={chrome} focusComposer={focusComposer} exportConversation={commands.exportConversation} exportEmpty={log.bubbles.length === 0} clearEmpty={log.bubbles.length === 0} />}
       sidebar={<ConversationPanel isDrawer={chrome.isDrawer} drawerOpen={chrome.drawerOpen} onDrawerChange={chrome.setDrawerOpen} sidebarProps={sidebarProps} />}
       log={<ChatLogPanel log={log} toasts={toasts} settings={settings} model={model} turn={turn} convs={convs} commands={commands} dismissToast={dismissToast} />}
       composer={<Composer settings={settings} turn={turn} model={model} image={image} submit={commands.submitMessage} focusToken={focusToken} reject={pushToast} />}

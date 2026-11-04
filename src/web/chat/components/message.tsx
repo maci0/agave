@@ -154,13 +154,14 @@ const CopyResponse = ({ text }: { text: string }) => {
   );
 };
 
-/** Replay the newest assistant turn. */
+/** Replay the newest assistant turn. A failed turn's Retry is the way out
+ * of the error, so it stays visible instead of hiding behind a hover. */
 const RegenerateButton = ({ retry, onRegenerate }: { retry: boolean; onRegenerate: () => void }) => (
   <button
     type="button"
     onClick={onRegenerate}
     aria-label={retry ? 'Retry generating response' : 'Regenerate response'}
-    className={ACTION}
+    className={retry ? ACTION.replace('agave-reveal ', '') : ACTION}
   >
     <RegenerateIcon className="size-3.5" aria-hidden="true" />
     {retry ? 'Retry' : 'Regenerate'}

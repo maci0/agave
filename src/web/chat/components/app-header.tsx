@@ -21,6 +21,8 @@ type AppHeaderProps = {
   streaming: boolean;
   /** The log is empty: there is nothing to export, and the key says so. */
   exportEmpty: boolean;
+  /** The log is empty: there is nothing to clear, and the key says so. */
+  clearEmpty: boolean;
   onOpenSidebar: () => void;
   onRetryModel: () => void;
   onNew: () => void;
@@ -53,6 +55,7 @@ const ContextBadge = ({ ctx }: { ctx: Context | null }) => {
  *  ("You are already in a new conversation.") is the precedent: name the
  *  dead end, do not make the reader guess why nothing happened. */
 const EXPORT_TIP = 'Nothing to export yet';
+const CLEAR_TIP = 'Nothing to clear';
 
 const HeaderActions = (props: AppHeaderProps) => (
   <div className="flex flex-wrap justify-end gap-1 ms-auto">
@@ -74,7 +77,7 @@ const HeaderActions = (props: AppHeaderProps) => (
       <ExportIcon className="size-4" aria-hidden="true" />
       <span className="max-drawer:hidden">Export</span>
     </Button>
-    <Button type="button" variant="plain" size="sm" onClick={props.onClear} disabled={props.streaming} title="Clear conversation" aria-label="Clear conversation">
+    <Button type="button" variant="plain" size="sm" onClick={props.onClear} disabled={props.streaming || props.clearEmpty} title={props.clearEmpty ? CLEAR_TIP : 'Clear conversation'} aria-label={props.clearEmpty ? `${CLEAR_TIP}. Clear conversation` : 'Clear conversation'}>
       <ClearIcon className="size-4" aria-hidden="true" />
       <span className="max-drawer:hidden">Clear</span>
     </Button>

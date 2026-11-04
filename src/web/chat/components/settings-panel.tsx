@@ -122,7 +122,9 @@ const SystemPromptField = ({ sampling, onChange, onClear }: {
           variant="plainDestructive"
           size="xs"
           onClick={onClear}
-          aria-label="Clear system prompt"
+          disabled={sampling.system === ''}
+          title={sampling.system === '' ? 'Nothing to clear' : 'Clear system prompt'}
+          aria-label={sampling.system === '' ? 'Nothing to clear. Clear system prompt' : 'Clear system prompt'}
         >
           Clear
         </Button>

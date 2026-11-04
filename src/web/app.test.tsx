@@ -392,6 +392,10 @@ test('a streaming turn swaps the send key for the stop key', async () => {
   expect(stop.textContent).toBe('Stop');
   expect(stop.className).toContain('bg-destructive');
   expect(host.querySelector('button[aria-label="Send message"]')).toBeNull();
+  /* The draft stays editable mid-turn: typing ahead is the next message,
+     not lost text. Enter still refuses the send (see the submit guard). */
+  const field = present(host.querySelector<HTMLTextAreaElement>('textarea'), 'prompt field');
+  expect(field.disabled).toBe(false);
   root.unmount();
   host.remove();
 });
@@ -628,17 +632,52 @@ test('the export key names the dead end', async () => {
     onClear: VOID,
     onAbout: VOID,
   };
-  root.render(<AppHeader {...base} exportEmpty />);
+  root.render(<AppHeader {...base} exportEmpty clearEmpty={false} />);
   await tick(2);
   const key = present(host.querySelector<HTMLButtonElement>('button[aria-label*="Export"]'), 'export key');
   expect(key.disabled).toBe(true);
   expect(key.getAttribute('title')).toBe('Nothing to export yet');
   expect(key.getAttribute('aria-label')).toContain('Nothing to export yet');
-  root.render(<AppHeader {...base} exportEmpty={false} />);
+  root.render(<AppHeader {...base} exportEmpty={false} clearEmpty={false} />);
   await tick(2);
   expect(key.disabled).toBe(false);
   expect(key.getAttribute('title')).toBe('Export conversation');
   expect(key.getAttribute('aria-label')).toBe('Export conversation');
+  root.unmount();
+  host.remove();
+});
+
+test('the clear key names the dead end an empty log makes of it', async () => {
+  /* Clear on an empty log is a no-op behind a confirm dialog: the click
+     asks about nothing. Like the export key beside it, the key is
+     disabled and says so instead of spending a dialog on it. */
+  const { createRoot } = await import('react-dom/client');
+  const { AppHeader } = await import('./chat/components/app-header');
+  const host = mountHost();
+  const root = createRoot(host);
+  const base = {
+    model: null,
+    modelResolved: false,
+    ctx: null,
+    sidebarOpen: false,
+    streaming: false,
+    onOpenSidebar: VOID,
+    onRetryModel: VOID,
+    onNew: VOID,
+    onExport: VOID,
+    onClear: VOID,
+    onAbout: VOID,
+  };
+  root.render(<AppHeader {...base} exportEmpty={false} clearEmpty />);
+  await tick(2);
+  const key = present(host.querySelector<HTMLButtonElement>('button[aria-label*="Clear"]'), 'clear key');
+  expect(key.disabled).toBe(true);
+  expect(key.getAttribute('title')).toBe('Nothing to clear');
+  expect(key.getAttribute('aria-label')).toContain('Nothing to clear');
+  root.render(<AppHeader {...base} exportEmpty={false} clearEmpty={false} />);
+  await tick(2);
+  expect(key.disabled).toBe(false);
+  expect(key.getAttribute('title')).toBe('Clear conversation');
   root.unmount();
   host.remove();
 });

@@ -400,10 +400,8 @@ const useConversationActions = ({ log, announce, pushToast, load, setLoading, co
   }, [announce, conversationsRef, load, log, pushToast]);
 
   const clearAll = useCallback(() => {
-    /* An empty log holds nothing to clear: ask anyway is a confirmation
-       for a no-op (the empty state is the resting state), so the click is
-       a deliberate no-op instead of a dialog about nothing. Same needle as
-       `clearChat` in the browser shell: no messages, no dialog. */
+    /* The header key is disabled on an empty log; this guard stays for
+       the /clear slash path, which reaches here without the key. */
     if (log.bubbles.length === 0) { return; }
     if (globalThis.confirm('Clear this conversation?') === false) {return;} // oxlint-disable-line no-alert -- native confirmation dialog is intentional UX
     void clearServerConversation().then(
@@ -475,9 +473,15 @@ export const useSettings = (announce: Announce) => {
   }, []);
 
   const clearSystem = useCallback(() => {
-    setSampling((previous) => ( { ...previous, system: '' } ));
-    clearStoredSystemPrompt();
-    announce('System prompt cleared');
+    /* An empty field is the resting state: clearing it is a no-op, not an
+       action to confirm. Skip the announce so the control does not claim
+       work it did not do. */
+    setSampling((previous) => {
+      if (previous.system === '') { return previous; }
+      clearStoredSystemPrompt();
+      announce('System prompt cleared');
+      return { ...previous, system: '' };
+    });
   }, [announce]);
 
   const toggleStats = useCallback(() => {

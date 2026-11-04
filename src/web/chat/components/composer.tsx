@@ -81,7 +81,6 @@ const PromptField = (props: PromptFieldProps) => (
     enterKeyHint="send"
     autoComplete="off"
     autoFocus
-    disabled={props.streaming}
     onChange={function (event) { props.onText(event.target.value); }}
     onKeyDown={function (event) {
       // Ignore Enter while an IME composition is active (CJK input).
@@ -178,7 +177,6 @@ const InputRow = (props: ComposerProps & {
         onClick={function () { props.fileInput.current?.click(); }}
         title="Attach image (or paste / drop)"
         aria-label="Attach image. You can also paste or drop an image."
-        disabled={props.streaming}
       >
         <AttachImageIcon className="size-5" aria-hidden="true" />
       </Button>
@@ -229,8 +227,13 @@ const useComposerForm = (props: ComposerProps, text: string, setText: (next: str
     area.current?.focus();
   }, [props.focusToken]);
 
+  /* While a turn runs the draft stays editable, so typing ahead is kept
+     as the next message rather than lost when the field re-enables. */
   const onSubmit = useCallback((event: SyntheticEvent<HTMLFormElement>) => {
     event.preventDefault();
+    /* The Stop key is not a submit, so Enter on a live turn lands here.
+       The draft stays in the field instead of sending a question the
+       user has not finished reading. */
     if (props.streaming) {return;}
     if (!text.trim() && props.pendingImage === null) {return;}
     props.onSubmit(text.trim(), props.pendingImage);
@@ -298,7 +301,7 @@ export const Composer = (props: ComposerProps) => {
         fileInput={form.fileInput}
       />
       <p id="input-hint" className="mt-2 text-center font-mono text-2xs text-faint max-drawer:sr-only">
-        Enter send &middot; Shift+Enter new line &middot; Esc stop &middot; /help commands
+        {props.streaming ? 'Esc stop' : 'Enter send · Shift+Enter new line · Esc stop · /help commands'}
       </p>
     </form>
   );
