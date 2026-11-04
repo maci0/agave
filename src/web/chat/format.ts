@@ -10,6 +10,18 @@ export type Locales = string | Array<string> | undefined;
 export const fmtNum = (amount: number, digits: number, locales?: Locales): string =>
   amount.toLocaleString(locales, { minimumFractionDigits: digits, maximumFractionDigits: digits });
 
+/** A tokens-per-second rate as the locale writes a unit: Intl supplies label
+ *  and spacing, so callers append no hardcoded " tok/s" suffix that reads
+ *  wrong where the conventions disagree. */
+export const fmtTokensPerSecond = (tps: number, digits: number = 1, locales?: Locales): string =>
+  tps.toLocaleString(locales, {
+    style: 'unit',
+    unit: 'per-second',
+    unitDisplay: 'short',
+    minimumFractionDigits: digits,
+    maximumFractionDigits: digits,
+  });
+
 /** Cluster rule set shared by every truncation here. Built once: the rules
  *  depend only on the resolved locale, not on the text being cut. */
 const graphemeSegmenter = new Intl.Segmenter(undefined, { granularity: 'grapheme' });

@@ -1,7 +1,7 @@
 import { CopyIcon, Mark, RegenerateIcon } from '../../ui/icons';
 import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import { copyText, markdownReady, onIdle, renderMarkdown } from '../markdown';
-import { fmtInt, fmtMilliseconds, fmtNum, truncateAnnounce } from '../format';
+import { fmtInt, fmtMilliseconds, fmtNum, fmtTokensPerSecond, truncateAnnounce } from '../format';
 import type { Bubble, StreamStats } from '../types';
 import { cn } from '../../ui/cn';
 
@@ -90,14 +90,16 @@ const StatsLine = ({ stats }: { stats: StreamStats }) => {
   const total = Math.trunc(stats.time) + (Math.trunc(stats.pfMs) || 0);
   const decode = `${fmtInt(stats.tokens)} tok @ ${fmtNum(stats.tps, 2)}`;
   const prefill = `${fmtInt(stats.pfTok)} tok @ ${fmtNum(stats.pfTps, 1)}`;
+  const decodeRate = fmtTokensPerSecond(stats.tps, 2);
+  const prefillRate = fmtTokensPerSecond(stats.pfTps, 1);
   return (
     <div className="mt-2.5 flex flex-wrap gap-x-4 border-t border-divider pt-2.5 font-mono text-2xs text-faint">
       <span>
-        decode <span className="font-medium text-primary">{decode}</span> tok/s
+        decode <span className="font-medium text-primary">{decode}</span> {decodeRate}
       </span>
       {stats.pfTok === 0 ? null : (
         <span>
-          prefill <span className="font-medium text-primary">{prefill}</span> tok/s
+          prefill <span className="font-medium text-primary">{prefill}</span> {prefillRate}
         </span>
       )}
       {stats.pfMs === 0 ? null : (

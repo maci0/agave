@@ -2,7 +2,7 @@ import { AttachImageIcon, CloseIcon, SettingsIcon } from '../../ui/icons';
 import { useCallback, useEffect, useRef, useState, type RefObject, type SyntheticEvent } from 'react';
 import { Button } from '../../ui/button';
 import { SettingsPanel } from './settings-panel';
-import { fmtNum } from '../format';
+import { fmtTokensPerSecond } from '../format';
 import { cn } from '../../ui/cn';
 import type { Sampling } from '../types';
 
@@ -134,7 +134,7 @@ const SendControl = ({ streaming, canSend, onStop }: { streaming: boolean; canSe
 const SpeedReadout = ({ tps }: { tps: number | null }) => (
   tps === null ? null : (
     <span title="Generation speed" className="flex items-center px-1 font-mono text-xs whitespace-nowrap text-primary">
-      {`${fmtNum(tps, 1)} tok/s`}
+      {fmtTokensPerSecond(tps, 1)}
     </span>
   )
 );
