@@ -45,6 +45,16 @@ export const fmtMegabytes = (bytes: number, locales?: Locales): string =>
     maximumFractionDigits: 1,
   });
 
+/** A millisecond total as the locale writes a duration: Intl supplies the
+ *  unit label and spacing, so a caller appends no hardcoded " ms". */
+export const fmtMilliseconds = (ms: number, locales?: Locales): string =>
+  ms.toLocaleString(locales, {
+    style: 'unit',
+    unit: 'millisecond',
+    unitDisplay: 'short',
+    maximumFractionDigits: 0,
+  });
+
 /** Truncate on grapheme cluster boundaries, so what is announced is whole
  *  characters rather than a code-point prefix that can end mid-cluster.
  *
@@ -177,9 +187,12 @@ export const localDateYmd = (now: Date = new Date()): string => {
   return `${year}-${month}-${day}`;
 };
 
-/** Context-window counter: 4 reads as 4, 4096 as 4K. */
-export const fmtCtx = (tokens: number): string =>
-  tokens >= 1024 ? `${fmtInt(Math.round(tokens / 1024))}K` : fmtInt(tokens);
+/** Context-window counter: 4 reads as 4, 4096 as 4K. The K suffix is the
+ *  header's fixed notation — Intl compact would round 32768 to "33K" on a
+ *  1000 basis against the binary 1024 the counter counts in — while
+ *  `fmtInt` still writes the digits in the reader's script. */
+export const fmtCtx = (tokens: number, locales?: Locales): string =>
+  tokens >= 1024 ? `${fmtInt(Math.round(tokens / 1024), locales)}K` : fmtInt(tokens, locales);
 
 /** Language roots whose layout has to be mirrored: Arabic, Aramaic, Central
  *  Kurdish (Sorani), Divehi, Persian, Hebrew, Kashmiri, Kurdish, Pashto,

@@ -29,14 +29,16 @@ export type ConvMessages = {
   cleared?: boolean;
 };
 
-/** Final generation statistics, decoded from the last SSE stats frame. */
+/** Final generation statistics, decoded from the last SSE stats frame.
+ *  Numeric until display, so `fmtInt`/`fmtNum`/`fmtMilliseconds` apply the
+ *  reader's locale at render rather than the wire's ASCII `toFixed` here. */
 export type StreamStats = {
-  tokens: string;
-  tps: string;
-  time: string;
-  pfTok: string;
-  pfMs: string;
-  pfTps: string;
+  tokens: number;
+  tps: number;
+  time: number;
+  pfTok: number;
+  pfMs: number;
+  pfTps: number;
 };
 
 /** One `data:` frame of a `stream=1` response. */

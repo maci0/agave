@@ -1,7 +1,7 @@
 import { CopyIcon, Mark, RegenerateIcon } from '../../ui/icons';
 import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import { copyText, markdownReady, onIdle, renderMarkdown } from '../markdown';
-import { fmtInt, fmtNum, truncateAnnounce } from '../format';
+import { fmtInt, fmtMilliseconds, fmtNum, truncateAnnounce } from '../format';
 import type { Bubble, StreamStats } from '../types';
 import { cn } from '../../ui/cn';
 
@@ -87,26 +87,26 @@ export const MessageBody = memo(({ text, phase, onRendered }: MessageBodyProps) 
 });
 
 const StatsLine = ({ stats }: { stats: StreamStats }) => {
-  const total = Math.trunc(Number(stats.time)) + (Math.trunc(Number(stats.pfMs)) || 0);
-  const decode = `${fmtInt(stats.tokens)} tok @ ${fmtNum(Number(stats.tps), 2)}`;
-  const prefill = `${fmtInt(stats.pfTok)} tok @ ${fmtNum(Number(stats.pfTps), 1)}`;
+  const total = Math.trunc(stats.time) + (Math.trunc(stats.pfMs) || 0);
+  const decode = `${fmtInt(stats.tokens)} tok @ ${fmtNum(stats.tps, 2)}`;
+  const prefill = `${fmtInt(stats.pfTok)} tok @ ${fmtNum(stats.pfTps, 1)}`;
   return (
     <div className="mt-2.5 flex flex-wrap gap-x-4 border-t border-divider pt-2.5 font-mono text-2xs text-faint">
       <span>
         decode <span className="font-medium text-primary">{decode}</span> tok/s
       </span>
-      {stats.pfTok && stats.pfTok !== '0' ? (
+      {stats.pfTok !== 0 ? (
         <span>
           prefill <span className="font-medium text-primary">{prefill}</span> tok/s
         </span>
       ) : null}
-      {stats.pfMs && stats.pfMs !== '0' ? (
+      {stats.pfMs !== 0 ? (
         <span>
-          TTFT <span className="font-medium text-primary">{fmtInt(stats.pfMs)}</span> ms
+          TTFT <span className="font-medium text-primary">{fmtMilliseconds(stats.pfMs)}</span>
         </span>
       ) : null}
       <span>
-        total <span className="font-medium text-primary">{fmtInt(total)}</span> ms
+        total <span className="font-medium text-primary">{fmtMilliseconds(total)}</span>
       </span>
     </div>
   );

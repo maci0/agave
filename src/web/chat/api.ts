@@ -195,12 +195,12 @@ export const streamChat = async (request: StreamRequest, callbacks: StreamCallba
     }
     if (frame.done === true) {
       callbacks.onStats({
-        tokens: String(frame.n),
-        tps: (frame.tps ?? 0).toFixed(2),
-        time: String(frame.ms),
-        pfTok: String(frame.pn),
-        pfMs: String(frame.pms),
-        pfTps: (frame.ptps ?? 0).toFixed(1),
+        tokens: frame.n ?? 0,
+        tps: frame.tps ?? 0,
+        time: frame.ms ?? 0,
+        pfTok: frame.pn ?? 0,
+        pfMs: frame.pms ?? 0,
+        pfTps: frame.ptps ?? 0,
       });
     }
     return true;
