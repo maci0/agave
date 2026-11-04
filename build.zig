@@ -679,6 +679,25 @@ pub fn build(b: *std.Build) void {
         doctor_cmd.has_side_effects = true;
         b.step("doctor", "Report whether this machine can run `zig build ci`, and what is missing").dependOn(&doctor_cmd.step);
 
+        // The edit-test loop: every test in one source file, without paying
+        // for the whole suite. scripts/test-file.sh is the implementation;
+        // exposing it as a build step puts it in `zig build --help` where a
+        // contributor looking for a single-file loop finds it. Args pass
+        // through: `zig build test-file -- src/ops/kv_quant.zig [substring]`.
+        const test_file_cmd = b.addSystemCommand(&.{ "bash", "scripts/test-file.sh" });
+        test_file_cmd.setCwd(repo_cwd);
+        test_file_cmd.has_side_effects = true;
+        test_file_cmd.addPassthruArgs();
+        b.step("test-file", "Run every test in one source file (scripts/test-file.sh)").dependOn(&test_file_cmd.step);
+
+        // Regenerate the committed browser bundles after editing src/web or
+        // web TypeScript. check-web only byte-compares against a fresh build,
+        // so without this step the regeneration command lives only in docs.
+        const build_web_cmd = b.addSystemCommand(&.{ "bash", "scripts/build-web.sh" });
+        build_web_cmd.setCwd(repo_cwd);
+        build_web_cmd.has_side_effects = true;
+        b.step("build-web", "Regenerate committed browser bundles (scripts/build-web.sh)").dependOn(&build_web_cmd.step);
+
         const lint_python_cmd = b.addSystemCommand(&.{ "bash", "scripts/lint-python.sh" });
         lint_python_cmd.setCwd(repo_cwd);
         lint_python_cmd.has_side_effects = true;

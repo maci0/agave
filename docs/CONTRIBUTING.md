@@ -27,7 +27,7 @@ Before a PR, run `zig build ci`, the local half of the blocking `ci-pass` gate: 
 | Docs, changelog, version pins | `python3 scripts/check-docs.py` (also part of `zig build check`) |
 | `Dockerfile`, `.zigversion`, `ruff.toml`, or `package.json` (bumping a pin) | `zig build check-pins` (also part of `zig build check`; the Zig version, the Dockerfile's Zig download checksums, the Debian snapshot day, `SOURCE_DATE_EPOCH`, apt source isolation, the listen port, the ruff and bun versions, the committed `uv.lock` files, the vendored anti-slop source against `tools/oxlint/anti-slop/VENDORED.sha256`, and every exact third-party version in `package.json` and the `pyproject.toml` files must agree) |
 | `tools/oxlint/anti-slop/**` (re-vendoring) | `zig build check-pins` after regenerating `tools/oxlint/anti-slop/VENDORED.sha256`; record the upstream commit in that directory's `README.md` and copy upstream's LICENSE file there |
-| Built-in chat UI and browser shell (Preact + Tailwind 4) | `scripts/build-web.sh` (needs bun 1.4.2 and `bun install --frozen-lockfile`) |
+| Built-in chat UI and browser shell (Preact + Tailwind 4) | `zig build build-web` (needs bun 1.4.2 and `bun install --frozen-lockfile`) |
 | A JavaScript dependency in `dependencies` (ships inside the web bundles) | `zig build check-third-party`: every bundled package needs a `name@version` entry in `THIRD_PARTY_NOTICES.md`, with its upstream license and URL |
 | `src/web/` / `web/` TypeScript | `zig build lint-web` and `scripts/check-web-artifacts.sh` (both part of the blocking CI job `lint-web`) |
 | Weight of the committed web bundles | `scripts/check-web-artifacts.sh` also fails when one grows past its `gzip -9` ceiling, so bundle weight cannot accrete unnoticed. `src/web/app.js` is inlined into the one HTML document the server sends, so its whole compressed size sits on the first-paint path |
@@ -467,11 +467,11 @@ zig build test -Dtest-filter=wht32
 # Run every test in ONE file: the edit-test loop, much narrower than the suite.
 # Needs `zig build` to have run once, so the build_options module exists under
 # .zig-cache.
-scripts/test-file.sh src/ops/kv_quant.zig
+zig build test-file -- src/ops/kv_quant.zig
 # Trailing substrings are an assertion, not a filter: the run fails if no test
 # in that file matches, because `zig test --test-filter` cannot see an imported
 # file's tests and would report "All 0 tests passed." and exit 0.
-scripts/test-file.sh src/ops/kv_quant.zig wht32
+zig build test-file -- src/ops/kv_quant.zig wht32
 # It writes a throwaway bridge root into src/ (Zig 0.17 modules reach only files
 # under their root's directory, so `zig test src/ops/kv_quant.zig` alone dies
 # with "import of file outside module path") and removes it on every exit.

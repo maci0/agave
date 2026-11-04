@@ -22,6 +22,7 @@ zig build lint-web                 # oxlint + tsc + UI smoke test + W3C (vnu) + 
 zig build lint-shell               # shellcheck on scripts/*.sh (CI lint-shell)
 zig build lint-python              # ruff check + ruff format --check on scripts/, tests/, tools/, research/ Python (CI lint-python)
 zig build check-web                # committed bundles and stylesheets match a fresh bun + Tailwind build (CI lint-web)
+zig build build-web                  # regenerate committed browser bundles (scripts/build-web.sh)
 zig build test-python              # Python unit tests under scripts/ and tools/ (CI python-tests; stdlib only, no network)
 zig build fmt                      # apply zig fmt to the paths CI checks
 zig build fmt-check                # check formatting without writing
@@ -37,7 +38,7 @@ zig build -Denable-<backend>=false # cpu cuda metal rocm vulkan webgpu
 zig build -Denable-debug=false     # skip agave-debug
 zig build -Denable-bench=false     # skip installing agave-bench
 zig build test -Dtest-filter=<str> # only tests whose name contains <str>. Repeat to AND filters. A filter matching no `test "..."` name aborts the build (an empty match would otherwise exit 0).
-bash scripts/test-file.sh src/<file>.zig # every test in ONE file: the edit-test loop. `zig test <src file>` dies with "import of file outside module path", so this bridges into src/ and cleans up after itself. Trailing args assert a test name matches; they do not filter.
+zig build test-file -- src/<file>.zig # every test in ONE file: the edit-test loop (scripts/test-file.sh). `zig test <src file>` dies with "import of file outside module path", so this bridges into src/ and cleans up after itself. Trailing args assert a test name matches; they do not filter.
 zig build wasm                     # browser WASM module into zig-out/web/ (agave.wasm + the index.html, style.css, agave.js, shell.js the page loads), not src/web/. Compile only, see Gotchas.
 zig build validate                 # every GPU kernel against the CPU backend. Needs the GPU; -Dvalidate-backend= picks it (default rocm).
 zig build ptx [-Dcuda-sm=sm_120] # CUDA kernels to zig-out/ptx/*.ptx (see Build: commit them)
