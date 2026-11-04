@@ -92,9 +92,6 @@ class AgaveError extends Error {
 /** Token budget used when the caller omits one or passes zero. */
 const default_max_tokens = 100;
 
-/** Max `u32` the WASM `agave_generate` export accepts. */
-const max_u32 = 0xFFFF_FFFF;
-
 /** Hard cap on `maxTokens`. The engine's generation buffer holds at most this
  * many token IDs; a larger budget would be silently truncated. */
 const max_tokens_cap = 4096;
