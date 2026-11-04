@@ -139,6 +139,15 @@ const SystemPromptField = ({ sampling, onChange, onClear }: {
         value={sampling.system}
         className="min-h-10 max-h-30 resize-y"
         onChange={function (event) { onChange({ ...sampling, system: event.target.value }); }}
+        onKeyDown={function (event) {
+          /* Enter here edits the prompt (a newline); it must not send the
+             draft. The form's submit guard also drops panel submits, but
+             this stops the newline from being eaten by the composer. */
+          if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
+            event.preventDefault();
+            event.currentTarget.blur();
+          }
+        }}
       />
     </div>
   );

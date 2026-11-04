@@ -238,6 +238,13 @@ const useComposerForm = (props: ComposerProps, text: string, setText: (next: str
        The draft stays in the field instead of sending a question the
        user has not finished reading. */
     if (props.streaming) {return;}
+    /* A submit that originates inside the sampling panel (Enter in the
+       Max tokens field, Enter in the system prompt) must never send the
+       draft. The panel prevents its own Enter where it matters, but this
+       guard is the one place a submit from the panel is dropped, so the
+       draft cannot be spent on a keystroke meant for a setting. */
+    if (event.target instanceof HTMLFormElement && event.target.contains(document.activeElement)
+      && document.activeElement?.closest('#settings-panel') !== null) {return;}
     if (!text.trim() && props.pendingImage === null) {return;}
     props.onSubmit(text.trim(), props.pendingImage);
     setText('');
@@ -303,7 +310,7 @@ export const Composer = (props: ComposerProps) => {
         area={form.area}
         fileInput={form.fileInput}
       />
-      <p id="input-hint" className="mt-2 text-center font-mono text-2xs text-faint max-drawer:sr-only">
+      <p id="input-hint" className="mt-2 text-center font-mono text-2xs text-faint">
         {props.streaming ? 'Esc stop' : 'Enter send · Shift+Enter new line · Esc stop · /help commands'}
       </p>
     </form>

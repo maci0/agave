@@ -326,10 +326,13 @@ const ChatLog = ({ messages, sending, ready }: { messages: Array<Message>; sendi
   );
 };
 
-/** The product line, and the control that clears the transcript. `disabled`
- *  while busy but always mounted: removing it on clear shifted the header
- *  layout and made the remaining controls jump. */
-const ShellHeader = ({ ready, busy, onClear }: { ready: boolean; busy: boolean; onClear: () => void }) => (
+/** The product line, and the control that clears the transcript.
+ *  Disabled on an empty transcript, matching the serve UI's clear key: an
+ *  enabled clear that silently does nothing (or asks to confirm nothing)
+ *  is the dead end the serve UI already names. `disabled` while busy but
+ *  always mounted: removing it on clear shifted the header layout and made
+ *  the remaining controls jump. */
+const ShellHeader = ({ ready, busy, hasMessages, onClear }: { ready: boolean; busy: boolean; hasMessages: boolean; onClear: () => void }) => (
   <header className="flex items-center justify-between gap-4 border-b border-divider bg-card px-gutter py-4 max-drawer:flex-wrap max-drawer:px-4 max-drawer:py-3">
     <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
       {/* No `tracking-tight`: the lockup's wordmark is outlined Adwaita Mono
@@ -341,7 +344,14 @@ const ShellHeader = ({ ready, busy, onClear }: { ready: boolean; busy: boolean; 
       </h1>
       <small className="text-sm text-faint">Init, parse and tokenize only. Text generation is blocked in this build.</small>
     </div>
-        <Button type="button" size="sm" onClick={onClear} title="Clear conversation" disabled={!ready || busy}>
+        <Button
+          type="button"
+          size="sm"
+          onClick={onClear}
+          title={hasMessages ? 'Clear conversation' : 'Nothing to clear'}
+          aria-label={hasMessages ? 'Clear conversation' : 'Nothing to clear. Clear conversation'}
+          disabled={!ready || busy || !hasMessages}
+        >
             Clear
           </Button>
     </header>
@@ -360,7 +370,7 @@ type ComposerProps = {
 const Composer = ({ prompt, onPrompt, onSend, ready, sending, busy, focus }: ComposerProps) => {
   const inputRef = useRef<HTMLInputElement>(null);
   useEffect(() => { focus(); }, [focus]);
-  let hint = 'Enter to send';
+  let hint = 'Enter to send · Shift+Enter new line';
   if (!ready) { hint = 'Load a model first'; } else if (busy) { hint = 'Busy — wait for the current turn'; }
   return (
     <>
@@ -480,16 +490,18 @@ const Shell = () => {
   return (
     <div className="flex h-dvh flex-col overflow-hidden bg-background text-foreground">
       <SkipLink href="#prompt">Skip to message input</SkipLink>
-      <ShellHeader ready={loader.ready} busy={busy} onClear={function () { chat.clearChat(loader.focusPrompt); }} />
+      <ShellHeader ready={loader.ready} busy={busy} hasMessages={chat.messages.length > 0} onClear={function () { chat.clearChat(loader.focusPrompt); }} />
       <ModelBar loader={loader} />
       <main aria-label="Chat" className="flex min-h-0 flex-1 flex-col">
         {/* Plain text, no live region. This line names a state on every
             render, and a live region on it read "Load a GGUF model to begin"
             over whatever the reader was on, then each download tick on top of
-            that. A failed load is announced from the alert bubble beside the
-            field, so nothing is lost here. */}
+            that. When it carries a failure the DOM swaps `loader.status`
+            for the inline error: the line is the visible copy, the
+            `#url-error` alert beside the field is the announced one, and
+            the same sentence is never in two live regions at once. */}
         <p className="bg-background px-gutter py-2 font-mono text-sm text-faint max-drawer:px-4">
-          {loader.status}
+          {loader.urlError ?? loader.status}
         </p>
         <ChatLog messages={chat.messages} sending={chat.sending} ready={loader.ready} />
         <Composer
