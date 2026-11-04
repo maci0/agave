@@ -49,7 +49,7 @@ Every flag, including `--spec-mode`: `agave --help`, or the `cli_specs` table in
 
 After backend or model interface changes run `zig build`, not only `zig build test`.
 
-`zig build ci` is what a workstation reproduces. CI also runs, with no local step covering them: the macOS test job, the Docker build, the cross-compile matrix, the wasm build, PTX freshness, a bounded fuzz pass, an ASan+UBSan pass. See [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md).
+`zig build ci` is what a workstation reproduces. CI also runs, with no local step covering them: the macOS test job, the Docker build, the cross-compile matrix, the wasm build, PTX freshness, a bounded fuzz pass, an ASan+UBSan pass, and the reproducible-build byte-compare. See [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md).
 
 Docs: [docs/DOCUMENTATION.md](docs/DOCUMENTATION.md). Dispatchers: `src/backend/backend.zig`, `src/models/model.zig`, `src/format/format.zig`, `src/tokenizer/tokenizer.zig`. `--serve` UI is `src/web/` (Preact in `app.tsx`, Tailwind 4 in `app.css`, shadcn primitives in `ui/`; `scripts/build-web.sh` bundles them into the committed `src/web/app.js` and `src/web/style.css`). Browser WASM shell is `web/` (Preact in `shell.tsx`, `shell.css`), not `src/web/`. Both surfaces reach Preact through the `vendor/react` shims, not through React.
 
@@ -81,7 +81,7 @@ Non-negotiable. Every change must respect all of them.
 
 ### GPU backends
 - A kernel that exists for that backend but is missing at load `@panic`s. Fail closed; never `@panic` into a CPU path on load failure.
-- Per op, a backend either implements the kernel or deliberately routes to CPU, and that choice is commented. Both are fine; a silent, unjustified third option is the defect. CPU-routed today: `embLookup` on Metal (single-row CPU read beats dispatch overhead), Metal `softmax` under `softmax_cpu_threshold` (128), `clampedSiluMul` on CUDA/ROCm/WebGPU, CPU SDPA for KV layouts with no GPU kernel (`KvQuantType.cpuSdpaOnly` / `discreteGpuUsesCpuSdpa` in `src/ops/kv_quant.zig` — `nvfp4_ds_mla` everywhere, plus `q8_0` on the discrete backends), `gemm` as a sequential loop-of-GEMV on ROCm/Vulkan and for non-Q8_0 dtypes on CUDA (no native batched GEMM kernel), and CUDA `deltaNet` when the PTX has no `deltanet_recurrence_kernel`. Fail-closed instead: WebGPU IQ2/IQ3/IQ1 GEMV, Vulkan IQ2/IQ3/IQ1. Match the neighbours, not this list — it is not exhaustive.
+- Per op, a backend either implements the kernel or deliberately routes to CPU, and that choice is commented. Both are fine; a silent, unjustified third option is the defect. CPU-routed today: `embLookup` on CUDA/ROCm/Metal (single-row CPU read beats dispatch overhead; Vulkan/WebGPU have GPU paths for f32/bf16/f16, host dequant for quantized rows), Metal `softmax` under `softmax_cpu_threshold` (128), `clampedSiluMul` on CUDA/ROCm/Vulkan/WebGPU (Metal uses a GPU kernel above 16384 elements, CPU at or below), CPU SDPA for KV layouts with no GPU kernel (`KvQuantType.cpuSdpaOnly` / `discreteGpuUsesCpuSdpa` in `src/ops/kv_quant.zig` — `nvfp4_ds_mla` everywhere, plus `q8_0` on the discrete backends), `gemm` as a sequential loop-of-GEMV on ROCm/Vulkan/WebGPU and for non-Q8_0 dtypes on CUDA (no native batched GEMM kernel), and CUDA `deltaNet` when the PTX has no `deltanet_recurrence_kernel`. Fail-closed instead: WebGPU IQ2/IQ3/IQ1 GEMV, Vulkan IQ2/IQ3/IQ1. Match the neighbours, not this list — it is not exhaustive.
 - Keep the decision in one place per op: gate on a `KvQuantType` predicate or a function-pointer null check, not on backend name.
 - `--allow-cpu-fallback` is a stub (warns, does nothing). Do not add CPU fallbacks behind it.
 
@@ -104,7 +104,7 @@ Non-negotiable. Every change must respect all of them.
   - SPIR-V: `glslangValidator -V --target-env vulkan1.1` per `.comp` in `src/backend/kernels/vulkan/`.
   - ROCm: `zig build amdgcn`, copy `zig-out/rocm/kernels.hsaco` to `src/backend/kernels/rocm/kernels.hsaco`. The step also installs `zig-out/rocm/kernels.o` (relocatable ELF, for manual linking only); it is not the HSACO.
   - Metal and WGSL are hand-written; no compile step.
-- The committed web bundles are the same class of artifact: `src/web/app.js`, `src/web/style.css`, `web/shell.js`, and `web/style.css` are bun + Tailwind outputs, `@embedFile`d by `server.zig` or shipped as-is, and not rebuilt by `zig build`. Edit a `.tsx` or `.css` under `src/web/` or `web/` without `bash scripts/build-web.sh` and you ship the old bundle; `zig build check-web` (via `lint-web`) byte-compares and fails.
+- The committed web bundles are the same class of artifact: `src/web/app.js`, `src/web/style.css`, `web/shell.js`, `web/style.css`, and `web/agave.js` are bun + Tailwind outputs, `@embedFile`d by `server.zig` or shipped as-is, and not rebuilt by `zig build`. Edit a `.tsx` or `.css` under `src/web/` or `web/` without `bash scripts/build-web.sh` and you ship the old bundle; `zig build check-web` (via `lint-web`) byte-compares and fails.
 
 ### Errors, docs, tests
 - Explicit error sets and `try`/`catch`. Never `catch undefined`. `catch {}` only where the failure provably cannot affect state (advisory syscalls like `madvise`, thread affinity, best-effort cleanup) or in test cleanup; never to swallow an error that loses data or hides a failed operation.
