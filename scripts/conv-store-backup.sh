@@ -148,7 +148,51 @@ readonly SNAPSHOT_RE='^conversations-(corrupt|overflow|deleted|prerestore)-[0-9]
 # retention never reach it, and it is not a copy of any conversation.
 readonly ROTATION_LOG_NAME='.conversations-rotated.log'
 
-# mtime as seconds.fraction. GNU stat and BSD/macOS stat take the same field
+# Overlapping runs are the normal consequence of an hourly timer whose
+# previous run overruns its interval (or a manual backup while the timer
+# fires). Two `backup` processes racing on the same tier each compute a
+# dest from the same `stamp` second, each `prune`s by its own snapshot of
+# the tier, and each appends its own rotation record: the second execution
+# can delete the copy the first just made and record a loss that never
+# happened. Serialize every mutating command on an advisory lock held for
+# the whole run; the lock file lives outside both tiers, so rotation never
+# reaches it.
+LOCK_NAME='.conversations-backup.lock'
+acquire_backup_lock() {
+    local dir="$1"
+    mkdir -p -- "$dir" || die "cannot create $dir"
+    local lock_fd=9
+    # Reuse the inherited fd when the lock is already held in this process
+    # (the self-test calls do_backup in subshells, which inherit the fd;
+    # re-opening it truncates the shared lock file and then fails to lock).
+    # A fresh process has no fd 9 for this file, so it opens one.
+    if [[ ! -e "/proc/$$/fd/$lock_fd" || "$(readlink "/proc/$$/fd/$lock_fd" 2>/dev/null)" != "$dir/$LOCK_NAME" ]]; then
+        eval "exec ${lock_fd}>\"$dir/$LOCK_NAME\"" ||
+            die "cannot open lock file $dir/$LOCK_NAME"
+    fi
+    if command -v flock >/dev/null 2>&1; then
+        flock -n "$lock_fd" ||
+            die "another conv-store-backup run holds $dir/$LOCK_NAME; refusing to run concurrently"
+    else
+        # No flock(1) (e.g. a minimal macOS host): use a lock directory as the
+        # exclusion primitive. mkdir is atomic; a stale directory from a
+        # killed run would block forever, so it carries the holder's pid and
+        # is reclaimed only when that pid is gone.
+        local lockdir="$dir/$LOCK_NAME.dir" pid
+        while ! mkdir -- "$lockdir" 2>/dev/null; do
+            pid="$(cat -- "$lockdir/pid" 2>/dev/null || printf '')"
+            if [[ -n "$pid" ]] && ! kill -0 "$pid" 2>/dev/null; then
+                rmdir -- "$lockdir" 2>/dev/null || true
+                continue
+            fi
+            die "another conv-store-backup run holds $lockdir; refusing to run concurrently"
+        done
+        printf '%s\n' "$$" >"$lockdir/pid"
+        trap 'rm -rf -- "'"$lockdir"'"' EXIT
+    fi
+}
+
+# Mtime as seconds.fraction. GNU stat and BSD/macOS stat take the same field
 # under different syntax, so the flavor is probed once instead of guessed from
 # uname. The fraction is not optional: a `backup` run writes the dated copy and
 # the sidecar copies in one second, and pruning the wrong one of two files with
@@ -386,6 +430,7 @@ do_backup() {
     live="$(live_store_path)" || die "neither XDG_CACHE_HOME nor HOME is set; pass --store PATH"
     dir="$(backup_dir)"
     mkdir -p -- "$dir" || die "cannot create $dir"
+    acquire_backup_lock "$dir"
     # The backup dir holds nothing but copies of the conversation store, so it
     # is owner-only even when the operator's umask is not.
     chmod 700 -- "$dir" || die "cannot restrict permissions on $dir"
@@ -529,6 +574,7 @@ do_restore() {
         local dir snap
         dir="$(backup_dir)"
         mkdir -p -- "$dir" || die "cannot create $dir"
+        acquire_backup_lock "$dir"
         chmod 700 -- "$dir" || die "cannot restrict permissions on $dir"
         snap="$dir/conversations-prerestore-$(stamp).json"
         [[ -e "$snap" ]] && snap="${snap%.json}-$$.json"

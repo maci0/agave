@@ -51,14 +51,20 @@ publish() {
 fetch_github_releases() {
     local name="$1" repo="$2" pages="${3:-3}"
     echo "  $name (github releases: $repo)"
+    # Each page is staged separately and concatenated only on success: a
+    # rerun (or a page retried after a network timeout) must not append the
+    # same releases twice, or the published changelog duplicates every
+    # entry page 1 already carried.
+    : >"$STAGE/${name}.body"
     for page in $(seq 1 "$pages"); do
         # A page failure ends pagination; page 1 failing is the whole fetch.
         if ! gh api "repos/$repo/releases?per_page=30&page=$page" \
             --jq '.[] | "## " + .tag_name + " (" + (.published_at // "unknown") + ")\n" + (.body // "(no body)") + "\n\n---\n"' \
-            >>"$STAGE/${name}.body" 2>>"$STAGE/${name}.err"; then
+            >"$STAGE/${name}.page" 2>>"$STAGE/${name}.err"; then
             echo "    ! $repo page $page: $(head -n1 "$STAGE/${name}.err" 2>/dev/null)" >&2
             break
         fi
+        cat "$STAGE/${name}.page" >>"$STAGE/${name}.body"
     done
     publish "$name" <<<"# $name, GitHub Releases (fetched $DATE)
 Source: https://github.com/$repo/releases"
