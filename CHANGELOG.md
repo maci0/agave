@@ -22,6 +22,44 @@ must still appear under **Changed** or **Breaking** below. See
   export and the browser `maxTokens` option (previously up to 2^32-1), and a
   WASM prompt over 256 KiB is rejected with `invalid_argument` instead of
   forcing an unbounded allocation.
+- A user-supplied system message is now capped at 16 KiB (UTF-8 bytes) and
+  sanitized like other untrusted content before it is spliced into the
+  prompt. Before: a system prompt of any size was sent verbatim on every
+  turn, so a huge one silently consumed the context window and token
+  budget, and control-token strings inside it were not stripped. After:
+  content past 16 KiB is truncated at a UTF-8 boundary and embedded
+  control tokens are removed. This also covers the server's `system`
+  field, which flows through the same formatter. Tool-result truncation
+  now also drops invalid UTF-8 at the cap instead of keeping raw bytes.
+- The SSD KV tier file (`--kv-tiers vram+ram+ssd`, `--kv-ssd-path`) is now
+  created owner-only (0600) and tightened to 0600 on every open. Before:
+  it was created world-readable (0644), so any local user could read
+  prompt-derived KV hidden state from it. After: only the owning user
+  can read it. A file created 0644 by an older build, or loosened since,
+  is tightened on open; a second user who was reading it loses access on
+  upgrade. See T11 in `docs/THREAT_MODEL.md`.
+- The HTTP server now keeps connections alive (up to 100 requests per
+  connection) instead of closing every connection after one response.
+  `Connection: keep-alive` is sent when the connection will be reused and
+  `Connection: close` when the client asked for it, the request was
+  HTTP/1.0 without `keep-alive`, or the per-connection budget is spent.
+  HTTP/1.1 clients that set `Connection: close` see no change. The chat
+  UI also sends `preconnect` hints for its API fetches.
+- Debug output no longer prints the formatted prompt. With `--debug`,
+  `agave` logged the full prompt text; it now logs only its byte length.
+  Scripts that grepped debug logs for prompt text must match on the
+  length line instead. A conversation-store save that cannot create its
+  parent directory, and a tokenizer encode failure, now surface as
+  errors instead of best-effort silence.
+
+### Changed
+- The `--vram-budget` GiB-to-bytes conversion is now exact for every
+  value in [0, 1024] GiB. Before: `gib * 2^30` in f64 lost low bits for
+  fractional values like 0.3 GiB and was floored before the int cast.
+  After: the whole GiB is shifted exactly and the fractional GiB is
+  rounded half-up to the nearest byte. Budgets that were already exact
+  are unchanged; budgets that lost low bits now request the rounded
+  value.
 
 ### Fixed
 
@@ -118,8 +156,6 @@ must still appear under **Changed** or **Breaking** below. See
   logs the port, the errno or the missing peer, and exits. The same was already
   true for `--tp`; this closes the `--pp` side. `docs/PARALLELISM.md` records
   the rule.
-
-### Breaking
 - **Zig 0.17.0 is now required** (released 2026-10-01). `.zigversion`,
   `build.zig.zon` `.minimum_zig_version` and the Dockerfile's Zig download
   checksums all move to 0.17.0; `zig build` refuses any other compiler. The
