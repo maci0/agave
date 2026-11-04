@@ -4,7 +4,7 @@ Claims in this file are checked against source by the threat-model pass. If one
 disagrees with the code, the code wins; see the docs-vs-code check at the end of
 [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md#4-mitigations-map).
 
-- **Last reviewed:** 2026-10-08
+- **Last reviewed:** 2026-11-05
 
 ## Supported versions
 
@@ -111,10 +111,10 @@ writes over the binary:
   `/agave_1to0` (`src/parallel/transport.zig:333-334`) are mode 0600, so any
   other process running as the same uid can read or inject tensors. See T6.
 - **`agave update` overwrites the installed binary.** It is the only code
-  path that writes a file the user then executes (`src/update.zig:193,364`).
+  path that writes a file the user then executes (`src/update.zig:194,364`).
   The download must be HTTPS on a GitHub host (`trustedGithubUrl`
-  `src/update.zig:127`) and must match a `.sha256` sidecar
-  (`checksumMatches` `src/update.zig:159`), but the sidecar is fetched from
+  `src/update.zig:128`) and must match a `.sha256` sidecar
+  (`checksumMatches` `src/update.zig:160`), but the sidecar is fetched from
   the same release in the same run and is not signed. That is transfer
   integrity, not publisher identity: anything that controls the release, the
   repo, or the network position between you and GitHub controls the bytes
