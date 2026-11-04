@@ -1627,12 +1627,18 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
                 eprint("Error: --vram-budget must be between 0 and 1024 GiB, got '{s}'\n", .{raw});
                 usageExit();
             }
-            // Floor before the int cast: `@intFromFloat` is only defined for an
-            // integral value, and gib * 2^30 is fractional for almost every
-            // input (0.3, 1.7, 7.7777). Matches the other GiB→byte
-            // conversions in this file (warnIfBudgetForcesEviction,
-            // vramBudgetBytes).
-            break :blk @as(usize, @intFromFloat(@floor(gib * 1024.0 * 1024.0 * 1024.0)));
+            // Split into whole GiB + fractional remainder so the byte count
+            // is exact for every gib in [0, 1024]: gib * 2^30 in f64 is exact
+            // only when the mantissa fits (any gib up to 1024 * 2^30 needs
+            // 40 bits, but odd multiples like 1.5 + eps lose the low bits, and
+            // @floor/@intFromFloat on a value > 2^53 is UB). The integer part
+            // is shifted exactly; the fractional part is scaled and rounded
+            // to the nearest byte (half-up, matching the display rounding).
+            const whole_gib = @floor(gib);
+            const frac_gib = gib - whole_gib;
+            const whole_bytes: usize = @as(usize, @intFromFloat(whole_gib)) * (1024 * 1024 * 1024);
+            const frac_bytes: usize = @as(usize, @intFromFloat(@floor(frac_gib * 1073741824.0 + 0.5)));
+            break :blk whole_bytes + frac_bytes;
         },
         .ssd_cache_slots = blk: {
             const v = parseU32(res.option("ssd-cache-slots"), "ssd-cache-slots") orelse 256;

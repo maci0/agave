@@ -626,7 +626,7 @@ pub const Display = struct {
             const total = formatSize(info.total_mem);
             const is_gpu = info.n_gpu_kernels > 0;
             const label: []const u8 = if (info.is_uma) "unified" else if (is_gpu) "VRAM" else "RAM";
-            if (info.avail_mem > 0 and info.avail_mem < info.total_mem * avail_display_threshold_pct / 100) {
+            if (info.avail_mem > 0 and @as(u128, info.avail_mem) * 100 < @as(u128, info.total_mem) * avail_display_threshold_pct) {
                 const avail = formatSize(info.avail_mem);
                 bufAppend(&buf, &pos, " \xc2\xb7 {d:.1}/{d:.1}{s} {s}", .{ avail.val, total.val, total.unit, label });
             } else {
@@ -635,7 +635,7 @@ pub const Display = struct {
         }
         if (info.n_gpu_kernels > 0 and !info.is_uma and info.system_mem > 0) {
             const sys_total = formatSize(info.system_mem);
-            if (info.system_avail > 0 and info.system_avail < info.system_mem * avail_display_threshold_pct / 100) {
+            if (info.system_avail > 0 and @as(u128, info.system_avail) * 100 < @as(u128, info.system_mem) * avail_display_threshold_pct) {
                 const sys_avail = formatSize(info.system_avail);
                 bufAppend(&buf, &pos, " \xc2\xb7 {d:.1}/{d:.1}{s} RAM", .{ sys_avail.val, sys_total.val, sys_total.unit });
             } else {

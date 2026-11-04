@@ -253,10 +253,16 @@ pub const SuffixState = struct {
     pub fn propose(self: *const SuffixState, out: []u32) usize {
         const result = self.proposeWithDepth(self.max_k, out);
         if (result.n == 0) return 0;
-        // Dynamic depth: scale proposed count by match quality
-        const quality = @as(f32, @floatFromInt(result.match_len - min_suffix)) /
+        // Dynamic depth: scale proposed count by match quality.
+        // Saturate: match_len < min_suffix (e.g. no match) must not underflow
+        // `result.match_len - min_suffix` into a huge usize → quality ~ huge →
+        // always propose full max_k. Clamp quality to [0,1] so the result is
+        // 0.2*max_k, the intended degraded depth.
+        const match_len_sat = if (result.match_len > min_suffix) result.match_len - min_suffix else 0;
+        const quality = @as(f32, @floatFromInt(match_len_sat)) /
             @as(f32, @floatFromInt(max_suffix - min_suffix));
-        const dynamic_k = @as(usize, @intFromFloat(@floor(@as(f32, @floatFromInt(self.max_k)) * @min(1.0, quality + 0.2))));
+        const quality_clamped = @min(1.0, @max(0.0, quality));
+        const dynamic_k = @as(usize, @intFromFloat(@floor(@as(f32, @floatFromInt(self.max_k)) * @min(1.0, quality_clamped + 0.2))));
         return @min(result.n, @max(1, dynamic_k));
     }
 };
