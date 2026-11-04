@@ -520,7 +520,8 @@ const Conversation = struct {
     /// then left exactly as one run left it, so the retry the released
     /// idempotency key invites has the same reply to work from.
     fn restoreHeldMessage(self: *Conversation, allocator: Allocator, msg: Message) void {
-        self.messages.append(allocator, msg) catch {
+        self.messages.append(allocator, msg) catch |err| {
+            std.log.err("req={d} failed to restore held message ({}); reply dropped", .{ log_request_id, err });
             freeOwnedMessage(allocator, msg);
         };
     }
@@ -705,8 +706,8 @@ const Server = struct {
         const id = self.next_id;
         self.next_id +%= 1;
         if (self.next_id == 0) self.next_id = 1;
-        self.conversations.append(self.allocator, .{ .id = id }) catch {
-            std.log.warn("req={d} conversation allocation failed", .{log_request_id});
+        self.conversations.append(self.allocator, .{ .id = id }) catch |err| {
+            std.log.err("req={d} conversation allocation failed: {}", .{ log_request_id, err });
             return null;
         };
         self.active_id = id;

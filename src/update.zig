@@ -314,7 +314,7 @@ fn setFetchSocketTimeout(req: std.http.Client.Request, seconds: i64) void {
         std.mem.asBytes(&timeout),
     ) catch |err| {
         var buf: [256]u8 = undefined;
-        const line = std.fmt.bufPrint(&buf, "Warning: could not set the {d}s read timeout ({}); a stalled connection must be interrupted with Ctrl+C\n", .{ seconds, err }) catch return;
+        const line = std.fmt.bufPrint(&buf, "Warning: could not set the {d}s read timeout ({}); a stalled connection must be interrupted with Ctrl+C\n", .{ seconds, err }) catch "Warning: could not set read timeout\n";
         writeErr(line);
     };
 }
