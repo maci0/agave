@@ -15,7 +15,7 @@ import { Button } from '../src/web/ui/button';
 import { EmptyState } from '../src/web/ui/empty-state';
 import { HintChip } from '../src/web/ui/hint-chip';
 import { Input } from '../src/web/ui/input';
-import { Mark } from '../src/web/ui/icons';
+import { JumpToLatestIcon, Mark } from '../src/web/ui/icons';
 import { SkipLink } from '../src/web/ui/skip-link';
 import { cn } from '../src/web/ui/cn';
 import { friendlyGenerateError } from './load-errors';
@@ -257,8 +257,6 @@ const ShellEmptyState = ({ ready }: { ready: boolean }) => (
   />
 );
 
-import { JumpToLatestIcon } from '../src/web/ui/icons';
-
 /** Pixels from the bottom that still count as "following the stream". */
 const STICK_SLACK_PX = 80;
 
@@ -362,7 +360,8 @@ type ComposerProps = {
 const Composer = ({ prompt, onPrompt, onSend, ready, sending, busy, focus }: ComposerProps) => {
   const inputRef = useRef<HTMLInputElement>(null);
   useEffect(() => { focus(); }, [focus]);
-  const hint = ready ? (busy ? 'Busy — wait for the current turn' : 'Enter to send') : 'Load a model first';
+  let hint = 'Enter to send';
+  if (!ready) { hint = 'Load a model first'; } else if (busy) { hint = 'Busy — wait for the current turn'; }
   return (
     <>
       <form

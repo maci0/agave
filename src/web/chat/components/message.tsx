@@ -95,16 +95,16 @@ const StatsLine = ({ stats }: { stats: StreamStats }) => {
       <span>
         decode <span className="font-medium text-primary">{decode}</span> tok/s
       </span>
-      {stats.pfTok !== 0 ? (
+      {stats.pfTok === 0 ? null : (
         <span>
           prefill <span className="font-medium text-primary">{prefill}</span> tok/s
         </span>
-      ) : null}
-      {stats.pfMs !== 0 ? (
+      )}
+      {stats.pfMs === 0 ? null : (
         <span>
           TTFT <span className="font-medium text-primary">{fmtMilliseconds(stats.pfMs)}</span>
         </span>
-      ) : null}
+      )}
       <span>
         total <span className="font-medium text-primary">{fmtMilliseconds(total)}</span>
       </span>

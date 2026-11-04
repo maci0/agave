@@ -651,14 +651,12 @@ test('clearing an empty log asks for no confirmation and clears nothing', async 
   let calls = 0;
   let announced = 0;
   globalThis.confirm = function () { calls += 1; return true; };
-  globalThis.fetch = function (input: RequestInfo | URL) {
-    const url = input instanceof Request ? input.url : String(input);
-    if (url === '/v1/conversations') { return Promise.resolve(Response.json([])); }
-    return Promise.resolve(new Response('not found', { status: 404 }));
-  } as typeof fetch;
-  let apiRef: { current: { clearAll: () => void } | null } = { current: null };
+  // SAFETY: the stub answers only the one route this hook calls.
+  globalThis.fetch = conversationsFetch as typeof fetch;
+  // SAFETY: The ref object is written only by the Probe below, which assigns the hook's clearAll to it on every render, so it holds that function after the first mount.
+  const apiRef = { current: null as { clearAll: () => void } | null };
   const Probe = function Probe(): null {
-    const conv = useConversations({ log: useBubbleLog(), announce: function () { announced += 1; }, pushToast: VOID });
+    const conv = useConversations({ log: useBubbleLog(), announce () { announced += 1; }, pushToast: VOID });
     apiRef.current = { clearAll: conv.clearAll };
     return null;
   };
