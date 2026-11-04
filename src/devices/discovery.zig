@@ -133,7 +133,11 @@ fn enumerateCuda(list: *DeviceList) void {
     const FnCtxCreate = *const fn (*?*anyopaque, c_uint, CUdevice) callconv(.c) CUresult;
     const FnCtxDestroy = *const fn (?*anyopaque) callconv(.c) CUresult;
 
-    const cuda_lib_name = if (builtin.os.tag == .linux) "libcuda.so.1" else "libcuda.dylib";
+    const cuda_lib_name = switch (builtin.os.tag) {
+        .linux => "libcuda.so.1",
+        .windows => "nvcuda.dll",
+        else => "libcuda.dylib",
+    };
     var lib = @import("../dynlib.zig").open(cuda_lib_name) orelse return;
     defer lib.close();
 
@@ -312,7 +316,11 @@ fn enumerateVulkan(list: *DeviceList) void {
     const FnGetPhysDevProps = *const fn (VkPhysicalDevice, *VkPhysicalDeviceProperties) callconv(.c) void;
     const FnGetPhysDevMemProps = *const fn (VkPhysicalDevice, *VkPhysicalDeviceMemoryProperties) callconv(.c) void;
 
-    const vk_lib_name = if (builtin.os.tag == .macos) "libvulkan.1.dylib" else "libvulkan.so.1";
+    const vk_lib_name = switch (builtin.os.tag) {
+        .macos => "libvulkan.1.dylib",
+        .windows => "vulkan-1.dll",
+        else => "libvulkan.so.1",
+    };
     var lib = @import("../dynlib.zig").open(vk_lib_name) orelse return;
     defer lib.close();
 

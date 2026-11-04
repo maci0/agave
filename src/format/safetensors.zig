@@ -1610,7 +1610,7 @@ fn fuseOneProjection(
                         const sh = shard_data[gs_e.shard_idx];
                         const a = std.math.add(usize, sh.tensor_base, gs_e.data_start) catch continue;
                         if (std.math.add(usize, a, 4) catch sh.data.len + 1 <= sh.data.len) {
-                            gs_array2[gi] = std.mem.bytesToValue(f32, sh.data[a..][0..4]);
+                            gs_array2[gi] = @bitCast(std.mem.readInt(u32, sh.data[a..][0..4], .little));
                             continue;
                         }
                     }
@@ -1641,7 +1641,7 @@ fn fuseOneProjection(
                         const sh2 = shard_data[is_e.shard_idx];
                         const a2 = std.math.add(usize, sh2.tensor_base, is_e.data_start) catch continue;
                         if (std.math.add(usize, a2, 4) catch sh2.data.len + 1 <= sh2.data.len) {
-                            is_array[gi] = std.mem.bytesToValue(f32, sh2.data[a2..][0..4]);
+                            is_array[gi] = @bitCast(std.mem.readInt(u32, sh2.data[a2..][0..4], .little));
                             continue;
                         }
                     }
@@ -1706,7 +1706,7 @@ fn fuseOneProjection(
                         continue;
                     };
                     if (std.math.add(usize, abs, 4) catch shard.data.len + 1 <= shard.data.len) {
-                        gs_array[gi] = std.mem.bytesToValue(f32, shard.data[abs..][0..4]);
+                        gs_array[gi] = @bitCast(std.mem.readInt(u32, shard.data[abs..][0..4], .little));
                         continue;
                     }
                 }
@@ -1734,7 +1734,7 @@ fn fuseOneProjection(
                         continue;
                     };
                     if (std.math.add(usize, a2, 4) catch sh2.data.len + 1 <= sh2.data.len) {
-                        is_array[gi] = std.mem.bytesToValue(f32, sh2.data[a2..][0..4]);
+                        is_array[gi] = @bitCast(std.mem.readInt(u32, sh2.data[a2..][0..4], .little));
                         continue;
                     }
                 }

@@ -510,13 +510,23 @@ fn writeCalFile(result: *const CalibrationResult, path: []const u8) !void {
         }
     }.f;
 
+    // Little-endian on disk: use explicit byte order, never native asBytes,
+    // so a .cal written on one arch reads on another (and on big-endian).
+    var ver_buf: [4]u8 = undefined;
+    std.mem.writeInt(u32, &ver_buf, cal_version, .little);
     try pwrite(file, io, &cal_magic, &offset);
-    try pwrite(file, io, std.mem.asBytes(&cal_version), &offset);
-    try pwrite(file, io, std.mem.asBytes(&result.n_layers), &offset);
-    try pwrite(file, io, std.mem.asBytes(&result.n_q_heads), &offset);
-    try pwrite(file, io, std.mem.asBytes(&result.head_dim), &offset);
-    try pwrite(file, io, std.mem.asBytes(&result.n_bands), &offset);
-    try pwrite(file, io, std.mem.asBytes(&result.rope_theta), &offset);
+    try pwrite(file, io, &ver_buf, &offset);
+    var hdr_buf: [4]u8 = undefined;
+    std.mem.writeInt(u32, &hdr_buf, result.n_layers, .little);
+    try pwrite(file, io, &hdr_buf, &offset);
+    std.mem.writeInt(u32, &hdr_buf, result.n_q_heads, .little);
+    try pwrite(file, io, &hdr_buf, &offset);
+    std.mem.writeInt(u32, &hdr_buf, result.head_dim, .little);
+    try pwrite(file, io, &hdr_buf, &offset);
+    std.mem.writeInt(u32, &hdr_buf, result.n_bands, .little);
+    try pwrite(file, io, &hdr_buf, &offset);
+    std.mem.writeInt(u32, &hdr_buf, @bitCast(result.rope_theta), .little);
+    try pwrite(file, io, &hdr_buf, &offset);
 
     try pwrite(file, io, std.mem.sliceAsBytes(result.q_center_norm), &offset);
     try pwrite(file, io, std.mem.sliceAsBytes(result.q_center_phase), &offset);
@@ -561,18 +571,18 @@ pub fn readCalFile(allocator: Allocator, io: Io, path: []const u8) ![]kv_evict.T
     var version_buf: [4]u8 = undefined;
     const version_n = try file.readPositionalAll(io, &version_buf, 4);
     if (version_n != version_buf.len) return error.TruncatedFile;
-    const version = std.mem.bytesAsValue(u32, &version_buf).*;
+    const version = std.mem.readInt(u32, &version_buf, .little);
     if (version != cal_version) return error.UnsupportedVersion;
 
     var header_buf: [20]u8 = undefined;
     const header_n = try file.readPositionalAll(io, &header_buf, 8);
     if (header_n != header_buf.len) return error.TruncatedFile;
-    const n_layers = std.mem.bytesAsValue(u32, header_buf[0..4]).*;
-    const n_q_heads = std.mem.bytesAsValue(u32, header_buf[4..8]).*;
-    _ = std.mem.bytesAsValue(u32, header_buf[8..12]).*; // head_dim
-    const n_bands = std.mem.bytesAsValue(u32, header_buf[12..16]).*;
+    const n_layers = std.mem.readInt(u32, header_buf[0..4], .little);
+    const n_q_heads = std.mem.readInt(u32, header_buf[4..8], .little);
+    _ = std.mem.readInt(u32, header_buf[8..12], .little); // head_dim
+    const n_bands = std.mem.readInt(u32, header_buf[12..16], .little);
     if (n_bands == 0) return error.InvalidFormat;
-    const rope_theta = std.mem.bytesAsValue(f32, header_buf[16..20]).*;
+    const rope_theta: f32 = @bitCast(std.mem.readInt(u32, header_buf[16..20], .little));
 
     const total_heads = std.math.mul(usize, @as(usize, n_layers), n_q_heads) catch return error.InvalidFormat;
     const band_count = std.math.mul(usize, total_heads, n_bands) catch return error.InvalidFormat;
