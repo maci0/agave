@@ -806,7 +806,7 @@ pub const GGUFFile = struct {
                     try self.owned_u32_arrays.append(self.allocator, ids);
                     errdefer _ = self.owned_u32_arrays.pop();
                     for (0..arr_len) |i| {
-                        ids[i] = try self.readU32(pos);
+                        ids[i] = @bitCast(try self.readI32(pos));
                         pos = std.math.add(usize, pos, 4) catch return error.OffsetOutOfBounds;
                     }
                     return .{ .val = .{ .array_u32 = ids }, .len = pos - off };
@@ -820,7 +820,7 @@ pub const GGUFFile = struct {
                     try self.owned_u64_arrays.append(self.allocator, ids);
                     errdefer _ = self.owned_u64_arrays.pop();
                     for (0..arr_len) |i| {
-                        ids[i] = try self.readU64(pos);
+                        ids[i] = @bitCast(try self.readU64(pos));
                         pos = std.math.add(usize, pos, 8) catch return error.OffsetOutOfBounds;
                     }
                     return .{ .val = .{ .array_u64 = ids }, .len = pos - off };
