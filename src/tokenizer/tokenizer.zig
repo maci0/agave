@@ -1,9 +1,9 @@
 //! Tokenizer interface.
 //! Implementations: bpe.zig (byte-level BPE, SentencePiece, and SentencePiece-no-dummy modes).
 //!
-//! `BpeTokenizer` is re-exported here as the package barrel. That creates a
-//! compile-time import edge with `bpe.zig` (interface ←→ impl); callers should
-//! keep importing via this module, not reach into `bpe.zig` directly.
+//! Direction: `bpe.zig` imports this module for the interface; this module
+//! does not import `bpe.zig`. Callers that need the concrete type import
+//! `bpe.zig` directly; callers that need the interface import this module.
 
 const std = @import("std");
 
@@ -55,9 +55,6 @@ pub const Tokenizer = struct {
 
 /// Tokenizer mode: BPE (byte-pair merges), SPM (SentencePiece greedy), or SPM without dummy prefix.
 pub const TokenizerKind = enum { bpe, spm, spm_no_dummy };
-
-/// BPE tokenizer implementation (supports BPE and SPM modes), re-exported so callers use tokenizer.zig as the single import.
-pub const BpeTokenizer = @import("bpe.zig").BpeTokenizer;
 
 // ── Tests ─────────────────────────────────────────────────────────
 
@@ -218,10 +215,6 @@ test "fuzz: all tokenizer functions" {
             comptime {
                 const info = @typeInfo(TokenizerError);
                 _ = info;
-            }
-
-            comptime {
-                _ = BpeTokenizer;
             }
 
             comptime {

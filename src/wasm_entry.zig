@@ -31,8 +31,7 @@ const Arch = @import("arch.zig").Arch;
 const backend_mod = @import("backend/backend.zig");
 const Backend = backend_mod.Backend;
 const CpuBackend = backend_mod.CpuBackend;
-const tok_mod = @import("tokenizer/tokenizer.zig");
-const BpeTokenizer = tok_mod.BpeTokenizer;
+const BpeTokenizer = @import("tokenizer/bpe.zig").BpeTokenizer;
 
 const gpa = std.heap.page_allocator;
 
