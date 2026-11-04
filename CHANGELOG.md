@@ -11,6 +11,30 @@ must still appear under **Changed** or **Breaking** below. See
 
 ## [Unreleased]
 
+### Breaking
+
+- `--max-tokens` now rejects values above 4096 with a usage exit (2) and the
+  message `Error: --max-tokens must be between 1 and 4096`. Before: any value
+  >= 1 was accepted, but generation never produced more than the 4096-token
+  buffer, so a larger budget was silently truncated. After: the cap is stated
+  at parse time. Scripts that passed a larger value must lower it to 4096 or
+  less. The same 4096-token cap now applies to the WASM `agave_generate`
+  export and the browser `maxTokens` option (previously up to 2^32-1), and a
+  WASM prompt over 256 KiB is rejected with `invalid_argument` instead of
+  forcing an unbounded allocation.
+
+### Fixed
+
+- GGUF metadata arrays of signed integers are now decoded as signed values
+  instead of being read as unsigned, so a negative entry is no longer
+  reinterpreted as a large positive one.
+- `agave update` and `agave pull` now warn on stderr when the fetch read
+  timeout cannot be applied (for example a released connection), instead of
+  silently leaving the download untimed.
+- The serve and browser chat UIs format token counts, tok/s, percentages and
+  durations with the reader's locale, and the tok/s readout stays blank until
+  the first tick instead of showing a premature value.
+
 ## [0.13.0] - 2026-10-15
 
 ### Added
