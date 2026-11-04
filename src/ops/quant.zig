@@ -128,7 +128,9 @@ pub fn gemvRowBytes(dtype: DType, k: usize) usize {
         .f16, .bf16 => std.math.mul(usize, k, f16_elem_bytes) catch std.math.maxInt(usize),
         .f32 => std.math.mul(usize, k, f32_elem_bytes) catch std.math.maxInt(usize),
         .fp8_e4m3, .fp8_e5m2 => k,
-        .tq1_0, .tq2_0, .mlx_q, .gptq, .awq, .hqq, .unknown => 0,
+        .tq1_0 => std.math.mul(usize, nsb, tq1_0_block_bytes) catch std.math.maxInt(usize),
+        .tq2_0 => std.math.mul(usize, nsb, tq2_0_block_bytes) catch std.math.maxInt(usize),
+        .mlx_q, .gptq, .awq, .hqq, .unknown => 0,
     };
 }
 

@@ -16,6 +16,10 @@ const kv_quant = @import("../ops/kv_quant.zig");
 const KvQuantType = kv_quant.KvQuantType;
 const TieredKvCache = @import("../kvcache/tiered.zig").TieredKvCache;
 const Transport = @import("../parallel/transport.zig").Transport;
+const PagedKvCache = @import("../kvcache/manager.zig").PagedKvCache;
+const SeqBlockTable = @import("../kvcache/manager.zig").SeqBlockTable;
+const BlockAllocator = @import("../kvcache/block_allocator.zig").BlockAllocator;
+const TieredBlockAllocator = @import("../kvcache/block_allocator.zig").TieredBlockAllocator;
 
 /// Vision encoder for multimodal models (SigLIP-2, CLIP-like image embedding).
 pub const VisionEncoder = @import("vision.zig").VisionEncoder;
@@ -2074,16 +2078,121 @@ test "findMlxCompanion 3D expert tensor computes bits from last dim" {
     try std.testing.expectEqual(@as(u32, 4), companion.bits);
 }
 
-test "resetKvCache compiles" {
-    comptime {
-        _ = &resetKvCache;
-    }
+/// Minimal model-like struct satisfying the field requirements of
+/// `ensureKvBlock` and `resetKvCache`, backed by a real `PagedKvCache`.
+const KvMockModel = struct {
+    tiered_cache: ?*TieredKvCache = null,
+    paged_cache: PagedKvCache,
+    kv_seq_len: usize = 0,
+    seq_table: SeqBlockTable,
+    tiered_block_allocator: ?TieredBlockAllocator = null,
+    block_allocator: BlockAllocator,
+    n_layers: usize = 2,
+    cancelled: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+};
+
+test "ensureKvBlock appends a block only when crossing a boundary" {
+    const allocator = std.testing.allocator;
+
+    var paged = try PagedKvCache.init(allocator, 2, 4, 16, 4); // block_size = 4
+    defer paged.deinit();
+
+    var block_allocator = BlockAllocator.init(&paged, allocator);
+    var seq_table = try block_allocator.allocateSeqTable(2);
+    defer block_allocator.freeSeqTable(&seq_table);
+
+    var mock = KvMockModel{
+        .paged_cache = paged,
+        .seq_table = seq_table,
+        .block_allocator = block_allocator,
+    };
+    // Initial state: no blocks held.
+    try std.testing.expectEqual(@as(usize, 0), mock.seq_table.block_table[0].len);
+
+    // kv_seq_len = 0: needs 1 block (positions 0..3 fit in block 0).
+    mock.kv_seq_len = 0;
+    try ensureKvBlock(&mock);
+    try std.testing.expectEqual(@as(usize, 1), mock.seq_table.block_table[0].len);
+    try std.testing.expectEqual(@as(usize, 1), mock.seq_table.block_table[1].len);
+
+    // kv_seq_len = 3: still 1 block (3+1 == block_size, no growth).
+    mock.kv_seq_len = 3;
+    try ensureKvBlock(&mock);
+    try std.testing.expectEqual(@as(usize, 1), mock.seq_table.block_table[0].len);
+
+    // kv_seq_len = 4: crosses into a second block.
+    mock.kv_seq_len = 4;
+    try ensureKvBlock(&mock);
+    try std.testing.expectEqual(@as(usize, 2), mock.seq_table.block_table[0].len);
+    try std.testing.expectEqual(@as(usize, 2), mock.seq_table.block_table[1].len);
+
+    // Each layer draws its own physical blocks, so the two layers must differ,
+    // and the table must not reuse the same block id across layers.
+    try std.testing.expect(mock.seq_table.block_table[0][0] != mock.seq_table.block_table[1][0]);
+    try std.testing.expect(mock.seq_table.block_table[0][1] != mock.seq_table.block_table[1][1]);
 }
 
-test "ensureKvBlock compiles" {
-    comptime {
-        _ = &ensureKvBlock;
-    }
+test "ensureKvBlock propagates OutOfBlocks on exhausted cache" {
+    const allocator = std.testing.allocator;
+
+    var paged = try PagedKvCache.init(allocator, 1, 4, 1, 4); // single block total
+    defer paged.deinit();
+
+    var block_allocator = BlockAllocator.init(&paged, allocator);
+    var seq_table = try block_allocator.allocateSeqTable(2);
+    defer block_allocator.freeSeqTable(&seq_table);
+
+    var mock = KvMockModel{
+        .paged_cache = paged,
+        .seq_table = seq_table,
+        .block_allocator = block_allocator,
+    };
+    // 2 layers need 2 blocks but only 1 exists: append must fail.
+    mock.kv_seq_len = 0;
+    try std.testing.expectError(error.OutOfBlocks, ensureKvBlock(&mock));
+}
+
+test "resetKvCache frees old blocks and resets sequence state" {
+    const allocator = std.testing.allocator;
+
+    var paged = try PagedKvCache.init(allocator, 2, 4, 16, 4);
+    defer paged.deinit();
+
+    var block_allocator = BlockAllocator.init(&paged, allocator);
+    const seq_table = try block_allocator.allocateSeqTable(2);
+
+    var mock = KvMockModel{
+        .paged_cache = paged,
+        .seq_table = seq_table,
+        .block_allocator = block_allocator,
+        .kv_seq_len = 7,
+        .cancelled = std.atomic.Value(bool).init(true),
+    };
+    // Grow to 2 blocks per layer first (kv_seq_len = 7 needs blocks 0 and 1).
+    // ensureKvBlock appends ONE block per call (the next forward step then
+    // crosses the next boundary), so call twice to reach 2 blocks per layer.
+    try ensureKvBlock(&mock);
+    try std.testing.expectEqual(@as(usize, 1), mock.seq_table.block_table[0].len);
+    mock.kv_seq_len = 7;
+    try ensureKvBlock(&mock);
+    try std.testing.expectEqual(@as(usize, 2), mock.seq_table.block_table[0].len);
+    const free_before_reset = paged.freeCount();
+
+    resetKvCache(&mock);
+
+    // Sequence state is cleared and the cancellation flag is reset.
+    try std.testing.expectEqual(@as(usize, 0), mock.kv_seq_len);
+    try std.testing.expectEqual(false, mock.cancelled.load(.acquire));
+
+    // Fresh table holds exactly one block per layer.
+    try std.testing.expectEqual(@as(usize, 1), mock.seq_table.block_table[0].len);
+    try std.testing.expectEqual(@as(usize, 1), mock.seq_table.block_table[1].len);
+
+    // The 4 blocks freed from the old table were returned, minus the 2 taken
+    // by the fresh table: net free count grows by 2.
+    try std.testing.expectEqual(free_before_reset + 2, paged.freeCount());
+
+    block_allocator.freeSeqTable(&mock.seq_table);
 }
 
 test "dispatchGemv HQQ path, CPU" {

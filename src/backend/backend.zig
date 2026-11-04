@@ -1703,8 +1703,8 @@ test "DType, gemvRowBytes for NVFP4" {
 
 test "DType, gemvRowBytes returns 0 for unsupported formats" {
     // Formats that don't support standard row-based GEMV return 0.
-    try std.testing.expectEqual(@as(usize, 0), gemvRowBytes(.tq1_0, 4096));
-    try std.testing.expectEqual(@as(usize, 0), gemvRowBytes(.tq2_0, 4096));
+    try std.testing.expectEqual(@as(usize, 16 * tq1_0_block_bytes), gemvRowBytes(.tq1_0, 4096));
+    try std.testing.expectEqual(@as(usize, 16 * tq2_0_block_bytes), gemvRowBytes(.tq2_0, 4096));
     try std.testing.expectEqual(@as(usize, 0), gemvRowBytes(.mlx_q, 4096));
     try std.testing.expectEqual(@as(usize, 0), gemvRowBytes(.gptq, 4096));
     try std.testing.expectEqual(@as(usize, 0), gemvRowBytes(.awq, 4096));
@@ -1712,10 +1712,34 @@ test "DType, gemvRowBytes returns 0 for unsupported formats" {
 }
 
 test "DType, gemvRowBytes all dtypes handled" {
-    // Ensure gemvRowBytes doesn't panic for any DType variant.
+    // Every dtype must produce a value: supported layouts a positive row
+    // stride, companion/unsupported layouts exactly 0 (callers branch on 0).
+    // A new dtype that silently falls through to 0 — or a supported dtype
+    // whose arm is deleted — fails here instead of mis-sizing a GEMV row.
     inline for (comptime std.enums.values(DType)) |dtype| {
-        _ = gemvRowBytes(dtype, 256);
+        const bytes = gemvRowBytes(dtype, 256);
+        switch (dtype) {
+            .mlx_q, .gptq, .awq, .hqq, .unknown => try std.testing.expectEqual(@as(usize, 0), bytes),
+            else => try std.testing.expect(bytes > 0),
+        }
     }
+}
+
+test "gemvRowBytes, TQ1_0 and TQ2_0 rows are sized, not zero" {
+    // weightBytes covers tq1_0/tq2_0 super-block layouts (asserted in
+    // "weightBytes, TQ1_0 super-block"), so a gemvRowBytes arm returning 0
+    // for them would make weightBytes != n * gemvRowBytes and break TP
+    // sharding, which strides rows by gemvRowBytes. Pin the rows here.
+    try std.testing.expectEqual(@as(usize, tq1_0_block_bytes), gemvRowBytes(.tq1_0, 256));
+    try std.testing.expectEqual(@as(usize, tq2_0_block_bytes), gemvRowBytes(.tq2_0, 256));
+    try std.testing.expectEqual(
+        weightBytes(.tq1_0, 7, 256),
+        7 * gemvRowBytes(.tq1_0, 256),
+    );
+    try std.testing.expectEqual(
+        weightBytes(.tq2_0, 7, 256),
+        7 * gemvRowBytes(.tq2_0, 256),
+    );
 }
 
 test "weightBytes, F32" {
