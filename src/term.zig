@@ -326,12 +326,21 @@ pub fn utf8BytePrefix(s: []const u8, max_bytes: usize) []const u8 {
         const b = s[len - 1];
         if (b & 0x80 == 0) break; // ASCII, clean cut
         if (b & 0xC0 == 0xC0) {
-            // Lead byte: keep the sequence only if every byte fits in `cap`.
-            const seq_len = std.unicode.utf8ByteSequenceLength(b) catch 1;
+            // Lead byte: keep the sequence only if every byte fits in `cap`
+            // and it decodes as one valid codepoint (rejects 0xFF, overlong
+            // forms, surrogates, and out-of-range leads).
+            const seq_len = std.unicode.utf8ByteSequenceLength(b) catch {
+                len -= 1;
+                continue;
+            };
             const start = len - 1;
             if (start + seq_len > cap) {
                 len = start;
             } else {
+                _ = std.unicode.utf8Decode(s[start..][0..seq_len]) catch {
+                    len = start;
+                    break;
+                };
                 len = start + seq_len;
             }
             break;
@@ -960,6 +969,12 @@ test "utf8BytePrefix does not split multi-byte characters" {
 
     try std.testing.expectEqualStrings("", utf8BytePrefix("\xc3\xa9", 1));
     try std.testing.expectEqualStrings("", utf8BytePrefix("", 8));
+
+    // Invalid sequences at the cap must be dropped, not kept as raw bytes.
+    try std.testing.expectEqualStrings("abc", utf8BytePrefix("abc\xff", 4));
+    try std.testing.expectEqualStrings("ab", utf8BytePrefix("ab\xc1\x80", 4));
+    try std.testing.expectEqualStrings("ab", utf8BytePrefix("ab\xed\xa0\x80", 5));
+    try std.testing.expectEqualStrings("ab", utf8BytePrefix("ab\xf5\x80\x80\x80", 6));
 }
 
 test "displayWidth ZWJ emoji sequence is one glyph" {

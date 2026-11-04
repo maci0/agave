@@ -4,12 +4,14 @@
 
 const std = @import("std");
 const ImageTokens = @import("image_tokens.zig").ImageTokens;
+const term_mod = @import("term.zig");
 
 /// Pre-allocation headroom for tool message formatting (ChatML tags + label).
 const tool_format_overhead: usize = 64;
 
 /// Cap on tool-result text spliced into the prompt. One huge tool payload
 /// would otherwise consume the context window and the token budget.
+/// Measured in UTF-8 bytes (see `truncateUtf8` / `term.utf8BytePrefix`).
 const max_tool_result_chars: usize = 16 * 1024;
 
 /// Max control-token strings collected from a template for untrusted-content
@@ -451,9 +453,7 @@ fn appendSanitized(allocator: std.mem.Allocator, out: *std.ArrayList(u8), conten
 
 fn truncateUtf8(s: []const u8, max_len: usize) []const u8 {
     if (s.len <= max_len) return s;
-    var end = max_len;
-    while (end > 0 and (s[end] & 0xC0) == 0x80) end -= 1;
-    return s[0..end];
+    return term_mod.utf8BytePrefix(s, max_len);
 }
 
 fn countOccurrences(hay: []const u8, needle: []const u8) usize {
