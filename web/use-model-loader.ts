@@ -29,6 +29,8 @@ export type ModelLoader = {
   /** File name of the model that loaded, or null before the first one does. */
   modelName: string | null;
   busy: boolean;
+  /** Aborts the in-flight model load, when one is running. */
+  cancelLoad: () => void;
   /** True while a file hovers the drop zone, for its highlighted state. */
   dragOver: boolean;
   onDragOver: (event: DragEvent) => void;
@@ -73,7 +75,7 @@ type LoadState = {
 };
 
 /** The engine handshake and the failure report, shared by both load paths. */
-const useEngineInit = (engine: AgaveEngine, state: LoadState, onReport: Report, focusPrompt: () => void) => {
+const useEngineInit = (engine: AgaveEngine, state: LoadState, onReport: Report, focusPrompt: () => void, abortRef: { current: AbortController | null }) => {
   const hadModel = useRef(false);
   /* `load` receives the in-flight `init()` promise instead of waiting on it up
      front: fetching and compiling agave.wasm does not need the model bytes, so
@@ -81,32 +83,36 @@ const useEngineInit = (engine: AgaveEngine, state: LoadState, onReport: Report, 
      the WASM round trip instead of queueing behind it. The caller awaits
      `engineReady()` right before `loadModel`, which is the first step that
      actually needs an instantiated module. */
-  return useCallback(async (load: (engineReady: () => Promise<void>) => Promise<void>, fromUrl: boolean) => {
+  return useCallback(async (load: (engineReady: () => Promise<void>, signal: AbortSignal) => Promise<void>, fromUrl: boolean) => {
     hadModel.current = engine.hasModel;
     state.setLoading(true);
     state.setReady(false);
     state.setStatus('Initializing engine…');
+    const controller = new AbortController();
+    abortRef.current = controller;
     /* Mark the eager `init()` promise handled so a load that throws before it
        reaches `engineReady` (a dead model URL, say) cannot leave an unhandled
        rejection behind; the original promise still rejects for the await. */
     const engineReady = engine.ready ? Promise.resolve() : engine.init();
     engineReady.catch(() => undefined);
     try {
-      await load(() => engineReady);
+      await load(() => engineReady, controller.signal);
       onReport(engine.initMessage || 'Model loaded', 'info');
       state.setStatus(READY_HINT);
       state.setReady(true);
       focusPrompt();
     } catch (error) { // oxlint-disable-line @rikalabs/no-silent-catch-fallback -- reported to the reader, not swallowed
-      state.setStatus(friendlyLoadError(error));
-      onReport(friendlyLoadError(error), 'error');
-      if (fromUrl) { state.setUrlError(friendlyLoadError(error)); }
+      const cancelled = error instanceof Error && error.name === 'AbortError';
+      state.setStatus(cancelled ? 'Model load cancelled.' : friendlyLoadError(error));
+      onReport(cancelled ? 'Model load cancelled.' : friendlyLoadError(error), cancelled ? 'info' : 'error');
+      if (fromUrl && !cancelled) { state.setUrlError(friendlyLoadError(error)); }
       // A failed reload must not disable chat if the previous model is still loaded.
       if (hadModel.current && engine.hasModel) { state.setReady(true); }
     } finally {
+      if (abortRef.current === controller) { abortRef.current = null; }
       state.setLoading(false);
     }
-  }, [engine, focusPrompt, onReport, state]);
+  }, [abortRef, engine, focusPrompt, onReport, state]);
 };
 
 /** The two ways a model arrives: a URL to fetch, or a file the reader dropped. */
@@ -116,8 +122,9 @@ const useModelSources = (
   onReport: Report,
   failUrl: (message: string) => void,
   focusPrompt: () => void,
+  abortRef: { current: AbortController | null },
 ) => {
-  const initAndLoad = useEngineInit(engine, state, onReport, focusPrompt);
+  const initAndLoad = useEngineInit(engine, state, onReport, focusPrompt, abortRef);
   const [url, setUrl] = useState('');
   /* Set only after the engine accepts the bytes, so the bar never names a model
      that failed to load: a stale name would read as a working model. */
@@ -128,9 +135,10 @@ const useModelSources = (
     if (!target) { failUrl('Enter a model URL first'); return; }
     if (!isHttpUrl(target)) { failUrl('Enter a valid http(s) URL to a GGUF file'); return; }
     state.setUrlError(null);
-    void initAndLoad(async (engineReady: () => Promise<void>) => {
+    void initAndLoad(async (engineReady: () => Promise<void>, signal: AbortSignal) => {
       state.setStatus('Downloading model…');
       const modelBytes = await engine.fetchModel(target, {
+        signal,
         onProgress ({ received, total }) {
           /* Both figures go through the locale formatter: the size keeps its
              own unit label and the percent its own mark, instead of a "MB"
@@ -155,7 +163,8 @@ const useModelSources = (
       onReport('This is not a GGUF model file. Choose a file ending in .gguf.', 'error');
       return;
     }
-    void initAndLoad(async (engineReady: () => Promise<void>) => {
+    void initAndLoad(async (engineReady: () => Promise<void>, signal: AbortSignal) => {
+      if (signal.aborted) { throw new DOMException('Aborted', 'AbortError'); }
       state.setStatus(`Reading ${file.name} (${fmtMegabytes(file.size)})…`);
       const modelBytes = await file.arrayBuffer();
       if (!isGgufBuffer(modelBytes)) { throw new Error('This file is not a valid GGUF model.'); }
@@ -186,7 +195,9 @@ export const useModelLoader = (engine: AgaveEngine, onReport: Report): ModelLoad
   }, []);
 
   const state: LoadState = { setStatus, setReady, setLoading, setUrlError };
-  const sources = useModelSources(engine, state, onReport, failUrl, focusPrompt);
+  const abortRef = useRef<AbortController | null>(null);
+  const sources = useModelSources(engine, state, onReport, failUrl, focusPrompt, abortRef);
+  const cancelLoad = useCallback(() => { abortRef.current?.abort(); }, []);
   const setUrl = useCallback((next: string) => { setUrlError(null); sources.setUrl(next); }, [sources]);
 
   const onDragOver = useCallback((event: DragEvent) => { event.preventDefault(); setDragOver(true); }, []);
@@ -209,6 +220,7 @@ export const useModelLoader = (engine: AgaveEngine, onReport: Report): ModelLoad
     urlError,
     modelName: sources.modelName,
     busy: loading,
+    cancelLoad,
     dragOver,
     onDragOver,
     onDragLeave,

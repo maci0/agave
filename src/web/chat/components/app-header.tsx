@@ -90,7 +90,7 @@ export const AppHeader = (props: AppHeaderProps) => {
           className="hidden max-drawer:inline-flex"
           onClick={props.onOpenSidebar}
           title="Menu"
-          aria-label={props.sidebarOpen ? 'Close sidebar' : 'Open sidebar'}
+          aria-label={props.sidebarOpen ? 'Close conversations' : 'Open conversations'}
           aria-expanded={props.sidebarOpen}
           aria-controls="sidebar-heading"
         >

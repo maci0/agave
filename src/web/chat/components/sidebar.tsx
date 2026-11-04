@@ -53,7 +53,7 @@ const ConversationRow = ({ conversation, streaming, onSelect, onDelete }: {
       <button
         type="button"
         onClick={function () { onSelect(conversation.id); }}
-        aria-label={label}
+        aria-label={label.trim() === '' ? 'New chat' : label}
         aria-current={conversation.active === true ? 'true' : undefined}
         disabled={streaming}
         className="flex min-h-11 min-w-0 flex-1 items-center rounded-sm text-start"
@@ -125,7 +125,7 @@ export const Sidebar = (props: SidebarProps) => (
           New
         </Button>
         {props.onClose ? (
-          <Button type="button" variant="plain" size="iconSm" onClick={props.onClose} aria-label="Close sidebar">
+          <Button type="button" variant="plain" size="iconSm" onClick={props.onClose} aria-label="Close conversations">
             <CloseIcon className="size-5" aria-hidden="true" />
           </Button>
         ) : null}

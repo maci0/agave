@@ -332,13 +332,17 @@ const ChatApp = () => {
   const { toasts, pushToast, dismissToast, model, log, convs, image, turn, settings } = useChatState(announce, focusComposer);
   const chrome = useShellChrome(settings, turn.stop);
   const commands = { ...useChatCommands({ log, model, convs, image, turn, settings, announce, pushToast, focusComposer }), announce };
+  /* Below the drawer breakpoint the sidebar is a modal sheet: selecting,
+     creating or deleting a conversation must close it, otherwise the chat
+     stays behind the scrim and the user has to find the close control. */
+  const closeDrawer = function () { if (chrome.isDrawer) { chrome.setDrawerOpen(false); } };
   const sidebarProps: SidebarProps = {
     conversations: convs.conversations,
     loadError: convs.loadError,
     streaming: turn.streaming,
-    onSelect (id) { convs.open(id); focusComposer(); },
-    onDelete (id) { convs.remove(id); focusComposer(); },
-    onNew () { convs.startNew(); focusComposer(); },
+    onSelect (id) { convs.open(id); closeDrawer(); focusComposer(); },
+    onDelete (id) { convs.remove(id); closeDrawer(); focusComposer(); },
+    onNew () { convs.startNew(); closeDrawer(); focusComposer(); },
     onRetryLoad () { void convs.load(); },
   };
 

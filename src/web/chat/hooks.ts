@@ -314,7 +314,10 @@ export const useChatTurn = ({ log, announce, onTurnEnd }: { log: LogApi; announc
     abortRef.current = controller;
     stopped.current = false;
     setStreaming(true);
-    setTps(0);
+    /* No rate yet: 0 tok/s at turn start read as a measured stall on a
+       healthy stream, and the readout appeared a second before any number
+       was real. It stays blank until the first second ticks. */
+    setTps(null);
     announce('Generating response…');
     void runStream(log, turnId, { body, url, signal: controller.signal, errorLabel },
       ({ stopped: wasStopped, error: failure }) => {
@@ -347,7 +350,7 @@ type ConversationsInput = {
 };
 
 /** Selecting, creating, clearing and deleting a conversation. */
-const useConversationActions = ({ log, announce, pushToast, load, setLoading }: ConversationsInput) => {
+const useConversationActions = ({ log, announce, pushToast, load, setLoading, conversationsRef }: ConversationsInput & { conversationsRef: { current: Array<ConvRecord> } }) => {
   const seq = useRef(0);
   const open = useCallback((id: string) => {
     seq.current += 1;
@@ -372,6 +375,15 @@ const useConversationActions = ({ log, announce, pushToast, load, setLoading }: 
   }, [announce, load, log, pushToast, setLoading]);
 
   const startNew = useCallback(() => {
+    /* Creating another conversation while the active one is already empty
+       only piles up blank rows the user has to delete one by one. Say so
+       instead of minting a duplicate; an empty log with no active record
+       (before the first load lands) still creates one. */
+    const active = conversationsRef.current.find((conversation) => conversation.active === true);
+    if (active !== undefined && log.bubbles.length === 0) {
+      pushToast('You are already in a new conversation.', 'info');
+      return;
+    }
     void createConversation().then(
       /* New empties the log and moves the sidebar selection, which is the
          whole screen changing at once. The live region says it for a screen
@@ -385,7 +397,7 @@ const useConversationActions = ({ log, announce, pushToast, load, setLoading }: 
       },
       () => { pushToast('Could not create a new conversation. Check that the server is running.'); },
     );
-  }, [announce, load, log, pushToast]);
+  }, [announce, conversationsRef, load, log, pushToast]);
 
   const clearAll = useCallback(() => {
     if (log.bubbles.length > 0 && globalThis.confirm('Clear this conversation?') === false) {return;} // oxlint-disable-line no-alert -- native confirmation dialog is intentional UX
@@ -422,9 +434,12 @@ export const useConversations = ({ log, announce, pushToast }: {
 
   /* True once a fetch has landed, so a later failure has a list to keep. */
   const loaded = useRef(false);
+  const conversationsRef = useRef<Array<ConvRecord>>([]);
   const load = useCallback(async () => {
     try {
-      setConversations(await loadConversations());
+      const records = await loadConversations();
+      conversationsRef.current = records;
+      setConversations(records);
       loaded.current = true;
       setLoadError(null);
     } catch { // oxlint-disable-line @rikalabs/no-silent-catch-fallback -- reported by the sidebar or a toast
@@ -439,7 +454,7 @@ export const useConversations = ({ log, announce, pushToast }: {
 
   useEffect(() => { void load(); }, [load]);
 
-  const actions = useConversationActions({ log, announce, pushToast, load, setLoading });
+  const actions = useConversationActions({ log, announce, pushToast, load, setLoading, conversationsRef });
 
   return { conversations, loadError, loading, load, ...actions };
 };

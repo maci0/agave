@@ -122,7 +122,7 @@ const stubLog = (flushed: Array<string>): LogApi => {
 };
 
 /** Mount the hook and hand back its `send`, its recorder and a teardown. */
-const mountTurn = async (): Promise<{ send: ChatTurn['send']; busy: ChatTurn['busy']; paints: Paints; unmount: () => void }> => {
+const mountTurn = async (): Promise<{ send: ChatTurn['send']; busy: ChatTurn['busy']; tps: () => number | null; paints: Paints; unmount: () => void }> => {
   const { createRoot } = await import('react-dom/client');
   const { useChatTurn } = await import('./hooks');
   const root = createRoot(mountHost());
@@ -139,6 +139,7 @@ const mountTurn = async (): Promise<{ send: ChatTurn['send']; busy: ChatTurn['bu
   return {
     send (body: string, errorLabel: string, url?: string) { present(api, 'turn').send(body, errorLabel, url); },
     busy () { return present(api, 'turn').busy(); },
+    tps () { return present(api, 'turn').tps; },
     paints: painted,
     unmount () { root.unmount(); document.body.lastElementChild?.remove(); },
   };
@@ -323,5 +324,21 @@ test('a turn that succeeded still announces completion', async () => {
   const said = turn.paints.calls.filter((call) => call.startsWith('announce:'));
   expect(said).toContain('announce:Generating response…');
   expect(said).not.toContain('announce:Generation stopped.');
+  turn.unmount();
+});
+
+test('no speed is shown until the first second ticks', async () => {
+  const seen = stubServer();
+  const turn = await mountTurn();
+  /* The readout used to start at 0, so a healthy turn opened with a
+     "0.0 tok/s" stall nobody measured. It stays blank until the first
+     second of tokens makes the number real, and clears again at the end. */
+  expect(turn.tps()).toBeNull();
+  turn.send('message=hello', 'Send failed');
+  expect(await waitFor(() => seen.release.length === 1)).toBe(true);
+  expect(turn.tps()).toBeNull();
+  seen.release[0]();
+  expect(await waitFor(() => turn.busy() === false)).toBe(true);
+  expect(turn.tps()).toBeNull();
   turn.unmount();
 });

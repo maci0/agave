@@ -173,23 +173,9 @@ const useFocusOnPanelClose = (editing: boolean, setEditing: (next: boolean) => v
  *  reader user landed on the body and had to Tab back through the whole bar.
  *  Both ways out of the panel end at the one control the collapsed bar keeps,
  *  so focus follows the reader. */
-const ModelBar = ({ loader }: { loader: ModelLoader }) => {
-  const [editing, setEditing] = useState(false);
-  const closePanel = useFocusOnPanelClose(editing, setEditing);
-  const name = loader.modelName ?? 'Model loaded';
-  if (loader.ready && !editing) {
-    return (
-      <div
-        role="region"
-        aria-label="Loaded model"
-        className="flex items-center gap-2 border-b border-divider bg-card px-gutter py-2 max-drawer:px-4"
-      >
-        <span className="min-w-0 flex-1 truncate font-mono text-sm text-faint" title={name}>{name}</span>
-        <Button id={CHANGE_MODEL_ID} type="button" size="sm" onClick={function () { setEditing(true); }}>Change model</Button>
-      </div>
-    );
-  }
-  return (
+/** The expanded half of the model bar, split out so ModelBar itself stays
+ *  under the per-function line budget now that the cancel key rides along. */
+const ModelBarExpanded = ({ loader, closePanel }: { loader: ModelLoader; closePanel: () => void }) => (
   <div
     role="region"
     aria-label="Model loading"
@@ -210,7 +196,9 @@ const ModelBar = ({ loader }: { loader: ModelLoader }) => {
       aria-describedby={loader.urlError === null ? undefined : 'url-error'}
       onChange={function (event) { loader.setUrl(event.target.value); }}
       onKeyDown={function (event) {
-        if (event.key === 'Enter') { event.preventDefault(); loader.loadFromUrl(); }
+        // Ignore Enter during IME composition (CJK input), as the composer
+        // Does: there, Enter confirms the conversion and must not load.
+        if (event.key === 'Enter' && !event.nativeEvent.isComposing) { event.preventDefault(); loader.loadFromUrl(); }
       }}
     />
     <Button
@@ -223,13 +211,36 @@ const ModelBar = ({ loader }: { loader: ModelLoader }) => {
     >
       {loader.loading ? 'Loading…' : 'Load model'}
     </Button>
+    {loader.loading ? (
+      <Button type="button" size="lg" onClick={loader.cancelLoad} aria-label="Cancel model load">
+        Cancel
+      </Button>
+    ) : null}
     <ModelDropZone loader={loader} />
     {loader.ready ? (
       <Button type="button" size="lg" onClick={closePanel}>Done</Button>
     ) : null}
     <UrlError message={loader.urlError} />
   </div>
-  );
+);
+
+const ModelBar = ({ loader }: { loader: ModelLoader }) => {
+  const [editing, setEditing] = useState(false);
+  const closePanel = useFocusOnPanelClose(editing, setEditing);
+  const name = loader.modelName ?? 'Model loaded';
+  if (loader.ready && !editing) {
+    return (
+      <div
+        role="region"
+        aria-label="Loaded model"
+        className="flex items-center gap-2 border-b border-divider bg-card px-gutter py-2 max-drawer:px-4"
+      >
+        <span className="min-w-0 flex-1 truncate font-mono text-sm text-faint" title={name}>{name}</span>
+        <Button id={CHANGE_MODEL_ID} type="button" size="sm" onClick={function () { setEditing(true); }}>Change model</Button>
+      </div>
+    );
+  }
+  return <ModelBarExpanded loader={loader} closePanel={closePanel} />;
 };
 
 /** Before the first prompt. Same anchor as the serve UI's empty state, drawn by
