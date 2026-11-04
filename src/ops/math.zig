@@ -309,7 +309,7 @@ pub fn applyLogitBias(logits: []f32, ids: []const u32, biases: []const f32, coun
 /// would create an n-gram that already appeared in the recent output.
 /// `multiplier` scales the penalty; `allowed_length` sets minimum repeat length.
 pub fn applyDry(logits: []f32, recent_ids: []const u32, multiplier: f32, allowed_length: u32) void {
-    if (multiplier <= 0 or recent_ids.len < allowed_length + 1) return;
+    if (multiplier <= 0 or allowed_length == 0 or recent_ids.len < allowed_length + 1) return;
     const n = recent_ids.len;
     const al: usize = allowed_length;
 
@@ -1500,6 +1500,16 @@ test "applyLogitBias zero count is no-op" {
     applyLogitBias(&logits, &ids, &biases, 0);
     try std.testing.expectEqual(@as(f32, 1.0), logits[0]);
     try std.testing.expectEqual(@as(f32, 2.0), logits[1]);
+}
+
+test "applyDry zero allowed_length is a no-op" {
+    // allowed_length=0 means every 0-length suffix "matches" everywhere: the
+    // loop would penalize every token in recent history, indefinitely, on
+    // any nonempty history. Guarded to a no-op like the other early returns.
+    var logits = [_]f32{ 5.0, 5.0, 5.0, 5.0 };
+    const history = [_]u32{ 0, 1, 2, 3 };
+    applyDry(&logits, &history, 1.0, 0);
+    for (logits) |v| try std.testing.expectEqual(@as(f32, 5.0), v);
 }
 
 test "fuzz: all math functions" {
