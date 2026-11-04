@@ -108,13 +108,10 @@ pub fn scheduleVerification(
     if (R == 0) return;
     // result.lengths / cur_len are [256]u32, clamp to prevent OOB.
     const R_clamped = @min(R, 256);
-    // Caller must supply scratch with capacity ≥ R_clamped × γ.
     std.debug.assert(scratch.len >= R_clamped * max_block);
 
-    // Compute survival probabilities for all blocks.
     for (blocks) |*b| b.computeSurvival();
 
-    // Build candidate pool: every (r, j) with a_{r,j} > 0.
     var n_cands: usize = 0;
     for (blocks[0..R_clamped], 0..) |b, r| {
         for (0..b.n) |j| {
@@ -129,17 +126,14 @@ pub fn scheduleVerification(
         }
     }
 
-    // Sort candidates descending by survival probability.
     std.sort.pdq(Candidate, scratch[0..n_cands], {}, struct {
         fn descendingSurvival(_: void, a: Candidate, b: Candidate) bool {
             return a.survival > b.survival;
         }
     }.descendingSurvival);
 
-    // Initialise per-request verification lengths to 0.
     @memset(result.lengths[0..R_clamped], 0);
 
-    // State: current verification length per request.
     var cur_len: [256]u32 = @splat(0);
     // Starting point: baseline batch = R_clamped (one anchor token per request, no drafts).
     var batch_size: u32 = @intCast(R_clamped);

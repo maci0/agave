@@ -309,15 +309,12 @@ test "fuzz: all pflash functions" {
             const max_b = @as(usize, @intFromFloat(@as(f32, @floatFromInt(n_blocks)) * cfg.max_kept_ratio + 1.5));
             try std.testing.expect(countSelected(&state) <= @max(max_b, 1));
 
-            // Build compressed prompt
             const tokens = try allocator.alloc(u32, n_tokens);
             defer allocator.free(tokens);
             for (tokens, 0..) |*t, i| t.* = @intCast(i);
             const compressed = buildCompressedPrompt(&state, tokens);
 
-            // Last block always included → compressed non-empty
             try std.testing.expect(compressed.len > 0);
-            // Compression ratio in (0, 1]
             const ratio = compressionRatio(&state);
             try std.testing.expect(ratio > 0 and ratio <= 1.0);
         }

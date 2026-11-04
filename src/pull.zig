@@ -538,21 +538,18 @@ fn parseModelListing(allocator: Allocator, body: []const u8) (PullError || Alloc
         return PullError.ApiResponseInvalid;
     const root = parsed.value;
 
-    // Extract commit SHA from "sha" field.
     const sha_val = if (root == .object) root.object.get("sha") else null;
     const commit_sha: []const u8 = if (sha_val) |sv| switch (sv) {
         .string => |s| if (isValidHexSha(s)) s else "unknown",
         else => "unknown",
     } else "unknown";
 
-    // Extract siblings array.
     const siblings_val = if (root == .object) root.object.get("siblings") else null;
     const siblings = if (siblings_val) |sv| switch (sv) {
         .array => sv.array.items,
         else => &[_]std.json.Value{},
     } else &[_]std.json.Value{};
 
-    // First pass: count GGUF and SafeTensors files, capture sidecar sizes.
     var gguf_count: usize = 0;
     var st_count: usize = 0;
     var has_st_index = false;
@@ -589,7 +586,6 @@ fn parseModelListing(allocator: Allocator, body: []const u8) (PullError || Alloc
 
     if (gguf_count == 0 and st_count == 0) return PullError.NoGgufFiles;
 
-    // Second pass: collect GGUF file info.
     var gguf_files: []GgufFile = &.{};
     if (gguf_count > 0) {
         gguf_files = try arena_alloc.alloc(GgufFile, gguf_count);
@@ -609,7 +605,6 @@ fn parseModelListing(allocator: Allocator, body: []const u8) (PullError || Alloc
         gguf_files = gguf_files[0..idx];
     }
 
-    // Collect SafeTensors shard info.
     var st_model: ?SafeTensorsModel = null;
     if (st_count > 0) {
         const shards = try arena_alloc.alloc([]const u8, st_count);
@@ -789,7 +784,6 @@ pub fn printFileList(files: []const GgufFile, st_model: ?SafeTensorsModel) void 
                 fileWrite(stdout, std.fmt.bufPrint(&buf, "  {s}\n", .{shard}) catch continue);
             }
         }
-        // Show auxiliary files.
         if (st.has_config) fileWrite(stdout, "  config.json\n");
         if (st.has_tokenizer) fileWrite(stdout, "  tokenizer.json\n");
         if (st.has_tokenizer_config) fileWrite(stdout, "  tokenizer_config.json\n");
@@ -922,7 +916,6 @@ pub fn hfCacheDir(allocator: Allocator, repo: []const u8) (PullError || Allocato
 
 /// Replace all occurrences of '/' with '--' in a string.
 fn replaceSlashes(allocator: Allocator, input: []const u8) Allocator.Error![]u8 {
-    // Count slashes to determine output length.
     var slash_count: usize = 0;
     for (input) |c| {
         if (c == '/') slash_count += 1;
@@ -1139,7 +1132,6 @@ fn downloadFile(
     token: ?[]const u8,
     expected_size: u64,
 ) PullError!void {
-    // Build download URL.
     const url = std.fmt.allocPrint(allocator, "{s}/{s}/resolve/main/{s}", .{ try hfApiBase(), repo, filename }) catch
         return PullError.DownloadFailed;
     defer allocator.free(url);
@@ -1367,11 +1359,9 @@ fn downloadFileOnce(
         }
     }
 
-    // Get a reader from the response body.
     var transfer_buf: [download_buf_size]u8 = undefined;
     var body_reader = response.reader(&transfer_buf);
 
-    // Download with progress reporting.
     var downloaded: u64 = start_offset;
     var last_progress_time: i128 = nanoTimestamp();
     var last_progress_bytes: u64 = downloaded;
@@ -1424,7 +1414,6 @@ fn downloadFileOnce(
                 var bar_buf: [progress_bar_width + 2]u8 = undefined;
                 const bar = progressBar(&bar_buf, pct);
 
-                // Estimate time remaining.
                 const remaining_bytes = if (total_size > downloaded) total_size - downloaded else 0;
                 const eta_secs: u64 = if (speed_mbps > 0.0)
                     @intFromFloat(@floor(@as(f64, @floatFromInt(remaining_bytes)) / (speed_mbps * bytes_per_mb)))
@@ -1701,7 +1690,6 @@ fn pullSafeTensorsModel(
     const total_gb = @as(f64, @floatFromInt(st.total_size)) / bytes_per_gb;
     eprint("Selected: SafeTensors model ({d} shards, {d:.1} GB total)\n", .{ st.shards.len, total_gb });
 
-    // Build cache paths.
     var path_arena = std.heap.ArenaAllocator.init(allocator);
     defer path_arena.deinit();
     const pa = path_arena.allocator();
@@ -1711,7 +1699,6 @@ fn pullSafeTensorsModel(
     const snapshots_dir = cache.snapshots;
     const refs_dir = cache.refs;
 
-    // Download each shard.
     for (st.shards, st.shard_sizes, 0..) |shard, expected_size, i| {
         const blob_path = std.fmt.allocPrint(pa, "{s}/{s}", .{ blobs_dir, shard }) catch return error.OutOfMemory;
 
@@ -1737,12 +1724,10 @@ fn pullSafeTensorsModel(
         try atomicSymlink(pa, relative_blob, snapshot_link);
     }
 
-    // Download index file if present.
     if (st.has_index) {
         try pullSidecarFile(allocator, pa, args, blobs_dir, snapshots_dir, "model.safetensors.index.json", st.index_size);
     }
 
-    // Download auxiliary files (config.json, tokenizer.json, tokenizer_config.json).
     const aux_flags = [_]bool{ st.has_config, st.has_tokenizer, st.has_tokenizer_config };
     const aux_sizes = [_]u64{ st.config_size, st.tokenizer_size, st.tokenizer_config_size };
     for (&safetensors_aux_files, aux_flags, aux_sizes) |aux_name, has_file, aux_size| {
@@ -1752,7 +1737,6 @@ fn pullSafeTensorsModel(
 
     eprint("Download complete.\n", .{});
 
-    // Write refs/main and create convenience symlink.
     writeRefsMain(pa, refs_dir, list_result.commit_sha);
     createAgaveSymlink(allocator, args.repo, snapshots_dir);
 

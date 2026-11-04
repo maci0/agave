@@ -684,7 +684,6 @@ pub fn verifyDDTree(
 
     target_model.setKvSeqLen(pre_draft_pos);
 
-    // Build DDTree
     var builder = ddtree.DDTreeBuilder{};
     builder.budget = @min(budget, ddtree.max_budget);
     builder.presort(state.depth_slices[0..state.n_draft]);

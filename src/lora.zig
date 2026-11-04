@@ -97,7 +97,6 @@ fn applyLoraGgufFile(
     var handle = Handle{ .allocator = allocator, .file = base_gguf };
     errdefer handle.dispose();
 
-    // Iterate lora tensors. Only process lora_a entries; find paired lora_b and base.
     var lora_iter = lora_file.tensors.iterator();
     while (lora_iter.next()) |kv| {
         const lora_a_name = kv.key_ptr.*;
@@ -129,7 +128,6 @@ fn applyLoraGgufFile(
 
         const scale = alpha / @as(f32, @floatFromInt(rank));
 
-        // Find base tensor, try bare name, then with ".weight" suffix
         const base_ti: *gguf.TensorInfo = blk: {
             if (base_gguf.tensors.getPtr(base_suffix)) |p| break :blk p;
             var w_buf: [512]u8 = undefined;
@@ -168,7 +166,6 @@ fn applyLoraGgufFile(
             continue;
         }
 
-        // Dequant lora_a [rank × k] and lora_b [n × rank] to F32
         const la = try allocator.alloc(f32, la_len);
         defer allocator.free(la);
         quant.dequantToF32(la, lora_file.tensorData(&lora_a_info), gguf.GGUFFile.ggmlToDType(lora_a_info.ggml_type), la_len);
@@ -177,8 +174,6 @@ fn applyLoraGgufFile(
         defer allocator.free(lb);
         quant.dequantToF32(lb, lora_file.tensorData(&lora_b_info), gguf.GGUFFile.ggmlToDType(lora_b_info.ggml_type), lb_len);
 
-        // Allocate merged buffer [n × k]. Start from a previous adapter if present
-        // so stacked applies compose; otherwise dequant the mmap base.
         const merged = try allocator.alloc(f32, merged_len);
         errdefer allocator.free(merged);
         if (base_gguf.lora_overrides.get(base_ti.name)) |ov| {
@@ -187,15 +182,8 @@ fn applyLoraGgufFile(
             quant.dequantToF32(merged, base_gguf.tensorData(base_ti), gguf.GGUFFile.ggmlToDType(base_ti.ggml_type), merged_len);
         }
 
-        // Add LoRA delta: merged += scale * (lb[n,rank] @ la[rank,k])
-        // Use Accelerate on macOS for ~4× speedup via AMX; fall back to scalar.
         addLoraMatrix(merged, lb, la, n, rank, k, scale);
 
-        // Insert override keyed by the GGUF canonical name (dupe'd, mmap pointer will be freed).
-        // `key` is owned by the map once `getOrPut` finds a free slot; from that
-        // point a plain `errdefer allocator.free(key)` would double-free it
-        // against the explicit free below, so the guard only covers the window
-        // before ownership moves.
         const key = try allocator.dupe(u8, base_ti.name);
         var key_owned = true;
         errdefer if (key_owned) allocator.free(key);
@@ -205,12 +193,6 @@ fn applyLoraGgufFile(
             allocator.free(key);
             break :blk gop.value_ptr.*;
         } else null;
-        // Publish, then record. If the record append fails the map already
-        // holds `merged`, and the rollback below puts `prev` back (or removes
-        // the fresh entry) so the override map never keeps a freed pointer and
-        // a failed apply leaves `base_gguf` exactly as it was. Appending first
-        // and publishing after cannot work: `restoreOverride` frees whatever the
-        // map holds, which on a fresh insert is not yet a valid override.
         gop.value_ptr.* = .{
             .data = merged,
             .n_dims = base_ti.n_dims,
