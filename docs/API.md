@@ -53,11 +53,9 @@ exactly like an unset variable. Two accessors do that, with the same rule:
   and the video-frame temp root.
 - The parsed environment map `main` receives at startup, read with
   `config.nonemptyEnv`, which applies the same trim inline (`src/main.zig`).
-  Used by every `AGAVE_*` variable and by `TERM`/`NO_COLOR`.
-
-`TERM` and `NO_COLOR` are additionally matched against the raw map value rather
-than the trimmed one, because [no-color.org](https://no-color.org) defines them
-as "present and non-empty" rather than as configured values.
+  Used by every `AGAVE_*` variable and by `TERM`/`NO_COLOR`, which go through
+  `termIsDumbValue` / `noColorValue` in `src/display.zig` (both trim via
+  `config.nonemptyEnv`), so both accessors agree on "unset".
 
 ### Docker Compose variables
 

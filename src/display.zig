@@ -38,18 +38,19 @@ fn writeStdout(text: []const u8) void {
 }
 
 /// True when `val` is the literal terminal type `dumb` (no ANSI, no emoji).
-/// Unset, empty, and any other TERM value are not dumb.
+/// Unset, empty, whitespace-only, and any other TERM value are not dumb.
+/// Values go through `config.nonemptyEnv` so the parsed-environment path in
+/// `main` and the `config.getenv` path agree on what "unset" means.
 pub fn termIsDumbValue(val: ?[]const u8) bool {
-    const v = val orelse return false;
+    const v = config.nonemptyEnv(val) orelse return false;
     return std.mem.eql(u8, v, "dumb");
 }
 
 /// True when NO_COLOR is present and non-empty (https://no-color.org).
-/// `NO_COLOR=` (empty) keeps auto behavior. `getenvNoColor` reads through
-/// `config.getenv`, so a whitespace-only value is unset here too.
+/// `NO_COLOR=` and whitespace-only values keep auto behavior, matching
+/// `config.getenv` (which trims) on the parsed-environment path too.
 pub fn noColorValue(val: ?[]const u8) bool {
-    const v = val orelse return false;
-    return v.len > 0;
+    return config.nonemptyEnv(val) != null;
 }
 
 /// Whether `--version` should include the cactus emoji.
@@ -1129,14 +1130,17 @@ test "formatSize zero" {
 test "termIsDumbValue only matches dumb" {
     try std.testing.expect(!termIsDumbValue(null));
     try std.testing.expect(!termIsDumbValue(""));
+    try std.testing.expect(!termIsDumbValue("  "));
     try std.testing.expect(!termIsDumbValue("xterm-256color"));
     try std.testing.expect(!termIsDumbValue("vt100"));
     try std.testing.expect(termIsDumbValue("dumb"));
+    try std.testing.expect(termIsDumbValue(" dumb "));
 }
 
 test "noColorValue follows no-color.org" {
     try std.testing.expect(!noColorValue(null));
     try std.testing.expect(!noColorValue(""));
+    try std.testing.expect(!noColorValue("  "));
     try std.testing.expect(noColorValue("1"));
     try std.testing.expect(noColorValue("true"));
 }
