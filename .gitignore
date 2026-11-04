@@ -2,6 +2,8 @@
 .zig-cache/
 .zig-cache-global/
 zig-out/
+# Throwaway bridge written by scripts/test-file.sh (never commit it)
+src/zz_test_file_root.zig
 # Stray local WASM droppings at repo root (canonical output: zig build wasm → zig-out/web/)
 /root.wasm
 /*.wasm
