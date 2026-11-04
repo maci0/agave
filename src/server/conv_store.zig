@@ -355,6 +355,12 @@ pub fn snapshotBeforeDelete(allocator: std.mem.Allocator, path: []const u8) void
     };
     defer allocator.free(data);
 
+    // A retry of the same deletion reads the same live bytes the first run
+    // already kept; taking the next slot would burn one of the bounded copies
+    // on identical history and eventually leave a later, different deletion
+    // with no slot. Treat the repeat as the no-op it is.
+    if (snapshotAlreadyKept(allocator, path, data)) return;
+
     var dest_buf: [std.fs.max_path_bytes]u8 = undefined;
     const dest = freeSidecarPath(&dest_buf, path, ".deleted") orelse {
         std.log.err("conversation store: no free {s}.deleted[.n] name is left ({d} kept); this deletion is recoverable only from the backup tier", .{ path, max_sidecar_copies });
@@ -622,6 +628,26 @@ fn sidecarExists(path: []const u8) bool {
     @memcpy(buf[0..path.len], path);
     buf[path.len] = 0;
     return std.c.access(@ptrCast(buf[0..path.len :0]), 0) == 0;
+}
+
+/// Every kept copy of the live-store bytes `data` already reserves: true when
+/// snapshotting `data` again would add no recovery information.
+fn snapshotAlreadyKept(allocator: Allocator, path: []const u8, data: []const u8) bool {
+    var first_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const first = std.fmt.bufPrint(&first_buf, "{s}.deleted", .{path}) catch return false;
+    if (readFile(allocator, first)) |kept| {
+        defer allocator.free(kept);
+        if (std.mem.eql(u8, kept, data)) return true;
+    } else |_| {}
+    var numbered: [std.fs.max_path_bytes]u8 = undefined;
+    for (1..max_sidecar_copies) |n| {
+        const candidate = std.fmt.bufPrint(&numbered, "{s}.deleted.{d}", .{ path, n }) catch return false;
+        if (readFile(allocator, candidate)) |kept| {
+            defer allocator.free(kept);
+            if (std.mem.eql(u8, kept, data)) return true;
+        } else |_| {}
+    }
+    return false;
 }
 
 /// First free `{path}{suffix}`, then the first free `{path}{suffix}.{n}` up to
@@ -1006,6 +1032,35 @@ test "snapshotBeforeDelete keeps the store a deletion is about to destroy" {
     const second = try readFile(allocator, second_copy);
     defer allocator.free(second);
     try std.testing.expectEqualStrings("{\"version\":1,\"active_id\":2,\"next_id\":3,\"conversations\":[]}", second);
+}
+
+test "snapshotBeforeDelete run twice on the same store keeps one copy" {
+    const allocator = std.testing.allocator;
+    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const path = testPath(&path_buf, "deleted-twice.json");
+    var first_buf: [std.fs.max_path_bytes]u8 = undefined;
+    var second_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const first_copy = std.fmt.bufPrint(&first_buf, "{s}.deleted", .{path}) catch unreachable;
+    const second_copy = std.fmt.bufPrint(&second_buf, "{s}.deleted.1", .{path}) catch unreachable;
+    defer deleteTestPath(path);
+    defer deleteTestPath(first_copy);
+    defer deleteTestPath(second_copy);
+
+    const raw = "{\"version\":1,\"active_id\":1,\"next_id\":2,\"conversations\":[{\"id\":1,\"title\":\"doomed\",\"messages\":[{\"role\":\"user\",\"content\":\"keep me\"}]}]}";
+    try durable.replacePrivate(path, raw);
+
+    // A retried deletion (double-click, client retry after a lost response)
+    // reads the same live bytes the first run already copied, so the second
+    // run must not burn the next bounded slot on identical history.
+    deleteTestPath(first_copy);
+    deleteTestPath(second_copy);
+    snapshotBeforeDelete(allocator, path);
+    snapshotBeforeDelete(allocator, path);
+    try std.testing.expect(sidecarExists(first_copy));
+    try std.testing.expect(!sidecarExists(second_copy));
+    const kept = try readFile(allocator, first_copy);
+    defer allocator.free(kept);
+    try std.testing.expectEqualStrings(raw, kept);
 }
 
 test "snapshotBeforeDelete on a missing store writes nothing and does not fail" {
