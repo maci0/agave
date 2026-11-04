@@ -9,6 +9,10 @@
          so both chat surfaces read as one product. style.css is a committed build
          output: regenerate it with scripts/build-web.sh. -->
     <link rel="stylesheet" href="style.css">
+    <!-- agave.wasm is fetched by AgaveEngine.init() the moment the shell
+         mounts, well before the user supplies a model. Preloading it starts
+         that fetch alongside the deferred scripts instead of after them. -->
+    <link rel="preload" href="agave.wasm" as="fetch" type="application/wasm" crossorigin>
     <meta name="theme-color" content="#1a1714" media="(prefers-color-scheme: dark)">
     <meta name="theme-color" content="#faf8f5" media="(prefers-color-scheme: light)">
     <meta name="color-scheme" content="light dark">

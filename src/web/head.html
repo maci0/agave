@@ -14,9 +14,6 @@
 <!-- marked and DOMPurify are fetched on the first rendered response (app.tsx loadMarkdown),
      not here: nothing on the first paint needs them, and a CDN script in the head
      costs every visitor two cross-origin requests and a TLS handshake. -->
-<!-- Resolve, connect, and warm TLS during the first paint. preconnect
-     subsumes the DNS lookup a bare dns-prefetch does, and the CDN scripts
-     are fetched (crossorigin, SRI-checked) on the first rendered response,
-     so the connection should already be open by then. -->
-<link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+<!-- Resolve the deferred libraries' hostname during the first paint. -->
+<link rel="dns-prefetch" href="https://cdn.jsdelivr.net">
 <style>
