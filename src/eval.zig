@@ -86,7 +86,10 @@ pub fn scoreCase(
 
     // Prefill prompt
     if (prompt_ids.len > 0) {
-        _ = model.prefill(prompt_ids) catch return null;
+        model.prefill(prompt_ids) catch |err| {
+            std.log.warn("eval: prefill failed ({d} prompt tokens): {}", .{ prompt_ids.len, err });
+            return null;
+        };
     }
 
     var total_nll: f64 = 0;
@@ -102,7 +105,10 @@ pub fn scoreCase(
             // Forward the previous token to get logits for this position.
             // Skip for ci==0 when prompt was prefilled, logits are already set.
             const prev = if (ci > 0) continuation_ids[ci - 1] else 0;
-            _ = model.forward(prev) catch return null;
+            model.forward(prev) catch |err| {
+                std.log.warn("eval: forward failed at continuation position {d}: {}", .{ ci, err });
+                return null;
+            };
         }
 
         const logits = model.getLogits();

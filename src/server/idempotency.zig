@@ -202,9 +202,16 @@ pub const Ledger = struct {
                             .content_type = s.content_type,
                             // Copied out under the ledger lock: the slot body is freed
                             // as soon as any other request claims, evicts, or completes.
+                            // OOM here must not masquerade as "no body" (the
+                            // streamed/oversized case): an empty copy would send
+                            // a 409 "not replayable" for a response that *is*
+                            // recorded, with no log line saying the copy failed.
                             .body = blk: {
                                 if (s.body.len == 0) break :blk @as([]u8, @constCast(""));
-                                break :blk self.allocator.dupe(u8, s.body) catch @as([]u8, @constCast(""));
+                                break :blk self.allocator.dupe(u8, s.body) catch blk2: {
+                                    std.log.warn("idempotency: replay copy OOM ({d} bytes); answering as not-replayable", .{s.body.len});
+                                    break :blk2 @as([]u8, @constCast(""));
+                                };
                             },
                         },
                     };

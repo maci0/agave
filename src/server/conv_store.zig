@@ -631,17 +631,23 @@ fn sidecarExists(path: []const u8) bool {
 }
 
 /// Every kept copy of the live-store bytes `data` already reserves: true when
-/// snapshotting `data` again would add no recovery information.
+/// snapshotting `data` again would add no recovery information. A path that
+/// does not fit the buffer is reported as kept (`true`): `freeSidecarPath`
+/// will then also fail to name a slot, and `snapshotBeforeDelete` logs that
+/// failure loudly. Returning `false` here instead would claim "not kept" and
+/// let the caller burn the next slot on bytes that are already preserved —
+/// the failure looks like progress while a later, different deletion loses
+/// its last copy.
 fn snapshotAlreadyKept(allocator: Allocator, path: []const u8, data: []const u8) bool {
     var first_buf: [std.fs.max_path_bytes]u8 = undefined;
-    const first = std.fmt.bufPrint(&first_buf, "{s}.deleted", .{path}) catch return false;
+    const first = std.fmt.bufPrint(&first_buf, "{s}.deleted", .{path}) catch return true;
     if (readFile(allocator, first)) |kept| {
         defer allocator.free(kept);
         if (std.mem.eql(u8, kept, data)) return true;
     } else |_| {}
     var numbered: [std.fs.max_path_bytes]u8 = undefined;
     for (1..max_sidecar_copies) |n| {
-        const candidate = std.fmt.bufPrint(&numbered, "{s}.deleted.{d}", .{ path, n }) catch return false;
+        const candidate = std.fmt.bufPrint(&numbered, "{s}.deleted.{d}", .{ path, n }) catch continue;
         if (readFile(allocator, candidate)) |kept| {
             defer allocator.free(kept);
             if (std.mem.eql(u8, kept, data)) return true;

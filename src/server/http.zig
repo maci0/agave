@@ -75,7 +75,9 @@ pub fn getHeaderValue(headers: []const u8, name: []const u8) ?[]const u8 {
     return found;
 }
 
-/// True when `Accept-Encoding` lists `name` with q > 0.
+/// True when `Accept-Encoding` lists `name` with q > 0. A malformed q value
+/// (`q=abc`, `q=`) is treated as q=0 — the token is not acceptable — never as
+/// the default q=1.0, which would claim support the client never stated.
 pub fn acceptsEncoding(headers: []const u8, name: []const u8) bool {
     const ae = getHeaderValue(headers, "accept-encoding") orelse return false;
     var tokens = std.mem.splitScalar(u8, ae, ',');
