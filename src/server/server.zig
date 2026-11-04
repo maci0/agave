@@ -457,6 +457,10 @@ fn isAnthropicPath(path: []const u8) bool {
 /// Per-connection read timeout (seconds), prevents slow loris DoS attacks
 /// where an attacker holds connections open by sending data one byte at a time.
 const connection_read_timeout_sec: i64 = 30;
+/// Maximum requests served on one keep-alive connection before closing.
+/// Bounds the thread held per client while still letting the browser reuse
+/// the TCP connection for the page's parallel API fetches.
+const max_requests_per_connection: u32 = 100;
 /// Poll interval (milliseconds) while draining active connections during shutdown.
 const drain_poll_interval_ms: u64 = 100;
 /// KV cache utilization percentage above which `/health` reports "degraded".
@@ -1034,6 +1038,10 @@ fn kvSeqLenSnapshot() usize {
 /// handleRequest() call so all log lines from the same request (including
 /// logGeneration calls deep in generate functions) share the same ID.
 threadlocal var log_request_id: u64 = 0;
+/// True when the current response must carry `Connection: close` because the
+/// keep-alive budget for this connection is spent or the client asked for it.
+/// Set by handleConnection before each handleRequest call.
+threadlocal var log_connection_close: bool = true;
 /// Sanitized inbound `X-Request-Id` (empty when the client omitted one).
 threadlocal var log_client_rid: [max_client_request_id_len]u8 = undefined;
 threadlocal var log_client_rid_len: usize = 0;
@@ -1456,7 +1464,7 @@ fn checkRateLimit(server: *Server, prompt_tokens: u32) ?u32 {
 /// Write a complete HTTP response (status line + headers + body).
 fn sendResponse(stream: http.TcpStream, status: []const u8, content_type: []const u8, body: []const u8) void {
     var hdr_buf: [hdr_buf_size]u8 = undefined;
-    const hdr = std.fmt.bufPrint(&hdr_buf, "HTTP/1.1 {s}\r\nContent-Type: {s}\r\nContent-Length: {d}\r\nX-Request-Id: {d}\r\n{s}" ++ http.security_headers ++ "Connection: close\r\n\r\n", .{ status, content_type, body.len, log_request_id, http.corsHeaders() }) catch {
+    const hdr = std.fmt.bufPrint(&hdr_buf, "HTTP/1.1 {s}\r\nContent-Type: {s}\r\nContent-Length: {d}\r\nX-Request-Id: {d}\r\n{s}" ++ http.security_headers ++ "Connection: {s}\r\n\r\n", .{ status, content_type, body.len, log_request_id, http.corsHeaders(), if (log_connection_close) "close" else "keep-alive" }) catch {
         std.log.warn("req={d} response header overflow (body={d})", .{ log_request_id, body.len });
         return;
     };
@@ -1538,7 +1546,7 @@ fn statusCodeOf(status_line: []const u8) u16 {
 /// answer the first execution produced.
 fn sendIdempotentReplay(stream: http.TcpStream, replay: Idempotency.Replay) void {
     var hdr_buf: [hdr_buf_size]u8 = undefined;
-    const hdr = std.fmt.bufPrint(&hdr_buf, "HTTP/1.1 {s}\r\nContent-Type: {s}\r\nContent-Length: {d}\r\nIdempotent-Replay: true\r\nX-Request-Id: {d}\r\n{s}" ++ http.security_headers ++ "Connection: close\r\n\r\n", .{ replay.status_line, replay.content_type, replay.body.len, log_request_id, http.corsHeaders() }) catch {
+    const hdr = std.fmt.bufPrint(&hdr_buf, "HTTP/1.1 {s}\r\nContent-Type: {s}\r\nContent-Length: {d}\r\nIdempotent-Replay: true\r\nX-Request-Id: {d}\r\n{s}" ++ http.security_headers ++ "Connection: {s}\r\n\r\n", .{ replay.status_line, replay.content_type, replay.body.len, log_request_id, http.corsHeaders(), if (log_connection_close) "close" else "keep-alive" }) catch {
         std.log.warn("req={d} replay header overflow (body={d})", .{ log_request_id, replay.body.len });
         return;
     };
@@ -1555,7 +1563,7 @@ fn sendDocumentNotModified(stream: http.TcpStream, etag: []const u8) void {
     var hdr_buf: [hdr_buf_size]u8 = undefined;
     const hdr = std.fmt.bufPrint(&hdr_buf, "HTTP/1.1 304 Not Modified\r\nETag: {s}\r\nX-Request-Id: {d}\r\n{s}" ++
         not_modified_headers ++
-        "Connection: close\r\n\r\n", .{ etag, log_request_id, http.corsHeaders() }) catch {
+        "Connection: {s}\r\n\r\n", .{ etag, log_request_id, http.corsHeaders(), if (log_connection_close) "close" else "keep-alive" }) catch {
         std.log.warn("req={d} 304 header overflow", .{log_request_id});
         return;
     };
@@ -1579,7 +1587,7 @@ fn sendHtmlPage(stream: http.TcpStream, req_headers: []const u8) u16 {
     var hdr_buf: [hdr_buf_size]u8 = undefined;
     const hdr = std.fmt.bufPrint(&hdr_buf, "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {d}\r\n{s}ETag: {s}\r\nX-Request-Id: {d}\r\n{s}" ++
         http.security_headers_base ++ http.document_cache_headers ++
-        "Connection: close\r\n\r\n", .{ body.len, encoding_hdr, etag, log_request_id, http.corsHeaders() }) catch {
+        "Connection: {s}\r\n\r\n", .{ body.len, encoding_hdr, etag, log_request_id, http.corsHeaders(), if (log_connection_close) "close" else "keep-alive" }) catch {
         sendHtml(stream, html_page);
         return 200;
     };
@@ -2066,7 +2074,7 @@ fn send429(stream: http.TcpStream, retry_after: u32) void {
     var buf: [error_body_buf_size]u8 = undefined;
     const body = std.fmt.bufPrint(&buf, "{{\"error\":{{\"message\":\"Rate limit exceeded. Retry after {d} seconds.\",\"type\":\"rate_limit_exceeded\",\"param\":null,\"code\":\"rate_limit_exceeded\"}}}}", .{retry_after}) catch rate_limit_fallback;
     var hdr_buf: [hdr_buf_size]u8 = undefined;
-    const hdr = std.fmt.bufPrint(&hdr_buf, "HTTP/1.1 429 Too Many Requests\r\nContent-Type: application/json\r\nContent-Length: {d}\r\nRetry-After: {d}\r\nX-Request-Id: {d}\r\n{s}" ++ http.security_headers ++ "Connection: close\r\n\r\n", .{ body.len, retry_after, log_request_id, http.corsHeaders() }) catch {
+    const hdr = std.fmt.bufPrint(&hdr_buf, "HTTP/1.1 429 Too Many Requests\r\nContent-Type: application/json\r\nContent-Length: {d}\r\nRetry-After: {d}\r\nX-Request-Id: {d}\r\n{s}" ++ http.security_headers ++ "Connection: {s}\r\n\r\n", .{ body.len, retry_after, log_request_id, http.corsHeaders(), if (log_connection_close) "close" else "keep-alive" }) catch {
         // Always respond, a hung client is worse than a response without Retry-After.
         std.log.warn("req={d} 429 header format failed, using fallback", .{log_request_id});
         sendResponse(stream, "429 Too Many Requests", "application/json", body);
@@ -2085,7 +2093,7 @@ fn send429(stream: http.TcpStream, retry_after: u32) void {
 /// Send 503 with Retry-After (connection capacity / spawn failure).
 fn send503Retry(stream: http.TcpStream, body: []const u8, retry_after: u32) void {
     var hdr_buf: [hdr_buf_size]u8 = undefined;
-    const hdr = std.fmt.bufPrint(&hdr_buf, "HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json\r\nContent-Length: {d}\r\nRetry-After: {d}\r\nX-Request-Id: {d}\r\n{s}" ++ http.security_headers ++ "Connection: close\r\n\r\n", .{ body.len, retry_after, log_request_id, http.corsHeaders() }) catch {
+    const hdr = std.fmt.bufPrint(&hdr_buf, "HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json\r\nContent-Length: {d}\r\nRetry-After: {d}\r\nX-Request-Id: {d}\r\n{s}" ++ http.security_headers ++ "Connection: {s}\r\n\r\n", .{ body.len, retry_after, log_request_id, http.corsHeaders(), if (log_connection_close) "close" else "keep-alive" }) catch {
         std.log.warn("req={d} 503 header format failed, using fallback", .{log_request_id});
         sendResponse(stream, "503 Service Unavailable", "application/json", body);
         return;
@@ -2371,7 +2379,7 @@ fn handleRequest(stream: http.TcpStream, req: http.HttpRequest) void {
             "X-Request-Id: {d}\r\n" ++
             http.security_headers ++
             "Content-Length: 0\r\n" ++
-            "Connection: close\r\n\r\n", .{ http.corsHeaders(), allow_methods, log_request_id }) catch return;
+            "Connection: {s}\r\n\r\n", .{ http.corsHeaders(), allow_methods, log_request_id, if (log_connection_close) "close" else "keep-alive" }) catch return;
         stream.writeAll(opts_hdr) catch return;
         return;
     }
@@ -2496,7 +2504,7 @@ fn handleRequest(stream: http.TcpStream, req: http.HttpRequest) void {
 
     if (is_get and std.mem.eql(u8, path, "/favicon.ico")) {
         var fav_buf: [short_hdr_buf_size]u8 = undefined;
-        const fav_hdr = std.fmt.bufPrint(&fav_buf, "HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nX-Request-Id: {d}\r\n{s}" ++ http.security_headers ++ "Connection: close\r\n\r\n", .{ log_request_id, http.corsHeaders() }) catch return;
+        const fav_hdr = std.fmt.bufPrint(&fav_buf, "HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nX-Request-Id: {d}\r\n{s}" ++ http.security_headers ++ "Connection: {s}\r\n\r\n", .{ log_request_id, http.corsHeaders(), if (log_connection_close) "close" else "keep-alive" }) catch return;
         stream.writeAll(fav_hdr) catch return;
         return;
     }
@@ -3992,7 +4000,7 @@ fn handleRequest(stream: http.TcpStream, req: http.HttpRequest) void {
                 std.fmt.bufPrint(&body_buf,
                     \\{{"error":{{"message":"Method not allowed. {s}","type":"invalid_request_error","param":null,"code":"method_not_allowed"}}}}
                 , .{ep.msg}) catch method_not_allowed_openai;
-            const hdr = std.fmt.bufPrint(&hdr_buf, "HTTP/1.1 405 Method Not Allowed\r\nContent-Type: application/json\r\nContent-Length: {d}\r\nAllow: {s}\r\nX-Request-Id: {d}\r\n{s}" ++ http.security_headers ++ "Connection: close\r\n\r\n", .{ body.len, ep.allow, log_request_id, http.corsHeaders() }) catch {
+            const hdr = std.fmt.bufPrint(&hdr_buf, "HTTP/1.1 405 Method Not Allowed\r\nContent-Type: application/json\r\nContent-Length: {d}\r\nAllow: {s}\r\nX-Request-Id: {d}\r\n{s}" ++ http.security_headers ++ "Connection: {s}\r\n\r\n", .{ body.len, ep.allow, log_request_id, http.corsHeaders(), if (log_connection_close) "close" else "keep-alive" }) catch {
                 // Prefer a body without Allow over a silent drop (hung client).
                 sendResponse(stream, "405 Method Not Allowed", "application/json", body);
                 g_server.metrics.recordClientError();
@@ -5539,7 +5547,7 @@ fn sendAnthropic429(stream: http.TcpStream, retry_after: u32) void {
     var buf: [error_body_buf_size]u8 = undefined;
     const body = std.fmt.bufPrint(&buf, "{{\"type\":\"error\",\"error\":{{\"type\":\"rate_limit_error\",\"message\":\"Rate limit exceeded. Retry after {d} seconds.\"}}}}", .{retry_after}) catch anthropic_rate_limit_fallback;
     var hdr_buf: [hdr_buf_size]u8 = undefined;
-    const hdr = std.fmt.bufPrint(&hdr_buf, "HTTP/1.1 429 Too Many Requests\r\nContent-Type: application/json\r\nContent-Length: {d}\r\nRetry-After: {d}\r\nX-Request-Id: {d}\r\n{s}" ++ http.security_headers ++ "Connection: close\r\n\r\n", .{ body.len, retry_after, log_request_id, http.corsHeaders() }) catch {
+    const hdr = std.fmt.bufPrint(&hdr_buf, "HTTP/1.1 429 Too Many Requests\r\nContent-Type: application/json\r\nContent-Length: {d}\r\nRetry-After: {d}\r\nX-Request-Id: {d}\r\n{s}" ++ http.security_headers ++ "Connection: {s}\r\n\r\n", .{ body.len, retry_after, log_request_id, http.corsHeaders(), if (log_connection_close) "close" else "keep-alive" }) catch {
         // Always respond, a hung client is worse than a response without Retry-After.
         std.log.warn("req={d} anthropic 429 header format failed, using fallback", .{log_request_id});
         sendResponse(stream, "429 Too Many Requests", "application/json", body);
@@ -7629,26 +7637,21 @@ fn generateStream(stream: http.TcpStream, prompt: []const u8, req_id: u64, creat
 // ── Connection handler & server entry point ─────────────────────
 
 fn handleConnection(stream: http.TcpStream) void {
-    // Assign the correlation ID before any log so socket-option failures
-    // can be grepped with the same req=N as the rest of the request.
-    log_request_id = g_server.request_counter.fetchAdd(1, .monotonic);
-    log_client_rid_len = 0;
-    log_idem_token = 0;
     // Set read/write timeouts to prevent slow loris attacks, without this,
     // stream.read()/writeAll() block indefinitely and an attacker can exhaust
     // all max_concurrent_connections slots with incomplete requests or stalled reads.
     const timeout = std.posix.timeval{ .sec = connection_read_timeout_sec, .usec = 0 };
     std.posix.setsockopt(stream.handle, std.posix.SOL.SOCKET, std.posix.SO.RCVTIMEO, std.mem.asBytes(&timeout)) catch |err| {
-        std.log.warn("req={d} failed to set connection read timeout: {}", .{ log_request_id, err });
+        std.log.warn("failed to set connection read timeout: {}", .{err});
     };
     std.posix.setsockopt(stream.handle, std.posix.SOL.SOCKET, std.posix.SO.SNDTIMEO, std.mem.asBytes(&timeout)) catch |err| {
-        std.log.warn("req={d} failed to set connection write timeout: {}", .{ log_request_id, err });
+        std.log.warn("failed to set connection write timeout: {}", .{err});
     };
     // Disable Nagle's algorithm, SSE streaming writes small token chunks (~20-100 bytes)
     // that Nagle would buffer for up to 200ms waiting for ACK coalescing.
     const nodelay_val: c_int = 1;
     std.posix.setsockopt(stream.handle, std.posix.IPPROTO.TCP, std.posix.TCP.NODELAY, std.mem.asBytes(&nodelay_val)) catch |err| {
-        std.log.warn("req={d} failed to set TCP_NODELAY: {}", .{ log_request_id, err });
+        std.log.warn("failed to set TCP_NODELAY: {}", .{err});
     };
 
     // active_connections already incremented by accept loop before thread spawn.
@@ -7658,6 +7661,10 @@ fn handleConnection(stream: http.TcpStream) void {
     }
     // Heap buffer: avoid ~1MB stack per connection thread (up to max_concurrent_connections).
     const buf = g_server.allocator.alloc(u8, http_buf_size) catch {
+        log_request_id = g_server.request_counter.fetchAdd(1, .monotonic);
+        log_client_rid_len = 0;
+        log_idem_token = 0;
+        log_connection_close = true;
         g_server.metrics.recordRequest();
         g_server.metrics.recordFailure();
         const t = getTimeComponents();
@@ -7670,44 +7677,62 @@ fn handleConnection(stream: http.TcpStream) void {
         @memset(buf, 0);
         g_server.allocator.free(buf);
     }
-    switch (http.readHttpRequest(stream, buf, max_request_body_size)) {
-        .ok => |req| handleRequest(stream, req),
-        .body_too_large => |ep_path| {
-            g_server.metrics.recordRequest();
-            g_server.metrics.recordClientError();
-            const t = getTimeComponents();
-            slog(log_time_fmt ++ " req={d} Rejected oversized request body (>{d} bytes) -> 413\n", .{ t.hours, t.minutes, t.seconds, log_request_id, max_request_body_size });
-            if (isAnthropicPath(ep_path)) {
-                sendAnthropicError(stream, "413", "request_too_large", "Request body too large");
-            } else {
-                sendJsonErrorEx(stream, "413 Payload Too Large", "invalid_request_error", "Request body too large", null, "request_too_large");
-            }
-        },
-        .malformed => |ep_path| {
-            g_server.metrics.recordRequest();
-            g_server.metrics.recordClientError();
-            const t = getTimeComponents();
-            slog(log_time_fmt ++ " req={d} Malformed HTTP request -> 400\n", .{ t.hours, t.minutes, t.seconds, log_request_id });
-            if (isAnthropicPath(ep_path)) {
-                sendAnthropicError(stream, "400", "invalid_request_error", "Malformed HTTP request");
-            } else {
-                sendJsonErrorEx(stream, "400 Bad Request", "invalid_request_error", "Malformed HTTP request", null, "malformed_request");
-            }
-        },
-        // Connection-level failures below are not client protocol errors: no
-        // 4xx is produced (the peer is gone or unresponsive), so they are kept
-        // out of requests_client_error to preserve that signal's meaning.
-        // Probes/port scans make plain closes common; debug so production
-        // ReleaseFast logs are not flooded.
-        .connection_closed => {
-            g_server.metrics.recordRequest();
-            std.log.debug("req={d} connection closed before request completed", .{log_request_id});
-        },
-        .read_error => {
-            g_server.metrics.recordRequest();
-            const t = getTimeComponents();
-            slog(log_time_fmt ++ " req={d} Request read failed (timeout or reset) before completion -> closing\n", .{ t.hours, t.minutes, t.seconds, log_request_id });
-        },
+    var requests_served: u32 = 0;
+    while (true) {
+        // Assign the correlation ID before any log so socket-option failures
+        // can be grepped with the same req=N as the rest of the request.
+        log_request_id = g_server.request_counter.fetchAdd(1, .monotonic);
+        log_client_rid_len = 0;
+        log_idem_token = 0;
+        log_connection_close = true;
+        switch (http.readHttpRequest(stream, buf, max_request_body_size)) {
+            .ok => |req| {
+                requests_served += 1;
+                const budget_spent = requests_served >= max_requests_per_connection;
+                log_connection_close = budget_spent or http.wantsConnectionClose(req.headers, req.version);
+                handleRequest(stream, req);
+                if (log_connection_close) return;
+            },
+            .body_too_large => |ep_path| {
+                g_server.metrics.recordRequest();
+                g_server.metrics.recordClientError();
+                const t = getTimeComponents();
+                slog(log_time_fmt ++ " req={d} Rejected oversized request body (>{d} bytes) -> 413\n", .{ t.hours, t.minutes, t.seconds, log_request_id, max_request_body_size });
+                if (isAnthropicPath(ep_path)) {
+                    sendAnthropicError(stream, "413", "request_too_large", "Request body too large");
+                } else {
+                    sendJsonErrorEx(stream, "413 Payload Too Large", "invalid_request_error", "Request body too large", null, "request_too_large");
+                }
+            },
+            .malformed => |ep_path| {
+                g_server.metrics.recordRequest();
+                g_server.metrics.recordClientError();
+                const t = getTimeComponents();
+                slog(log_time_fmt ++ " req={d} Malformed HTTP request -> 400\n", .{ t.hours, t.minutes, t.seconds, log_request_id });
+                if (isAnthropicPath(ep_path)) {
+                    sendAnthropicError(stream, "400", "invalid_request_error", "Malformed HTTP request");
+                } else {
+                    sendJsonErrorEx(stream, "400 Bad Request", "invalid_request_error", "Malformed HTTP request", null, "malformed_request");
+                }
+            },
+            // Connection-level failures below are not client protocol errors: no
+            // 4xx is produced (the peer is gone or unresponsive), so they are kept
+            // out of requests_client_error to preserve that signal's meaning.
+            // Probes/port scans make plain closes common; debug so production
+            // ReleaseFast logs are not flooded.
+            .connection_closed => {
+                g_server.metrics.recordRequest();
+                std.log.debug("req={d} connection closed before request completed", .{log_request_id});
+            },
+            .read_error => {
+                g_server.metrics.recordRequest();
+                const t = getTimeComponents();
+                slog(log_time_fmt ++ " req={d} Request read failed (timeout or reset) before completion -> closing\n", .{ t.hours, t.minutes, t.seconds, log_request_id });
+            },
+        }
+        // Error responses close the connection: the request framing is
+        // suspect, so reuse is not safe.
+        return;
     }
 }
 

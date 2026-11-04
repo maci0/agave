@@ -96,6 +96,23 @@ pub fn acceptsEncoding(headers: []const u8, name: []const u8) bool {
     return false;
 }
 
+/// True when the client asked to close the connection after this response
+/// (`Connection: close`), or sent an HTTP/1.0 request without `keep-alive`
+/// (HTTP/1.0 closes by default). HTTP/1.1 clients keep the connection open
+/// by default, so a missing header means reuse is wanted.
+pub fn wantsConnectionClose(headers: []const u8, version: []const u8) bool {
+    if (getHeaderValue(headers, "connection")) |conn| {
+        var tokens = std.mem.splitScalar(u8, conn, ',');
+        while (tokens.next()) |raw| {
+            const token = std.mem.trim(u8, raw, " \t");
+            if (std.ascii.eqlIgnoreCase(token, "close")) return true;
+        }
+        return false;
+    }
+    // No Connection header: HTTP/1.1 defaults to keep-alive, HTTP/1.0 to close.
+    return std.ascii.eqlIgnoreCase(version, "HTTP/1.0");
+}
+
 /// True when `If-None-Match` is `*` or lists `etag` (strong or weak).
 pub fn ifNoneMatch(headers: []const u8, etag: []const u8) bool {
     const inm = getHeaderValue(headers, "if-none-match") orelse return false;
@@ -233,6 +250,8 @@ pub const HttpRequest = struct {
     query: []const u8,
     headers: []const u8,
     body: []const u8,
+    /// HTTP version from the request line (`HTTP/1.1`, `HTTP/1.0`, ...).
+    version: []const u8 = "HTTP/1.1",
 };
 
 /// Split a raw request-target into path and query (without leading `?`).
@@ -245,14 +264,15 @@ pub fn splitPathQuery(raw_path: []const u8) struct { path: []const u8, query: []
 
 /// Parse an HTTP/1.1 request-line body (`METHOD SP request-target SP HTTP-version`).
 /// Returns null if the line lacks two spaces (malformed).
-pub fn parseRequestLine(req_line: []const u8) ?struct { method: []const u8, path: []const u8, query: []const u8 } {
+pub fn parseRequestLine(req_line: []const u8) ?struct { method: []const u8, path: []const u8, query: []const u8, version: []const u8 } {
     const sp1 = std.mem.indexOf(u8, req_line, " ") orelse return null;
     const method = req_line[0..sp1];
     const rest = req_line[sp1 + 1 ..];
     const sp2 = std.mem.indexOf(u8, rest, " ") orelse return null;
     const raw_path = rest[0..sp2];
+    const version = std.mem.trim(u8, rest[sp2 + 1 ..], " \t");
     const pq = splitPathQuery(raw_path);
-    return .{ .method = method, .path = pq.path, .query = pq.query };
+    return .{ .method = method, .path = pq.path, .query = pq.query, .version = version };
 }
 
 /// Extract a single query parameter value (`key=value`). Returns null if absent.
@@ -350,6 +370,7 @@ pub fn readHttpRequest(stream: TcpStream, buf: []u8, max_body: usize) HttpReadRe
     const method = parsed_line.method;
     const path = parsed_line.path;
     const query = parsed_line.query;
+    const version = parsed_line.version;
 
     // Parse Content-Length (null = duplicate headers, reject per RFC 7230)
     const headers = buf[req_line_end + 2 .. hdr_end];
@@ -372,10 +393,10 @@ pub fn readHttpRequest(stream: TcpStream, buf: []u8, max_body: usize) HttpReadRe
             if (n == 0) return .connection_closed;
             total += n;
         }
-        return .{ .ok = .{ .method = method, .path = path, .query = query, .headers = headers, .body = buf[body_start..body_end] } };
+        return .{ .ok = .{ .method = method, .path = path, .query = query, .headers = headers, .body = buf[body_start..body_end], .version = version } };
     }
 
-    return .{ .ok = .{ .method = method, .path = path, .query = query, .headers = headers, .body = "" } };
+    return .{ .ok = .{ .method = method, .path = path, .query = query, .headers = headers, .body = "", .version = version } };
 }
 
 /// Security headers without Cache-Control. API/SSE/error responses append
