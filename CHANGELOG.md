@@ -1,7 +1,7 @@
 # Changelog
 
 All notable user-facing changes to Agave are recorded here.
-Product version is **0.14.0** (`agave --version`, `/health`, `system_fingerprint`).
+Product version is **0.15.0** (`agave --version`, `/health`, `system_fingerprint`).
 While on **0.x**, SemVer allows breaking changes without a major bump; such changes
 must still appear under **Changed** or **Breaking** below. See
 [Versioning & Releases](docs/CONTRIBUTING.md#versioning--releases).
@@ -10,6 +10,21 @@ must still appear under **Changed** or **Breaking** below. See
 > SemVer. Do not treat it as release `1.0.0`.
 
 ## [Unreleased]
+
+## [0.15.0] - 2026-11-06
+
+
+### Breaking
+- `GET`/`POST /v1/kv_cache` blobs now carry a 40-byte header naming the format version, cache geometry and RoPE bases. Import refuses anything that disagrees with the loaded model, where before a same-sized blob from another model restored and then decoded nonsense. Blobs exported by 0.14.0 or earlier are rejected; re-export them. See [docs/API.md](docs/API.md#cross-instance-kv-cache-sharing).
+
+### Added
+- `zig build gate` checks decode throughput against `benchmarks/baselines.json` at a 5% tolerance and requires two greedy runs at one seed to match byte for byte. Baselines ship empty and are recorded per machine with `python3 scripts/perf-gate.py --update-baselines`.
+- Qwen4-Exp hints the PLE table rows a token hashes to before reading them, instead of taking one blocking page fault per row.
+- `POST /v1/systemone` answers typed decision questions (`noul`, `choice`, `score`) about a state. Each question is one prefill and the answer is the softmax over its label tokens, so nothing is generated and `usage.output_tokens` is always `0`. Matches the shapes llama.cpp, vLLM, SGLang, Ollama and LM Studio converged on this quarter. See [docs/API.md](docs/API.md#post-v1systemone).
+
+### Changed
+- Tool-call and reasoning delimiters come from the loaded chat template instead of being `<tool_call>` and `<think>` literals in the server. An architecture that wraps calls or reasoning in a different pair declares it on its `ChatTemplate` and both the tool-use system prompt and the response parser follow; there is no per-model parser to add.
+- The Docker image uses the 2026-10-27 Debian Bookworm snapshot.
 
 ### Fixed
 - Speculative decoding corrupted recurrent state on hybrid models. Verification rewinds the target with `setKvSeqLen` and replays the accepted prefix, which is exact for attention and a no-op for the DeltaNet conv and recurrence states, so the replay double-consumed the prefix and drifted further every round. Affected Qwen 3.5 and Qwen4-Exp on `--spec-mode self`, `ddtree` and `mtp`, and on the tree-verify replay path.
@@ -21,17 +36,6 @@ must still appear under **Changed** or **Breaking** below. See
 - WebGPU RoPE rotated the wrong element pairs. It paired adjacent elements where the CPU and Metal kernels and the GGUF weight layout pair `i` with `i + rope_dim/2`, so every model decoded wrong output on WebGPU. Also fixed there: `gemv_q4_1` on an input width off a 32-element multiple, and an embedding lookup that read up to 1.05 GB past the table and crashed. `zig build validate -Dvalidate-backend=webgpu` now passes; it reported seven failures before.
 - Three Metal kernels produced wrong results. `gemm_q8_0` and `gemm_q4_0` truncated the quantization block count that is also their row stride, so any input width off a 32-element multiple read every row after the first from the wrong offset; their tail block also ran past the token's row into the next token's activations. `gemv_t` was dispatched as `out_dim` threads instead of the `out_dim` threadgroups it is written for, leaving most outputs unwritten. `zig build validate -Dvalidate-backend=metal` now passes; it reported three failures before.
 - `--spec-mode` silently disabled `--top-k`, `--top-p`, `--min-p` and `--xtc-*`: verification compared draft tokens against an untruncated softmax and drew its bonus token with truncation off, so speculative and non-speculative decoding sampled from different distributions.
-
-### Added
-- `zig build gate` checks decode throughput against `benchmarks/baselines.json` at a 5% tolerance and requires two greedy runs at one seed to match byte for byte. Baselines ship empty and are recorded per machine with `python3 scripts/perf-gate.py --update-baselines`.
-- Qwen4-Exp hints the PLE table rows a token hashes to before reading them, instead of taking one blocking page fault per row.
-- `POST /v1/systemone` answers typed decision questions (`noul`, `choice`, `score`) about a state. Each question is one prefill and the answer is the softmax over its label tokens, so nothing is generated and `usage.output_tokens` is always `0`. Matches the shapes llama.cpp, vLLM, SGLang, Ollama and LM Studio converged on this quarter. See [docs/API.md](docs/API.md#post-v1systemone).
-
-### Changed
-- Tool-call and reasoning delimiters come from the loaded chat template instead of being `<tool_call>` and `<think>` literals in the server. An architecture that wraps calls or reasoning in a different pair declares it on its `ChatTemplate` and both the tool-use system prompt and the response parser follow; there is no per-model parser to add.
-
-### Breaking
-- `GET`/`POST /v1/kv_cache` blobs now carry a 40-byte header naming the format version, cache geometry and RoPE bases. Import refuses anything that disagrees with the loaded model, where before a same-sized blob from another model restored and then decoded nonsense. Blobs exported by 0.13.0 or earlier are rejected; re-export them. See [docs/API.md](docs/API.md#cross-instance-kv-cache-sharing).
 
 ## [0.14.0] - 2026-11-05
 
@@ -1947,7 +1951,8 @@ Hardware-verified on dual NVIDIA GB10 over ConnectX RoCE RDMA:
 - 11 fuzz tests for parsers (JSON, GBNF, JSON schema) and samplers
 - Test compile fixes for device_id parameter + MockModel
 
-[unreleased]: https://github.com/maci0/agave/compare/v0.14.0...HEAD
+[unreleased]: https://github.com/maci0/agave/compare/v0.15.0...HEAD
+[0.15.0]: https://github.com/maci0/agave/compare/v0.14.0...v0.15.0
 [0.14.0]: https://github.com/maci0/agave/compare/v0.13.0...v0.14.0
 [0.13.0]: https://github.com/maci0/agave/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/maci0/agave/compare/v0.11.0...v0.12.0

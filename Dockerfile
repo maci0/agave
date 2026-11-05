@@ -10,9 +10,9 @@ ARG TARGETARCH
 # Freeze apt to the same calendar day as the FROM tag. A dated image alone is not
 # enough: `apt-get update` against deb.debian.org still floats package versions.
 # Bump this when bumping debian:bookworm-YYYYMMDD-slim (CI checks they match).
-ARG DEBIAN_SNAPSHOT=20260918T000000Z
-# 2026-09-18 00:00:00 UTC; keep aligned with DEBIAN_SNAPSHOT / FROM tag day.
-ARG SOURCE_DATE_EPOCH=1789689600
+ARG DEBIAN_SNAPSHOT=20261027T000000Z
+# 2026-10-27 00:00:00 UTC; keep aligned with DEBIAN_SNAPSHOT / FROM tag day.
+ARG SOURCE_DATE_EPOCH=1793059200
 
 # Backend enable flags. Metal disabled by default (macOS-only, not usable in Docker).
 ARG ENABLE_CPU=true
@@ -162,8 +162,8 @@ RUN --mount=type=cache,target=/src/.zig-cache \
 FROM debian:bookworm-20261027-slim
 
 # Keep in sync with the build stage (same FROM day / snapshot).
-ARG DEBIAN_SNAPSHOT=20260918T000000Z
-ARG SOURCE_DATE_EPOCH=1789689600
+ARG DEBIAN_SNAPSHOT=20261027T000000Z
+ARG SOURCE_DATE_EPOCH=1793059200
 
 # Version label: build-arg validated against build.zig.zon in the build stage.
 # LABEL cannot read files, so plain builds fall back to "dev"; the authoritative
