@@ -12,9 +12,20 @@ const FORM_HEADERS = { 'Content-Type': 'application/x-www-form-urlencoded' } as 
 export const newRequestId = (): string => {
   // RandomUUID needs a secure context, and the UI is reachable over plain
   // HTTP on a LAN address, so the fallback keeps keys inside the sanitize set.
+  // Date.now() alone collides for two actions in the same millisecond (and
+  // moves backwards on an NTP step), so the fallback mints from crypto
+  // randomness when available without a UUID, and only then falls back to a
+  // counter-suffixed wall clock that cannot repeat within a page session.
   if ('randomUUID' in crypto) { return crypto.randomUUID(); }
-  return `${Date.now().toString(16)}.${Math.random().toString(16).slice(2, 10)}`;
+  const cryptoLike = crypto as unknown as { getRandomValues?: (arr: Uint8Array) => void };
+  if (typeof cryptoLike.getRandomValues === 'function') {
+    const bytes = new Uint8Array(16);
+    cryptoLike.getRandomValues(bytes);
+    return [...bytes].map((b) => b.toString(16).padStart(2, '0')).join('');
+  }
+  return `${Date.now().toString(16)}.${newRequestCounter++}`;
 };
+let newRequestCounter = 0;
 
 /** Map HTTP status codes to short messages that say what to do next for the chat UI. */
 export const httpErrorMessage = (status: number): string => {
