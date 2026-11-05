@@ -54,7 +54,7 @@ pub const NgramCache = struct {
         if (shard_id >= self.n_shards) return false;
         if (self.lookup[shard_id]) |slot_idx| {
             std.debug.assert(slot_idx < self.n_slots);
-            self.access_counter += 1;
+            self.tick();
             self.slots[slot_idx].last_access = self.access_counter;
             self.hits += 1;
             return true;
@@ -63,11 +63,22 @@ pub const NgramCache = struct {
         return false;
     }
 
+    /// Advance the LRU clock, re-stamping on wrap so ordering stays monotonic.
+    inline fn tick(self: *NgramCache) void {
+        self.access_counter = self.access_counter +% 1;
+        if (self.access_counter == 0) {
+            for (self.slots, 0..) |*slot, i| {
+                if (slot.occupied) slot.last_access = @as(u64, @intCast(i)) + 1;
+            }
+            self.access_counter = @as(u64, @intCast(self.n_slots));
+        }
+    }
+
     pub fn admit(self: *NgramCache, shard_id: u32) u32 {
         if (shard_id >= self.n_shards) return std.math.maxInt(u32);
         if (self.lookup[shard_id]) |slot_idx| {
             std.debug.assert(slot_idx < self.n_slots);
-            self.access_counter += 1;
+            self.tick();
             self.slots[slot_idx].last_access = self.access_counter;
             return slot_idx;
         }
@@ -93,9 +104,10 @@ pub const NgramCache = struct {
         }
         if (!found_free and self.slots[target].occupied) {
             const old = self.slots[target];
+            std.debug.assert(old.shard_id < self.n_shards);
             self.lookup[old.shard_id] = null;
         }
-        self.access_counter += 1;
+        self.tick();
         self.slots[target] = .{ .shard_id = shard_id, .last_access = self.access_counter, .occupied = true };
         self.lookup[shard_id] = target;
         return target;
@@ -103,9 +115,14 @@ pub const NgramCache = struct {
 
     /// Demand-page a shard via madvise(WILLNEED) on its mapped region.
     pub fn prefetch(self: *NgramCache, shard_id: u32, base_ptr: [*]const u8, shard_bytes: usize) void {
+        if (shard_id >= self.n_shards) return;
         _ = self.admit(shard_id);
         if (shard_bytes == 0) return;
-        const offset = @as(usize, shard_id) * shard_bytes;
+        // @as(u64, shard_id) * shard_bytes must fit the mapped region; the
+        // usize product below is only checked by @mulWithOverflow, so the
+        // explicit overflow check keeps a truncated offset from prefaulting
+        // the wrong bytes on 32-bit targets where it could wrap.
+        const offset = std.math.mul(usize, @as(usize, shard_id), shard_bytes) catch return;
         backend_mod.hostPrefault(base_ptr + offset, shard_bytes);
     }
 

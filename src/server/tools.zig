@@ -172,8 +172,8 @@ test "fuzz: registry register/dispose/unregister/merge state machine" {
     try std.testing.fuzz({}, struct {
         fn f(_: void, smith: *std.testing.Smith) !void {
             const names = [_][]const u8{
-                "alpha", "beta", "gamma", "delta",
-                "search", "code",  "x",     "",
+                "alpha",  "beta", "gamma", "delta",
+                "search", "code", "x",     "",
             };
             const n_ops = smith.indexWithHash(24, 0) + 1;
 

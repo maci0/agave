@@ -302,11 +302,12 @@ test "fuzz: clispec output scan and schema path" {
             // Splice fuzzed bytes into a plausible argv so the output-mode
             // parser reaches value validation, not just the token boundary.
             const vocab = [_][]const u8{
-                "agave",     "--output", "--output=json", "--output=text",
-                "--output=auto", "--output=bogus", "--json", "-o", "json",
-                "text",      "auto",     "schema",          "pull",
-                "calibrate", "--",       "-ojson",          "-o",
-                "--help",    "-h",       "help",            "",
+                "agave",         "--output",       "--output=json", "--output=text",
+                "--output=auto", "--output=bogus", "--json",        "-o",
+                "json",          "text",           "auto",          "schema",
+                "pull",          "calibrate",      "--",            "-ojson",
+                "-o",            "--help",         "-h",            "help",
+                "",
             };
             var arg_storage: [6][16:0]u8 = undefined;
             var argv: [6][*:0]const u8 = undefined;

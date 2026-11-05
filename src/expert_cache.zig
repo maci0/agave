@@ -109,12 +109,23 @@ pub const ExpertCache = struct {
         self.lookup = &.{};
     }
 
+    /// Advance the LRU clock, re-stamping on wrap so ordering stays monotonic.
+    inline fn tick(self: *ExpertCache) void {
+        self.access_counter = self.access_counter +% 1;
+        if (self.access_counter == 0) {
+            for (self.slots, 0..) |*slot, i| {
+                if (slot.occupied) slot.last_access = @as(u64, @intCast(i)) + 1;
+            }
+            self.access_counter = @as(u64, @intCast(self.n_slots));
+        }
+    }
+
     /// Check if an expert is in the cache. If yes, update its access time.
     pub inline fn touch(self: *ExpertCache, layer: u32, expert_id: u32) bool {
         const key = @as(usize, layer) * self.n_experts + expert_id;
         if (key >= self.lookup.len) return false;
         if (self.lookup[key]) |slot_idx| {
-            self.access_counter += 1;
+            self.tick();
             self.slots[slot_idx].last_access = self.access_counter;
             self.hits += 1;
             return true;
@@ -132,7 +143,7 @@ pub const ExpertCache = struct {
         const key = @as(usize, layer) * self.n_experts + expert_id;
         if (key >= self.lookup.len) return std.math.maxInt(u32);
         if (self.lookup[key]) |slot_idx| {
-            self.access_counter += 1;
+            self.tick();
             self.slots[slot_idx].last_access = self.access_counter;
             return slot_idx;
         }
@@ -173,7 +184,7 @@ pub const ExpertCache = struct {
         }
 
         // Install the new expert
-        self.access_counter += 1;
+        self.tick();
         self.slots[target_slot] = CacheSlot{
             .layer = layer,
             .expert_id = expert_id,
@@ -188,8 +199,9 @@ pub const ExpertCache = struct {
     /// Prefetch an expert's weights from the mmap'd model file.
     /// Calls madvise(WILLNEED) on the expert's byte range.
     pub fn prefetch(self: *ExpertCache, layer: u32, expert_id: u32, base_ptr: [*]const u8, expert_bytes: usize) void {
+        const key = @as(usize, layer) * self.n_experts + expert_id;
+        if (key >= self.lookup.len) return;
         _ = self.admit(layer, expert_id);
-
         backend_mod.hostPrefault(base_ptr, expert_bytes);
     }
 
@@ -268,7 +280,7 @@ pub const ExpertCache = struct {
         const out = ids[0..@min(k, max_prefetch_k)];
         const found = self.getTopResidents(layer, out);
         for (0..found) |i| {
-            const offset = @as(usize, out[i]) * expert_bytes;
+            const offset = std.math.mul(usize, @as(usize, out[i]), expert_bytes) catch continue;
             backend_mod.hostPrefault(base_ptr + offset, expert_bytes);
         }
     }

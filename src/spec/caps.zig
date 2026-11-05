@@ -118,9 +118,9 @@ test "fuzz: spec caps provider requirements" {
     try std.testing.fuzz({}, struct {
         fn f(_: void, smith: *std.testing.Smith) !void {
             const modes = [_]SpecMode{
-                .none,      .standard, .ddtree,   .self_spec, .ngram,
-                .suffix,    .mtp,      .eagle,    .eagle3,    .mlp,
-                .lookahead, .pflash,   .dspark,   .dflash2,
+                .none,      .standard, .ddtree, .self_spec, .ngram,
+                .suffix,    .mtp,      .eagle,  .eagle3,    .mlp,
+                .lookahead, .pflash,   .dspark, .dflash2,
             };
             const mode = modes[smith.indexWithHash(modes.len, 0)];
             const caps = Caps{
