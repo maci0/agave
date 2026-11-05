@@ -795,12 +795,32 @@ pub fn extractMessages(json: []const u8, allocator: Allocator) ?ExtractedMessage
         // The array form is checked first: extractField retries past a key whose
         // value is not a string, so on `"content": [{...}]` it would return the
         // first nested string (a part's type, or a tool result's content).
-        const owned_content: []u8 = if (joinContentParts(allocator, obj_slice) catch continue) |joined| blk: {
+        const owned_content: []u8 = if (joinContentParts(allocator, obj_slice) catch |err| {
+            // OOM mid-message must not silently drop this turn and continue
+            // with the rest: a partial conversation is worse than none, and
+            // the caller falls back to the last message only when nothing was
+            // extracted. Log and abort the whole extraction so the fallback
+            // path runs instead of a silently truncated history.
+            std.log.err("extractMessages: allocation failure decoding message {d} content ({s}); discarding partial conversation", .{ count, @errorName(err) });
+            for (messages_buf[0..count]) |msg| wipeFree(allocator, @constCast(msg.content));
+            if (system_msg) |sys| wipeFree(allocator, @constCast(sys));
+            return null;
+        }) |joined| blk: {
             tool_use_id = joined.tool_use_id;
             break :blk joined.text;
         } else if (extractField(obj_slice, "content")) |c|
-            (jsonUnescapeOwned(allocator, c) catch continue)
-        else if (is_assistant) (allocator.dupe(u8, "") catch continue) else continue;
+            (jsonUnescapeOwned(allocator, c) catch |err| {
+                std.log.err("extractMessages: allocation failure decoding message {d} content ({s}); discarding partial conversation", .{ count, @errorName(err) });
+                for (messages_buf[0..count]) |msg| wipeFree(allocator, @constCast(msg.content));
+                if (system_msg) |sys| wipeFree(allocator, @constCast(sys));
+                return null;
+            })
+        else if (is_assistant) (allocator.dupe(u8, "") catch |err| {
+            std.log.err("extractMessages: allocation failure for empty assistant message {d} ({s}); discarding partial conversation", .{ count, @errorName(err) });
+            for (messages_buf[0..count]) |msg| wipeFree(allocator, @constCast(msg.content));
+            if (system_msg) |sys| wipeFree(allocator, @constCast(sys));
+            return null;
+        }) else continue;
 
         // OpenAI o1/o3 SDK sends "developer" role instead of "system", normalize.
         if (std.mem.eql(u8, role_str, "system") or std.mem.eql(u8, role_str, "developer")) {

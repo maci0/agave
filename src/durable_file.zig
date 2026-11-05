@@ -118,17 +118,24 @@ pub fn syncFd(fd: std.posix.fd_t) !void {
     }
 }
 
-/// Best-effort fsync of the directory that contains `path`, so a rename is
-/// durable. Failures are ignored: the rename itself already succeeded.
-pub fn syncParent(path: []const u8) void {
+/// Fsync of the directory that contains `path`, so a rename is durable.
+/// A failed dir fsync or a failed open leaves the rename durable in name
+/// only: the caller must see it, because the file it just published can
+/// vanish on crash. `replaceWithMode` propagates this; the one direct
+/// caller (`calibrate.zig`, which publishes via its own rename) also
+/// propagates it, so neither side pretends a rename is durable when it is
+/// not. Failure modes: `error.FileSyncFailed` (fsync failed) or the
+/// `openat` error (parent unreadable/unreachable).
+pub fn syncParent(path: []const u8) !void {
     if (comptime !posix_sync) return;
     const parent = std.fs.path.dirname(path) orelse ".";
-    const fd = std.posix.openat(std.posix.AT.FDCWD, parent, .{
+    const fd = try std.posix.openat(std.posix.AT.FDCWD, parent, .{
         .ACCMODE = .RDONLY,
         .DIRECTORY = true,
-    }, 0) catch return;
+    }, 0);
     defer closeFd(fd);
-    _ = std.c.fsync(fd);
+    const rc = std.c.fsync(fd);
+    if (rc != 0) return error.FileSyncFailed;
 }
 
 /// Rename `old_path` over `new_path`. Both must be on the same filesystem.
@@ -211,7 +218,7 @@ fn replaceWithMode(path: []const u8, data: []const u8, file_mode: std.posix.mode
     try closeFdChecked(fd);
     try renameOver(tmp_path, path);
     if (injectIfArmed(.rename)) |mode| return fault(mode, &injected_crash);
-    syncParent(path);
+    try syncParent(path);
     if (injectIfArmed(.dir_sync)) |mode| return fault(mode, &injected_crash);
 }
 

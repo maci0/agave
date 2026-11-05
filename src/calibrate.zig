@@ -538,7 +538,7 @@ fn writeCalFile(result: *const CalibrationResult, path: []const u8) !void {
     file.close(io);
     fd_open = false;
     try Io.Dir.rename(Io.Dir.cwd(), tmp_path, Io.Dir.cwd(), path, io);
-    durable.syncParent(path);
+    try durable.syncParent(path);
 }
 
 /// Default `.cal` path for a model path: `model.gguf` -> `model.cal`, and a
