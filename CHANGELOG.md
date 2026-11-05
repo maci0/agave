@@ -1,7 +1,7 @@
 # Changelog
 
 All notable user-facing changes to Agave are recorded here.
-Product version is **0.13.0** (`agave --version`, `/health`, `system_fingerprint`).
+Product version is **0.14.0** (`agave --version`, `/health`, `system_fingerprint`).
 While on **0.x**, SemVer allows breaking changes without a major bump; such changes
 must still appear under **Changed** or **Breaking** below. See
 [Versioning & Releases](docs/CONTRIBUTING.md#versioning--releases).
@@ -10,6 +10,8 @@ must still appear under **Changed** or **Breaking** below. See
 > SemVer. Do not treat it as release `1.0.0`.
 
 ## [Unreleased]
+
+## [0.14.0] - 2026-11-05
 
 ### Breaking
 
@@ -1923,7 +1925,8 @@ Hardware-verified on dual NVIDIA GB10 over ConnectX RoCE RDMA:
 - 11 fuzz tests for parsers (JSON, GBNF, JSON schema) and samplers
 - Test compile fixes for device_id parameter + MockModel
 
-[unreleased]: https://github.com/maci0/agave/compare/v0.13.0...HEAD
+[unreleased]: https://github.com/maci0/agave/compare/v0.14.0...HEAD
+[0.14.0]: https://github.com/maci0/agave/compare/v0.13.0...v0.14.0
 [0.13.0]: https://github.com/maci0/agave/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/maci0/agave/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/maci0/agave/compare/v0.10.2...v0.11.0
