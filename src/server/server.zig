@@ -3595,8 +3595,8 @@ fn handleRequest(stream: http.TcpStream, req: http.HttpRequest) void {
 
         const regen_body = req.body;
         var regen_sampling = json.SamplingParams{};
-        json.parseFormSampling(&regen_sampling, regen_body);
-        const regen_max_tokens = clampMaxTokens(json.extractFormInt(regen_body, "max_tokens"));
+        json.parseFormSampling(g_server.allocator, &regen_sampling, regen_body);
+        const regen_max_tokens = clampMaxTokens(json.extractFormInt(g_server.allocator, regen_body, "max_tokens"));
 
         // Extract optional system prompt (URL-decode since web UI sends encodeURIComponent)
         const regen_system_field = json.extractFormField(regen_body, "system");
@@ -3692,7 +3692,7 @@ fn handleRequest(stream: http.TcpStream, req: http.HttpRequest) void {
         std.log.info("req={d} regenerate from {d} messages", .{ log_request_id, regen_msg_count });
 
         // Always reset KV cache for regeneration (full re-prefill)
-        const wants_stream_regen = json.extractFormBool(regen_body, "stream");
+        const wants_stream_regen = json.extractFormBool(g_server.allocator, regen_body, "stream");
         if (wants_stream_regen) {
             if (!sendSseHeaders(stream)) {
                 g_server.metrics.recordCancellation();
@@ -3939,11 +3939,11 @@ fn handleRequest(stream: http.TcpStream, req: http.HttpRequest) void {
 
         // Parse optional sampling parameters from form body
         var chat_sampling = json.SamplingParams{};
-        json.parseFormSampling(&chat_sampling, body);
-        const chat_max_tokens = clampMaxTokens(json.extractFormInt(body, "max_tokens"));
+        json.parseFormSampling(g_server.allocator, &chat_sampling, body);
+        const chat_max_tokens = clampMaxTokens(json.extractFormInt(g_server.allocator, body, "max_tokens"));
 
         // SSE streaming mode: stream tokens to the client in real-time
-        const wants_stream = json.extractFormBool(body, "stream");
+        const wants_stream = json.extractFormBool(g_server.allocator, body, "stream");
         if (wants_stream) {
             if (!sendSseHeaders(stream)) {
                 g_server.metrics.recordCancellation();

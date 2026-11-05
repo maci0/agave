@@ -2055,9 +2055,9 @@ test "fuzz: extractFormField + extractFormBool + extractFormFloat + extractFormI
             const len = smith.indexWithHash(buf.len + 1, 1);
             const input = buf[0..len];
             _ = json.extractFormField(input, "prompt");
-            _ = json.extractFormBool(input, "stream");
-            _ = json.extractFormFloat(input, "temperature");
-            _ = json.extractFormInt(input, "max_tokens");
+            _ = json.extractFormBool(std.testing.allocator, input, "stream");
+            _ = json.extractFormFloat(std.testing.allocator, input, "temperature");
+            _ = json.extractFormInt(std.testing.allocator, input, "max_tokens");
         }
     }.f, .{});
 }
@@ -2069,7 +2069,7 @@ test "fuzz: parseFormSampling no crash" {
             smith.bytesWithHash(&buf, 0);
             const len = smith.indexWithHash(buf.len + 1, 1);
             var s = json.SamplingParams{};
-            json.parseFormSampling(&s, buf[0..len]);
+            json.parseFormSampling(std.testing.allocator, &s, buf[0..len]);
             try std.testing.expect(std.math.isFinite(s.temperature) and s.temperature >= 0);
             try std.testing.expect(std.math.isFinite(s.top_p));
         }

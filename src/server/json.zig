@@ -872,44 +872,59 @@ pub fn extractFormField(body: []const u8, field: []const u8) ?[]const u8 {
     return null;
 }
 
+/// Percent-decoded form field: `+` → space, `%XX` → byte, invalid UTF-8
+/// runs replaced with U+FFFD (see `urlDecode`). Numeric fields must use
+/// this: `encodeURIComponent` percent-encodes non-ASCII digits, so
+/// "١٢٣" arrives as "%D9%A1%D9%A2%D9%A3" and parses only after decoding.
+pub fn extractFormFieldDecoded(allocator: Allocator, body: []const u8, field: []const u8) ?[]u8 {
+    const raw = extractFormField(body, field) orelse return null;
+    return urlDecode(allocator, raw) catch return null;
+}
+
 /// Extract a boolean value from a URL-encoded form field.
 /// Returns true for values "1", "true", "yes", "on" (case-insensitive).
 /// Returns false if the field is missing, empty, or has any other value.
-pub fn extractFormBool(body: []const u8, field: []const u8) bool {
+pub fn extractFormBool(allocator: Allocator, body: []const u8, field: []const u8) bool {
     const raw = extractFormField(body, field) orelse return false;
     if (raw.len == 0) return false;
-    if (std.mem.eql(u8, raw, "1")) return true;
-    if (raw.len == 4 and std.ascii.eqlIgnoreCase(raw, "true")) return true;
-    if (raw.len == 3 and std.ascii.eqlIgnoreCase(raw, "yes")) return true;
-    if (raw.len == 2 and std.ascii.eqlIgnoreCase(raw, "on")) return true;
+    const decoded = urlDecode(allocator, raw) catch return false;
+    defer allocator.free(decoded);
+    if (std.mem.eql(u8, decoded, "1")) return true;
+    if (decoded.len == 4 and std.ascii.eqlIgnoreCase(decoded, "true")) return true;
+    if (decoded.len == 3 and std.ascii.eqlIgnoreCase(decoded, "yes")) return true;
+    if (decoded.len == 2 and std.ascii.eqlIgnoreCase(decoded, "on")) return true;
     return false;
 }
 
 /// Extract a float value from a URL-encoded form field.
 /// Returns null if the field is missing, cannot be parsed, or is non-finite
 /// (overflow like `1e999` → Inf), matching `extractFloatField`.
-pub fn extractFormFloat(body: []const u8, field: []const u8) ?f32 {
+pub fn extractFormFloat(allocator: Allocator, body: []const u8, field: []const u8) ?f32 {
     const raw = extractFormField(body, field) orelse return null;
     if (raw.len == 0) return null;
-    const v = std.fmt.parseFloat(f32, raw) catch return null;
+    const decoded = urlDecode(allocator, raw) catch return null;
+    defer allocator.free(decoded);
+    const v = std.fmt.parseFloat(f32, decoded) catch return null;
     if (!std.math.isFinite(v)) return null;
     return v;
 }
 
 /// Extract an unsigned integer value from a URL-encoded form field.
 /// Returns null if the field is missing or cannot be parsed.
-pub fn extractFormInt(body: []const u8, field: []const u8) ?usize {
+pub fn extractFormInt(allocator: Allocator, body: []const u8, field: []const u8) ?usize {
     const raw = extractFormField(body, field) orelse return null;
     if (raw.len == 0) return null;
-    return std.fmt.parseInt(usize, raw, 10) catch null;
+    const decoded = urlDecode(allocator, raw) catch return null;
+    defer allocator.free(decoded);
+    return std.fmt.parseInt(usize, decoded, 10) catch null;
 }
 
 /// Parse and clamp sampling parameters from a URL-encoded form body into `out`.
 /// Negative temperature is treated as 0 (greedy). top_p is clamped to [0, 1].
-pub fn parseFormSampling(out: *SamplingParams, body: []const u8) void {
-    const raw_temp = extractFormFloat(body, "temperature") orelse 0;
-    const raw_top_p = extractFormFloat(body, "top_p") orelse 1.0;
-    const raw_top_k = extractFormInt(body, "top_k") orelse 0;
+pub fn parseFormSampling(allocator: Allocator, out: *SamplingParams, body: []const u8) void {
+    const raw_temp = extractFormFloat(allocator, body, "temperature") orelse 0;
+    const raw_top_p = extractFormFloat(allocator, body, "top_p") orelse 1.0;
+    const raw_top_k = extractFormInt(allocator, body, "top_k") orelse 0;
     out.* = .{
         .temperature = if (std.math.isFinite(raw_temp)) std.math.clamp(raw_temp, 0, max_temperature) else 0,
         .top_k = @intCast(@min(raw_top_k, max_top_k)),
@@ -1041,6 +1056,27 @@ pub fn urlDecode(allocator: Allocator, input: []const u8) ![]u8 {
             result.appendAssumeCapacity(input[i]);
             i += 1;
         }
+    }
+    // Percent-decoding manufactures bytes; a multi-byte sequence split
+    // across chunks or truncated yields invalid UTF-8. Replace each invalid
+    // run with U+FFFD so downstream text (tokenizer, JSON) sees well-formed
+    // UTF-8 instead of silently mangled bytes.
+    if (std.unicode.utf8ValidateSlice(result.items)) {
+        return result.toOwnedSlice(allocator);
+    }
+    i = 0;
+    while (i < result.items.len) {
+        const seq_len = std.unicode.utf8ByteSequenceLength(result.items[i]) catch {
+            result.replaceRange(allocator, i, 1, utf8_replacement) catch break;
+            i += utf8_replacement.len;
+            continue;
+        };
+        if (i + seq_len > result.items.len or std.unicode.utf8Decode(result.items[i..][0..seq_len]) == error.InvalidUtf8) {
+            result.replaceRange(allocator, i, 1, utf8_replacement) catch break;
+            i += utf8_replacement.len;
+            continue;
+        }
+        i += seq_len;
     }
     return result.toOwnedSlice(allocator);
 }
@@ -1509,31 +1545,31 @@ test "jsonUnescapeOwned always allocates" {
 
 test "extractFormFloat parses valid floats" {
     const body = "temperature=0.7&top_p=0.9&message=hello";
-    const temp = extractFormFloat(body, "temperature");
+    const temp = extractFormFloat(std.testing.allocator, body, "temperature");
     try std.testing.expect(temp != null);
     try std.testing.expect(@abs(temp.? - 0.7) < 0.001);
-    const top_p = extractFormFloat(body, "top_p");
+    const top_p = extractFormFloat(std.testing.allocator, body, "top_p");
     try std.testing.expect(top_p != null);
     try std.testing.expect(@abs(top_p.? - 0.9) < 0.001);
 }
 
 test "extractFormFloat returns null for missing or invalid" {
-    try std.testing.expect(extractFormFloat("message=hello", "temperature") == null);
-    try std.testing.expect(extractFormFloat("temperature=abc", "temperature") == null);
-    try std.testing.expect(extractFormFloat("temperature=", "temperature") == null);
+    try std.testing.expect(extractFormFloat(std.testing.allocator, "message=hello", "temperature") == null);
+    try std.testing.expect(extractFormFloat(std.testing.allocator, "temperature=abc", "temperature") == null);
+    try std.testing.expect(extractFormFloat(std.testing.allocator, "temperature=", "temperature") == null);
 }
 
 test "extractFormInt parses valid integers" {
     const body = "max_tokens=256&stream=1";
-    const mt = extractFormInt(body, "max_tokens");
+    const mt = extractFormInt(std.testing.allocator, body, "max_tokens");
     try std.testing.expect(mt != null);
     try std.testing.expectEqual(@as(usize, 256), mt.?);
 }
 
 test "extractFormInt returns null for missing or invalid" {
-    try std.testing.expect(extractFormInt("message=hello", "max_tokens") == null);
-    try std.testing.expect(extractFormInt("max_tokens=abc", "max_tokens") == null);
-    try std.testing.expect(extractFormInt("max_tokens=", "max_tokens") == null);
+    try std.testing.expect(extractFormInt(std.testing.allocator, "message=hello", "max_tokens") == null);
+    try std.testing.expect(extractFormInt(std.testing.allocator, "max_tokens=abc", "max_tokens") == null);
+    try std.testing.expect(extractFormInt(std.testing.allocator, "max_tokens=", "max_tokens") == null);
 }
 
 test "extractFormImage with data URI" {
@@ -1548,19 +1584,19 @@ test "extractFormImage returns null when missing" {
 }
 
 test "extractFormBool returns true for truthy values" {
-    try std.testing.expect(extractFormBool("stream=1&message=hi", "stream"));
-    try std.testing.expect(extractFormBool("stream=true&message=hi", "stream"));
-    try std.testing.expect(extractFormBool("stream=TRUE&message=hi", "stream"));
-    try std.testing.expect(extractFormBool("stream=yes", "stream"));
-    try std.testing.expect(extractFormBool("stream=on", "stream"));
+    try std.testing.expect(extractFormBool(std.testing.allocator, "stream=1&message=hi", "stream"));
+    try std.testing.expect(extractFormBool(std.testing.allocator, "stream=true&message=hi", "stream"));
+    try std.testing.expect(extractFormBool(std.testing.allocator, "stream=TRUE&message=hi", "stream"));
+    try std.testing.expect(extractFormBool(std.testing.allocator, "stream=yes", "stream"));
+    try std.testing.expect(extractFormBool(std.testing.allocator, "stream=on", "stream"));
 }
 
 test "extractFormBool returns false for falsy or missing values" {
-    try std.testing.expect(!extractFormBool("stream=0&message=hi", "stream"));
-    try std.testing.expect(!extractFormBool("stream=false&message=hi", "stream"));
-    try std.testing.expect(!extractFormBool("stream=&message=hi", "stream"));
-    try std.testing.expect(!extractFormBool("message=hi", "stream"));
-    try std.testing.expect(!extractFormBool("stream=no", "stream"));
+    try std.testing.expect(!extractFormBool(std.testing.allocator, "stream=0&message=hi", "stream"));
+    try std.testing.expect(!extractFormBool(std.testing.allocator, "stream=false&message=hi", "stream"));
+    try std.testing.expect(!extractFormBool(std.testing.allocator, "stream=&message=hi", "stream"));
+    try std.testing.expect(!extractFormBool(std.testing.allocator, "message=hi", "stream"));
+    try std.testing.expect(!extractFormBool(std.testing.allocator, "stream=no", "stream"));
 }
 
 test "extractFormImage with unencoded comma" {
@@ -1573,31 +1609,31 @@ test "extractFormImage with unencoded comma" {
 test "parseFormSampling clamps values" {
     // Within range
     var s1 = SamplingParams{};
-    parseFormSampling(&s1, "temperature=0.8&top_p=0.95&top_k=50");
+    parseFormSampling(std.testing.allocator, &s1, "temperature=0.8&top_p=0.95&top_k=50");
     try std.testing.expectApproxEqAbs(@as(f32, 0.8), s1.temperature, 0.001);
     try std.testing.expectApproxEqAbs(@as(f32, 0.95), s1.top_p, 0.001);
     try std.testing.expectEqual(@as(u32, 50), s1.top_k);
 
     // Defaults when missing
     var s2 = SamplingParams{};
-    parseFormSampling(&s2, "message=hello");
+    parseFormSampling(std.testing.allocator, &s2, "message=hello");
     try std.testing.expectEqual(@as(f32, 0), s2.temperature);
     try std.testing.expectEqual(@as(f32, 1.0), s2.top_p);
     try std.testing.expectEqual(@as(u32, 0), s2.top_k);
 
     // Negative temperature clamped to 0
     var s3 = SamplingParams{};
-    parseFormSampling(&s3, "temperature=-1.0");
+    parseFormSampling(std.testing.allocator, &s3, "temperature=-1.0");
     try std.testing.expectEqual(@as(f32, 0), s3.temperature);
 
     // top_p > 1 clamped to 1
     var s4 = SamplingParams{};
-    parseFormSampling(&s4, "top_p=2.0");
+    parseFormSampling(std.testing.allocator, &s4, "top_p=2.0");
     try std.testing.expectEqual(@as(f32, 1.0), s4.top_p);
 
     // top_k clamped to max_top_k (1024)
     var s5 = SamplingParams{};
-    parseFormSampling(&s5, "top_k=9999");
+    parseFormSampling(std.testing.allocator, &s5, "top_k=9999");
     try std.testing.expectEqual(@as(u32, 1024), s5.top_k);
 }
 
@@ -1708,20 +1744,20 @@ test "hasJsonImagePart detects OpenAI and Anthropic image blocks" {
 }
 
 test "extractFormFloat handles boundary values" {
-    const zero = extractFormFloat("v=0", "v");
+    const zero = extractFormFloat(std.testing.allocator, "v=0", "v");
     try std.testing.expectApproxEqAbs(@as(f32, 0.0), zero.?, 0.001);
-    const large = extractFormFloat("v=1e10", "v");
+    const large = extractFormFloat(std.testing.allocator, "v=1e10", "v");
     try std.testing.expectApproxEqAbs(@as(f32, 1e10), large.?, 1e6);
-    const half = extractFormFloat("v=.5", "v");
+    const half = extractFormFloat(std.testing.allocator, "v=.5", "v");
     try std.testing.expectApproxEqAbs(@as(f32, 0.5), half.?, 0.001);
     // Overflow → Inf; must not surface as a value
-    try std.testing.expect(extractFormFloat("v=1e999", "v") == null);
+    try std.testing.expect(extractFormFloat(std.testing.allocator, "v=1e999", "v") == null);
 }
 
 test "parseFormSampling handles extreme values" {
     // Temperature > max_temperature (100) clamped to exactly max_temperature
     var s = SamplingParams{};
-    parseFormSampling(&s, "temperature=999.0");
+    parseFormSampling(std.testing.allocator, &s, "temperature=999.0");
     try std.testing.expectEqual(max_temperature, s.temperature);
 }
 
@@ -2474,19 +2510,19 @@ test "fuzz: all json functions" {
             }
 
             // 12. extractFormBool, always returns bool
-            _ = extractFormBool(input, field);
+            _ = extractFormBool(std.testing.allocator, input, field);
 
             // 13. extractFormFloat, returns optional f32; must be finite when present
-            if (extractFormFloat(input, field)) |v| {
+            if (extractFormFloat(std.testing.allocator, input, field)) |v| {
                 try std.testing.expect(std.math.isFinite(v));
             }
 
             // 14. extractFormInt, returns optional usize
-            _ = extractFormInt(input, field);
+            _ = extractFormInt(std.testing.allocator, input, field);
 
             // 15. parseFormSampling, always returns valid SamplingParams
             var fs = SamplingParams{};
-            parseFormSampling(&fs, input);
+            parseFormSampling(std.testing.allocator, &fs, input);
             std.debug.assert(fs.temperature >= 0 and fs.temperature <= max_temperature);
             std.debug.assert(fs.top_p >= 0 and fs.top_p <= 1.0);
 
