@@ -616,7 +616,7 @@ GET /v1/kv_cache?n_tokens=512
    <binary KV data>
 ```
 
-**Import**, restore KV cache from a blob (sets `kv_seq_len = N`, clears prefix-cache token IDs, sets `kv_valid`):
+**Import**, restore KV cache from a blob (sets `kv_seq_len = N`, clears prefix-cache token IDs, sets `kv_valid`). Honors `X-Request-Id` as an idempotency key (see [Idempotency](#idempotency) below): import overwrites the live KV state, so a retry with the same key replays the recorded response instead of clobbering state advanced since the first import; a `400 kv_import_failed` releases the key so the retry can run. Use a fresh key per import:
 ```bash
 POST /v1/kv_cache?n_tokens=512
 Content-Type: application/octet-stream
@@ -757,12 +757,16 @@ CLI value is ignored.
 
 ## Idempotency
 
-`POST /v1/chat`, `POST /v1/chat/regenerate`, and `POST /v1/conversations` with
-`action=new` change stored state: a client that retries after a lost response
-would otherwise append a second user turn, roll back a second assistant
-message, or create a second conversation. Those routes accept the sanitized
-`X-Request-Id` header (up to 64 characters of `A-Za-z0-9-_.`) as an
-idempotency key: one key per logical operation, reused across retries.
+`POST /v1/chat`, `POST /v1/chat/regenerate`, `POST /v1/conversations` with
+`action=new`, `POST /v1/kv_cache` (KV prefix import), and the destructive
+chat commands `/clear` and `/reset` change stored state: a client that
+retries after a lost response would otherwise append a second user turn,
+roll back a second assistant message, create a second conversation,
+re-import a prefix over state advanced since the first import, or re-clear
+the conversation and burn another snapshot sidecar copy. Those routes
+accept the sanitized `X-Request-Id` header (up to 64 characters of
+`A-Za-z0-9-_.`) as an idempotency key: one key per logical operation,
+reused across retries.
 
 | Situation | Result |
 |-----------|--------|
@@ -796,20 +800,20 @@ The bundled chat UI mints a key per send, per regenerate, and per new chat
 persisted the turn records its response under the key and completes it, so the
 UI's Retry cannot append the same turn twice.
 
-Every other route is stateless or naturally idempotent: `select` converges on
-the same id, `delete` is guarded by an existence check, and `POST /v1/kv_cache`
-re-imports the same prefix over the same state. A retry of those repeats no
-side effect.
+`POST /v1/kv_cache` (KV prefix import) and the destructive chat commands
+`/clear` and `/reset` also honor `X-Request-Id`: import overwrites the live
+KV state, and `/clear`/`/reset` wipe the KV cache and the conversation's
+messages, so a retry after a lost response would otherwise clobber state
+advanced since the first run or burn another snapshot sidecar copy. Both run
+through the ledger like the turn they finalize: a retry while in flight is
+`409 duplicate_request`, a retry within the replay window replays the
+recorded response. A failed import (`400 kv_import_failed`) releases the key
+so the retry can run. The read-only chat commands `/model` and `/help` stay
+outside the ledger.
 
-One case is deliberately outside the ledger: a `POST /v1/chat` whose decoded
-message starts with `/` is handled as a chat command and returns before the key
-is claimed. `/clear` and `/reset` wipe the KV cache and the conversation's
-messages, so a retry is not deduplicated and the command simply runs again.
-That is safe only because both are naturally idempotent -- clearing an already
-empty conversation leaves the same state. Any command added later that appends,
-pops, or otherwise steps the conversation must be moved behind
-`claimIdempotencyKey` before it ships; a command that mutates without a claim
-silently loses its retry protection.
+Every other route is stateless or naturally idempotent: `select` converges on
+the same id and `delete` is guarded by an existence check. A retry of those
+repeats no side effect.
 
 ---
 

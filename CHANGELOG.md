@@ -51,6 +51,18 @@ must still appear under **Changed** or **Breaking** below. See
   length line instead. A conversation-store save that cannot create its
   parent directory, and a tokenizer encode failure, now surface as
   errors instead of best-effort silence.
+- `POST /v1/kv_cache` (KV prefix import) and the chat commands `/clear`
+  and `/reset` now honor `X-Request-Id` as an idempotency key. Before:
+  both ran before any key was claimed, so a retry after a lost response
+  re-imported the prefix (clobbering whatever generation had advanced
+  the cache since) or re-cleared the conversation and took another
+  snapshot sidecar copy. After: a retry with the same key while the
+  first is in flight is refused with `409 duplicate_request`, and a
+  retry within the replay window replays the recorded response with
+  `Idempotent-Replay: true`. A failed import (`400 kv_import_failed`)
+  releases the key so the retry can run. Orchestrators that relied on
+  re-importing the same blob under the same key must use a fresh key
+  per import.
 
 ### Changed
 - The `--vram-budget` GiB-to-bytes conversion is now exact for every
@@ -72,6 +84,49 @@ must still appear under **Changed** or **Breaking** below. See
 - The serve and browser chat UIs format token counts, tok/s, percentages and
   durations with the reader's locale, and the tok/s readout stays blank until
   the first tick instead of showing a premature value.
+- The DRY sampler (`--dry-allowed-length 0`) is now a no-op. Before: a
+  0-length repeat rule matched every suffix, so any non-empty history
+  penalized every token in it on every step. After: the sampler returns
+  early, like a non-positive multiplier.
+- Top-p sampling now honors the nucleus exactly at ties. Before: the
+  threshold was applied by value over the whole logits array, so
+  equal-valued tokens outside the counted candidate set were kept and the
+  kept mass could exceed `top_p`. After: the kept set is the counted
+  candidate prefix, and surplus tie tokens outside it are zeroed.
+- `TERM` and `NO_COLOR` now follow the same trimmed-value rule on the
+  parsed-environment path as everywhere else. A whitespace-only `TERM` or
+  `NO_COLOR` now reads as unset (matching `config.getenv`); previously the
+  parsed path treated it as set, so `TERM=" dumb "` was not dumb and
+  `NO_COLOR="  "` suppressed colour.
+- The home directory for cache and store fallbacks now falls back to
+  `USERPROFILE` when `HOME` is unset, so the POSIX binary under a
+  Windows-hosted shell finds `$USERPROFILE/.cache` instead of failing with
+  "HOME environment variable not set".
+- The conversation-store snapshot before a deletion is now a no-op when
+  the kept sidecar copies already hold the current live bytes, instead of
+  burning the next bounded slot on identical history.
+- `Accept-Encoding` with a malformed q value (`q=abc`, `q=`) is now
+  treated as q=0 (not acceptable) rather than the default q=1.0, so the
+  server no longer claims gzip support the client never stated.
+- Calibration (.cal) files and SafeTensors scalar reads now use explicit
+  little-endian conversions instead of native byte order, so a `.cal`
+  written on one architecture reads correctly on another (and on
+  big-endian hosts).
+- GPU library names on Windows now resolve to the native DLLs
+  (`nvcuda.dll` for CUDA, `vulkan-1.dll` for Vulkan) instead of falling
+  through to the Linux/macOS names.
+- Speculative decoding now distinguishes a `pread` I/O error from EOF when
+  reading the token map (previously both ended the read silently), and
+  `verifyDDTree` bounds the accept walk by `tree.n_nodes` rather than
+  `builder.n_nodes`.
+- A retried conversation delete now restores the held message with an
+  error log instead of silently dropping it, `agave update`'s timeout
+  warning always reaches stderr even if the formatted line does not fit
+  its buffer, and eval `prefill`/`forward` failures log the failing
+  position instead of scoring the case as a silent null.
+- A peer socket timeout now clamps a negative value to 0, pull retries
+  cap the backoff shift instead of overflowing, and the sparsity-ratio
+  triangle count no longer overflows at large block counts.
 
 ## [0.13.0] - 2026-10-15
 
