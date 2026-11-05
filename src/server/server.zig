@@ -3531,6 +3531,13 @@ fn handleRequest(stream: http.TcpStream, req: http.HttpRequest) void {
             }
         } else if (std.mem.eql(u8, action, "delete")) {
             const id = requireFormConversationId(stream, body, method, path, request_start) orelse return;
+            // A delete is destructive and non-convergent on retry: the first
+            // run removes the row, so a retried delete after a lost response
+            // would 404 (and the already-deleted conversation looks like an
+            // error to a caller that cannot tell "gone" from "never there").
+            // The replay ledger records the first outcome so the retry
+            // collapses onto it instead of re-running the mutation.
+            if (resolveIdempotency(stream, method, path, request_start)) return;
             // The conversation is about to leave the only store that holds it:
             // the delete wipes the in-memory copy and persists a store without
             // it, so the live file alone stops being a recovery path and only
@@ -3549,6 +3556,7 @@ fn handleRequest(stream: http.TcpStream, req: http.HttpRequest) void {
             if (delete_result == null) {
                 sendJsonErrorEx(stream, "404 Not Found", "invalid_request_error", "Conversation not found", "id", "conversation_not_found");
                 g_server.metrics.recordClientError();
+                g_server.releaseIdempotencyKey();
                 logRequestDone(method, path, 404, elapsedMs(request_start));
                 return;
             }
@@ -3559,6 +3567,7 @@ fn handleRequest(stream: http.TcpStream, req: http.HttpRequest) void {
                 \\{{"ok":true,"cleared":{s}}}
             , .{if (was_active) "true" else "false"}) catch "{\"ok\":true}";
             sendJson(stream, djson);
+            g_server.completeIdempotencyKey("200 OK", "application/json", djson);
             g_server.metrics.recordCompletion();
             logRequestDone(method, path, 200, elapsedMs(request_start));
         } else {

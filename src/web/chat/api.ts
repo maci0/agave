@@ -97,11 +97,11 @@ export const createConversation = async (): Promise<void> => {
 
 export const selectConversation = (id: string): Promise<ConvMessages> => postConversation('select', id);
 
-export const deleteConversation = (id: string): Promise<ConvMessages> => postConversation('delete', id);
+export const deleteConversation = (id: string): Promise<ConvMessages> => postConversation('delete', id, newRequestId());
 
 /** Clear the server-side conversation and KV cache. */
 export const clearServerConversation = async (): Promise<void> => {
-  const response = await fetch('/v1/chat', { method: 'POST', headers: FORM_HEADERS, body: 'message=%2Fclear' });
+  const response = await fetch('/v1/chat', { method: 'POST', headers: { ...FORM_HEADERS, 'X-Request-Id': newRequestId() }, body: 'message=%2Fclear' });
   // A rejected clear is what the caller reports, so the status has to reach it.
   if (!response.ok) {throw new Error(httpErrorMessage(response.status));}
 };

@@ -10,7 +10,7 @@
 
 import { afterEach, expect, test } from 'bun:test';
 
-import { streamChat } from './api';
+import { clearServerConversation, createConversation, deleteConversation, streamChat } from './api';
 
 const encoder = new TextEncoder();
 
@@ -73,6 +73,40 @@ const painted = async (chunks: Array<Uint8Array>): Promise<string> => {
 };
 
 afterEach(() => { globalThis.fetch = originalFetch; });
+
+/** Record every POST route and its idempotency key while answering 200. */
+const recordPosts = (seen: Array<{ url: string; key: string | null }>): void => {
+  // SAFETY: the stub answers only the mutating routes under test, and
+  // ignores whether the key is valid; it records it for the assertions.
+  globalThis.fetch = function (input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> {
+    seen.push({ url: String(input), key: new Headers(init.headers ?? {}).get('X-Request-Id') });
+    return Promise.resolve(Response.json({ ok: true }));
+  } as typeof fetch;
+};
+
+test('delete and clear carry a fresh idempotency key per action', async () => {
+  const seen: Array<{ url: string; key: string | null }> = [];
+  recordPosts(seen);
+  await deleteConversation('7');
+  await clearServerConversation();
+  await clearServerConversation();
+  expect(seen.map((entry) => entry.url)).toEqual(['/v1/conversations', '/v1/chat', '/v1/chat']);
+  const keys = seen.map((entry) => entry.key);
+  for (const key of keys) { expect(key).not.toBeNull(); expect(key).not.toBe(''); }
+  // Each action mints its own key; a retry of the same action reuses it.
+  expect(new Set(keys).size).toBe(3);
+});
+
+test('create mints a new key for each new conversation', async () => {
+  const seen: Array<{ url: string; key: string | null }> = [];
+  recordPosts(seen);
+  await createConversation();
+  await createConversation();
+  expect(seen.map((entry) => entry.url)).toEqual(['/v1/conversations', '/v1/conversations']);
+  const keys = seen.map((entry) => entry.key);
+  for (const key of keys) { expect(key).not.toBeNull(); }
+  expect(new Set(keys).size).toBe(2);
+});
 
 test('a character split across two reads is assembled, not dropped', async () => {
   const frame = encoder.encode('data: {"t":"hi \u{1F600}!"}\n');
