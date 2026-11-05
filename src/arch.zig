@@ -76,7 +76,7 @@ pub const Arch = enum {
             .qwen35, .qwen4exp, .qwen4_exp => ChatTemplate.qwen35,
             .deepseek4 => ChatTemplate.deepseek4,
             .llama4 => ChatTemplate.llama4,
-            else => ChatTemplate.chatml,
+            .dflash2 => ChatTemplate.chatml,
         };
     }
 
@@ -94,7 +94,7 @@ pub const Arch = enum {
             .qwen35, .qwen4exp, .qwen4_exp => "qwen35",
             .deepseek4 => "deepseek4",
             .llama4 => "llama4",
-            else => "chatml",
+            .dflash2 => "chatml",
         };
     }
 
