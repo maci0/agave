@@ -13,7 +13,7 @@ import { cn } from './cn';
  */
 const buttonVariants = cva(
   'inline-flex items-center justify-center gap-2 rounded-lg border font-mono font-medium whitespace-nowrap ' +
-    'transition-colors duration-200 disabled:pointer-events-none disabled:opacity-40 ' +
+    'transition-colors duration-fast disabled:pointer-events-none disabled:opacity-40 ' +
     'aria-invalid:border-destructive',
   {
     variants: {

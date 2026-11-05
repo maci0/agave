@@ -105,7 +105,7 @@ const PromptField = (props: PromptFieldProps) => (
       }
     }}
     // Min-width: 0 lets the field shrink below its intrinsic width.
-    className="max-h-50 min-h-12 min-w-0 flex-1 resize-none rounded-lg border border-input bg-background px-4 py-3 leading-normal text-base text-foreground transition focus-visible:border-primary focus-visible:shadow-focus disabled:opacity-50 max-drawer:text-touch"
+    className="max-h-50 min-h-12 min-w-0 flex-1 resize-none rounded-lg border border-input bg-background px-4 py-3 leading-normal text-base text-foreground transition-border duration-instant focus-visible:border-primary focus-visible:shadow-focus disabled:opacity-50 max-drawer:text-touch"
   />
 );
 

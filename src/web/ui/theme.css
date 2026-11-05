@@ -14,6 +14,18 @@
  */
 @import "tailwindcss" source(none);
 
+@utility duration-instant {
+  transition-duration: var(--duration-instant);
+}
+@utility duration-fast {
+  transition-duration: var(--duration-fast);
+}
+@utility transition-border {
+  transition-property: border-color;
+  transition-timing-function: var(--default-transition-timing-function);
+  transition-duration: var(--default-transition-duration);
+}
+
 @theme {
   /* Surfaces. Desert-night: warm dark greys, the agave rosette on dark. */
   --color-background: #1a1714;
@@ -85,6 +97,14 @@
   --radius-md: 6px;
   --radius-lg: 8px;
   --radius-pill: 999px;
+
+  /* Motion durations: state changes, not decoration. `instant` is field and
+     touch feedback that must land on the gesture; `fast` is dialog and
+     button state. Tailwind's `duration-200` default is the same shape every
+     generated app ships, so the ramp is named here rather than spread as
+     literals that drift per component. */
+  --duration-instant: 0ms;
+  --duration-fast: 100ms;
 
   /* Layout constants that both surfaces and the components must agree on. The
      measure is 68ch, not a pixel width, so it follows the type size: every
