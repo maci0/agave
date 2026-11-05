@@ -26,8 +26,12 @@
 <body>
     <noscript><p class="p-8 text-center text-destructive-foreground">JavaScript is required to run Agave in the browser.</p></noscript>
     <!-- The shell is a React tree (web/shell.tsx). agave.js loads first: it puts
-         AgaveEngine and AgaveError on globalThis, which the shell consumes. -->
-    <div id="root"></div>
+         AgaveEngine and AgaveError on globalThis, which the shell consumes. The
+         loading shell paints from the CSS alone, so the first frame is not a
+         blank viewport while the deferred bundles fetch and parse; createRoot
+         replaces it on render. Scoped to the shell's shipped utilities (see
+         src/web/body.html for the serve UI's copy). -->
+    <div id="root"><div class="flex h-dvh flex-col overflow-hidden bg-background text-foreground"><main class="flex min-w-0 flex-1 flex-col"><div class="m-auto font-mono text-xs text-faint">Loading…</div></main></div></div>
     <script src="agave.js" defer></script>
     <script src="shell.js" defer></script>
 </body>
