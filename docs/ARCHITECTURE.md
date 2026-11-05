@@ -139,7 +139,7 @@ agave/
 │   ├── devices/
 │   │   └── discovery.zig  # Local GPU/CPU enumeration (--list-devices, --device N; Metal via backend.listMetalDevices)
 │   ├── kvcache/
-│   │   ├── view.zig       # Leaf CacheBlock + PagedKvView (SDPA kernels import this, not manager)
+│   │   ├── view.zig       # Leaf CacheBlock + PagedKvView + KvF32View + SeqBlockTable (SDPA kernels + tiered import this, not manager)
 │   │   ├── manager.zig    # KV cache alloc/free, PagedKvCache, RadixTree (re-exports view types)
 │   │   ├── block_allocator.zig # Block allocation for paged KV cache
 │   │   ├── tiered.zig     # Tiered KV cache (VRAM + RAM + SSD)

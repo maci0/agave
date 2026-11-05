@@ -17,6 +17,10 @@ const Allocator = std.mem.Allocator;
 pub const CacheBlock = @import("view.zig").CacheBlock;
 /// Block-table view passed to paged SDPA. See `view.zig`.
 pub const PagedKvView = @import("view.zig").PagedKvView;
+/// Flat f32 K/V slices for one layer or block. See `view.zig`.
+pub const KvF32View = @import("view.zig").KvF32View;
+/// Per-sequence block table. See `view.zig`.
+pub const SeqBlockTable = @import("view.zig").SeqBlockTable;
 
 /// Result of allocating a KV cache.
 /// Slices are byte arrays, the actual format (f32, f16, q8_0, etc.)
@@ -71,21 +75,6 @@ pub fn freeKvCache(allocator: Allocator, cache: KvCache) void {
 // Sequences reference blocks through a block table (indirection), allowing
 // fine-grained memory reclamation.
 
-/// Flat f32 key/value slices for one layer or block.
-/// Named so `TieredKvCache.keysValues` and model `getLayerKvView` share one type;
-/// identical anonymous structs are distinct types in Zig and fail to coerce.
-pub const KvF32View = struct {
-    keys: []f32,
-    values: []f32,
-};
-
-/// Per-sequence metadata: which blocks hold this sequence's KV data.
-pub const SeqBlockTable = struct {
-    /// Block indices per layer: block_table[layer][logical_block_idx] → physical block id.
-    block_table: [][]u32,
-    /// Current sequence length (total positions written).
-    seq_len: usize = 0,
-};
 
 /// Block-based paged KV cache allocator.
 pub const PagedKvCache = struct {

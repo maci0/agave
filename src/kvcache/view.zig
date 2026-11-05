@@ -7,6 +7,26 @@
 
 const std = @import("std");
 
+/// Flat f32 key/value slices for one layer or block.
+/// Named so `TieredKvCache.keysValues` and model `getLayerKvView` share one type;
+/// identical anonymous structs are distinct types in Zig and fail to coerce.
+/// Layout only, so it lives here with `CacheBlock` instead of `manager.zig`:
+/// `tiered.zig` returns this type and must not import the manager to name it.
+pub const KvF32View = struct {
+    keys: []f32,
+    values: []f32,
+};
+
+/// Per-sequence metadata: which blocks hold this sequence's KV data.
+/// Layout only (a block table plus a length), so kernels and the tiered
+/// cache can name it without importing `manager.zig` (RadixTree, pools).
+pub const SeqBlockTable = struct {
+    /// Block indices per layer: block_table[layer][logical_block_idx] → physical block id.
+    block_table: [][]u32,
+    /// Current sequence length (total positions written).
+    seq_len: usize = 0,
+};
+
 /// A single cache block holds `block_size` positions of KV data.
 pub const CacheBlock = struct {
     /// Key data: [block_size * kv_dim] f32.

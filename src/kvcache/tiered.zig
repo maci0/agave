@@ -63,8 +63,9 @@ fn preadAll(file: anytype, buf: []u8, offset: u64) !usize {
     }
     return total;
 }
-const manager = @import("manager.zig");
-const CacheBlock = manager.CacheBlock;
+const view = @import("view.zig");
+const CacheBlock = view.CacheBlock;
+const KvF32View = view.KvF32View;
 
 /// Integer numerator/denominator for threshold check without float division:
 /// vram_used/vram_total > 0.90  ⟺  vram_used * eviction_denom > vram_total * eviction_numer
@@ -882,7 +883,7 @@ pub const TieredKvCache = struct {
     /// torn slice (new pointer, old length) would send attention through freed
     /// or empty memory. The returned slices stay valid until this block is
     /// demoted (scheduler, not the prefetcher) or the cache is destroyed.
-    pub fn keysValues(self: *TieredKvCache, block_id: u32) manager.KvF32View {
+    pub fn keysValues(self: *TieredKvCache, block_id: u32) KvF32View {
         std.debug.assert(block_id < self.blocks.len);
         self.lockTier();
         defer self.unlockTier();
