@@ -53,6 +53,7 @@ let markedConfigured = false;
  *  breaking it. */
 const loadCdnScript = async (url: string, integrity: string): Promise<boolean> => {
   const script = document.createElement('script');
+  script.defer = true;
   script.src = url;
   script.integrity = integrity;
   script.crossOrigin = 'anonymous';
