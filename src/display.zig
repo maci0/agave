@@ -543,7 +543,6 @@ pub const Display = struct {
 
         // Banner: ╭─ 🌵 agave v<build_options.version> ──────╮
         const green = comptime std.fmt.comptimePrint(ctl.fg_base, .{2});
-        // cactus emoji from module-level constant
         const title = " agave v" ++ version ++ " ";
         const title_w = term.displayWidth(cactus) + term.displayWidth(title); // 🌵 + title text
         const rule_after = if (box_w > title_w + 1) box_w - title_w - 1 else 0;

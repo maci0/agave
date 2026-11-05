@@ -81,15 +81,14 @@ test "Tokenizer encode error propagates through VTable" {
 }
 
 test "Tokenizer VTable dispatch" {
-    // Verify encode/decode/vocabSize dispatch through VTable correctly
     const S = struct {
         vocab_size: u32 = 42,
 
         fn encode(_: *anyopaque, _: []const u8) TokenizerError![]u32 {
-            return error.OutOfMemory; // stub
+            return error.OutOfMemory;
         }
         fn decode(_: *anyopaque, _: []const u32) TokenizerError![]u8 {
-            return error.OutOfMemory; // stub
+            return error.OutOfMemory;
         }
         fn getVocabSize(ptr: *anyopaque) u32 {
             const self: *@This() = @ptrCast(@alignCast(ptr));
@@ -149,7 +148,6 @@ test "TokenizerKind enum variants" {
     try std.testing.expect(TokenizerKind.bpe != TokenizerKind.spm);
     try std.testing.expect(TokenizerKind.spm != TokenizerKind.spm_no_dummy);
     try std.testing.expect(TokenizerKind.bpe != TokenizerKind.spm_no_dummy);
-    // Verify there are exactly 3 variants
     const fields = @typeInfo(TokenizerKind).@"enum".field_names;
     try std.testing.expectEqual(@as(usize, 3), fields.len);
 }
@@ -163,11 +161,11 @@ test "fuzz: all tokenizer functions" {
 
                 fn encode(ptr: *anyopaque, _: []const u8) TokenizerError![]u32 {
                     _ = ptr;
-                    return error.OutOfMemory; // stub: no allocator available
+                    return error.OutOfMemory;
                 }
                 fn decode(ptr: *anyopaque, _: []const u32) TokenizerError![]u8 {
                     _ = ptr;
-                    return error.OutOfMemory; // stub: no allocator available
+                    return error.OutOfMemory;
                 }
                 fn getVocabSize(ptr: *anyopaque) u32 {
                     const self: *@This() = @ptrCast(@alignCast(ptr));

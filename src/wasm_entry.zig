@@ -109,7 +109,6 @@ export fn agave_init(model_ptr: [*]const u8, model_len: usize) usize {
     ctx.arch_name = arch_str;
     ctx.model_name = fmt.getMetaStr("general.name") orelse arch_str;
 
-    // Load tokenizer
     const vocab = fmt.getVocab() orelse {
         return fail(ctx, .no_vocab, "No vocab in GGUF", .{});
     };
@@ -132,7 +131,6 @@ export fn agave_init(model_ptr: [*]const u8, model_len: usize) usize {
     }
     ctx.tok.bos_token_id = ctx.bos_id;
 
-    // Init model
     const be: Backend = .{ .cpu = &ctx.cpu_be };
     const capped_ctx: u32 = @min(
         fmt.getArchU32(arch_str, "context_length") orelse 2048,
@@ -185,7 +183,6 @@ export fn agave_generate(ctx_ptr: usize, prompt_ptr: [*]allowzero const u8, prom
     }
     const prompt: []const u8 = if (prompt_len == 0) &.{} else @as([*]const u8, @ptrCast(prompt_ptr))[0..prompt_len];
 
-    // Tokenize prompt to verify pipeline
     const tok_iface = ctx.tok.tokenizer();
     const tmpl = ctx.arch.chatTemplate();
     const formatted_owned = tmpl.format(gpa, null, prompt) catch |err| blk: {
@@ -207,7 +204,6 @@ export fn agave_generate(ctx_ptr: usize, prompt_ptr: [*]allowzero const u8, prom
         gpa.free(token_ids);
     }
 
-    // Report tokenization (forward pass blocked by Zig wasm32 LLVM bug)
     ctx.last_error = 0;
     const msg = std.fmt.bufPrint(&ctx.output_buf, "[{s}] Tokenized {d} tokens from prompt. " ++
         "Model: {d} layers, {d}D. " ++

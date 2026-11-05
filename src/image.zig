@@ -108,11 +108,9 @@ pub const ImageError = error{
 ///
 /// Returns: PngImage with RGB pixel data, or ImageError on failure.
 pub fn decodePng(allocator: Allocator, data: []const u8) ImageError!PngImage {
-    // Validate PNG signature
     if (data.len < png_signature.len) return error.InvalidPngSignature;
     if (!std.mem.eql(u8, data[0..png_signature.len], &png_signature)) return error.InvalidPngSignature;
 
-    // Parse IHDR (must be the first chunk after signature)
     var pos: usize = png_signature.len;
     const ihdr = readChunk(data, &pos) orelse return error.MissingIhdr;
     if (!std.mem.eql(u8, &ihdr.chunk_type, &chunk_ihdr)) return error.MissingIhdr;
@@ -134,7 +132,6 @@ pub fn decodePng(allocator: Allocator, data: []const u8) ImageError!PngImage {
 
     const bpp: usize = if (color_type == color_type_rgba) rgba_channels else rgb_channels;
 
-    // Collect all IDAT chunk data positions
     var idat_chunks: std.ArrayList([]const u8) = .empty;
     defer idat_chunks.deinit(allocator);
 
@@ -150,7 +147,6 @@ pub fn decodePng(allocator: Allocator, data: []const u8) ImageError!PngImage {
 
     if (idat_chunks.items.len == 0) return error.NoImageData;
 
-    // Concatenate all IDAT data into a single buffer for decompression
     var total_idat_size: usize = 0;
     for (idat_chunks.items) |chunk_data| {
         total_idat_size = std.math.add(usize, total_idat_size, chunk_data.len) catch return error.InvalidImageSize;
@@ -166,7 +162,6 @@ pub fn decodePng(allocator: Allocator, data: []const u8) ImageError!PngImage {
         }
     }
 
-    // Decompress using zlib container (PNG uses zlib-wrapped deflate)
     const h: usize = height;
     const w: usize = width;
     const scanline_len = std.math.mul(usize, w, bpp) catch return error.InvalidImageSize;
@@ -180,10 +175,8 @@ pub fn decodePng(allocator: Allocator, data: []const u8) ImageError!PngImage {
 
     if (decompressed.len < raw_size) return error.InvalidImageSize;
 
-    // Unfilter scanlines in-place
     unfilterScanlines(decompressed, w, h, bpp) catch return error.InvalidFilter;
 
-    // Extract RGB pixels (convert RGBA -> RGB if needed)
     const pixel_count = std.math.mul(usize, w, h) catch return error.InvalidImageSize;
     const rgb_size = std.math.mul(usize, pixel_count, rgb_channels) catch return error.InvalidImageSize;
     const pixels = allocator.alloc(u8, rgb_size) catch return error.OutOfMemory;

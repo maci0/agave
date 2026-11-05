@@ -762,7 +762,6 @@ pub const Metrics = struct {
 
 const test_render_buf_size: usize = 32768;
 
-// Tests
 test "Metrics: recordRequest increments counter" {
     var metrics = Metrics{};
 

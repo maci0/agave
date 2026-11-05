@@ -178,7 +178,6 @@ fn testIo() Io {
     return G.threaded.io();
 }
 
-// Unit tests
 test "consume full capacity then fail" {
     defer sim_clock.setOverrideMs(null);
     sim_clock.setOverrideMs(1_000_000);

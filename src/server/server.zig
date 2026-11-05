@@ -2724,7 +2724,6 @@ fn handleRequest(stream: http.TcpStream, req: http.HttpRequest) void {
         };
         sendJson(stream, json_body);
 
-        // Record metrics
         g_server.metrics.recordLatency(elapsedMs(req_start_time));
         g_server.metrics.recordTokens(@intCast(gen.stats.tokens_generated));
         g_server.metrics.recordCompletion();
@@ -2810,7 +2809,6 @@ fn handleRequest(stream: http.TcpStream, req: http.HttpRequest) void {
         };
         sendJson(stream, json_body);
 
-        // Record metrics
         g_server.metrics.recordLatency(elapsedMs(req_start_time));
         g_server.metrics.recordTokens(@intCast(gen.stats.tokens_generated));
         g_server.metrics.recordCompletion();
@@ -3239,7 +3237,6 @@ fn handleRequest(stream: http.TcpStream, req: http.HttpRequest) void {
         };
         sendJson(stream, json_body);
 
-        // Record metrics
         g_server.metrics.recordLatency(elapsedMs(req_start_time));
         g_server.metrics.recordTokens(@intCast(gen.stats.tokens_generated));
         g_server.metrics.recordCompletion();
@@ -3413,7 +3410,6 @@ fn handleRequest(stream: http.TcpStream, req: http.HttpRequest) void {
         };
         sendJson(stream, json_body);
 
-        // Record metrics
         g_server.metrics.recordLatency(elapsedMs(req_start_time));
         g_server.metrics.recordTokens(@intCast(gen.stats.tokens_generated));
         g_server.metrics.recordCompletion();
@@ -3963,7 +3959,6 @@ fn handleRequest(stream: http.TcpStream, req: http.HttpRequest) void {
         defer wipeFree(g_server.allocator, result.data);
         storeConversationResponse(result.data, result.stats);
 
-        // Record metrics
         g_server.metrics.recordLatency(result.stats.time_ms);
         g_server.metrics.recordTokens(result.stats.tokens_generated);
         // The user turn is already appended and persisted, so the claim cannot

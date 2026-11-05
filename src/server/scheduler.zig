@@ -926,7 +926,6 @@ test "prefillTokensInFlight counts only unprefilled tokens of running requests" 
     try std.testing.expectEqual(@as(u32, 0), prefillTokensInFlight(&manager));
 }
 
-// Unit tests
 test "enqueue increments waiting count" {
     const allocator = std.testing.allocator;
     var metrics = Metrics{};
