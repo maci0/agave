@@ -2043,6 +2043,7 @@ fn sendPreflightErrorEx(stream: http.TcpStream, path: []const u8, status: []cons
 /// Send 401 Unauthorized response for invalid API key.
 fn send401(stream: http.TcpStream) void {
     g_server.metrics.recordAuthFailure();
+    if (g_server.rate_limiter) |rl| rl.recordAuthFailure();
     std.log.warn("req={d} authentication failed", .{log_request_id});
     const body = "{\"error\":{\"message\":\"Invalid API key\",\"type\":\"authentication_error\",\"param\":null,\"code\":\"invalid_api_key\"}}";
     sendResponse(stream, "401 Unauthorized", "application/json", body);
@@ -2394,6 +2395,7 @@ fn handleRequest(stream: http.TcpStream, req: http.HttpRequest) void {
             // Anthropic clients need their error envelope; send401 emits the
             // OpenAI one, so the metric and log are recorded here.
             g_server.metrics.recordAuthFailure();
+            if (g_server.rate_limiter) |rl| rl.recordAuthFailure();
             std.log.warn("req={d} authentication failed", .{log_request_id});
             sendAnthropicError(stream, "401", "authentication_error", "Invalid API key");
         } else {

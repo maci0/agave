@@ -157,6 +157,22 @@ pub const RateLimiter = struct {
             self.token_bucket.retryAfterSeconds(tokens_f64),
         );
     }
+
+    /// Record a failed authentication attempt against the limiter's own
+    /// buckets. Auth runs before any request reaches `checkRateLimit`, so a
+    /// brute-force loop against a keyed server never spends the inference
+    /// bucket: without this, `--rate-limit-rpm` never throttles 401s (CWE-307).
+    /// A failed attempt costs one request token when the request bucket is
+    /// configured, and is a no-op when rate limiting is off (`capacity == 0`).
+    pub fn recordAuthFailure(self: *RateLimiter) void {
+        const now = milliTimestamp();
+        self.mutex.lockUncancelable(self.io);
+        defer self.mutex.unlock(self.io);
+        self.refillBuckets(now);
+        if (self.request_bucket.capacity > 0) {
+            self.request_bucket.tokens = @max(0, self.request_bucket.tokens - 1.0);
+        }
+    }
 };
 
 /// Process-lifetime Io for tests. Returning `Threaded.io()` from a local
@@ -280,6 +296,20 @@ test "token bucket exhaustion blocks even with requests available" {
     // Token rate = 5/min = 1 per 12s, so retryAfter(1 token) = 12s
     const retry = limiter.retryAfter(1);
     try std.testing.expectEqual(@as(u32, 12), retry);
+}
+
+test "recordAuthFailure consumes request bucket and is a no-op when unconfigured" {
+    defer sim_clock.setOverrideMs(null);
+    sim_clock.setOverrideMs(1_000_000);
+    var limiter = RateLimiter.init(2, 100, testIo());
+    limiter.recordAuthFailure();
+    try std.testing.expect(limiter.tryConsumeRequest(1));
+    limiter.recordAuthFailure();
+    try std.testing.expect(!limiter.tryConsumeRequest(1));
+
+    var off = RateLimiter.init(0, 0, testIo());
+    off.recordAuthFailure();
+    try std.testing.expect(off.request_bucket.tokens == 0);
 }
 
 test "tryConsumeOrRetryAfter combines check and retry" {

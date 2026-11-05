@@ -163,15 +163,26 @@ const wrapTables = (root: HTMLElement): void => {
   }
 };
 
+/** Strip the characters browsers ignore inside a URL scheme (CWE-79). A
+ *  `java&#x09;script:` href is inert as text but browsers strip tab/newline
+ *  before scheme dispatch and run it, so a blocklist on the raw string misses
+ *  it; what remains after stripping must start with an allowlisted scheme. */
+const stripUrlIgnorables = (value: string): string =>
+  value.replaceAll(/[\u0000-\u0020\u007f]/gu, '').toLowerCase();
+
+const isSafeLinkHref = (href: string): boolean => {
+  const stripped = stripUrlIgnorables(href);
+  if (stripped.startsWith('#') || stripped.startsWith('/') || stripped.startsWith('?')) {
+    return !stripped.startsWith('//') || stripped.startsWith('///');
+  }
+  return /^(?:https?:|mailto:)/u.test(stripped);
+};
+
 /** Neutralize active-content URL schemes that may survive sanitizer gaps (CWE-79). */
 const hardenLinks = (root: HTMLElement): void => {
   for (const anchor of root.querySelectorAll('a[href]')) {
     const href = anchor.getAttribute('href') ?? '';
-    const lower = href.trim().toLowerCase();
-    const isData = lower.startsWith('data:');
-    const isSafeDataImage = lower.startsWith('data:image/') && !lower.startsWith('data:image/svg');
-    if (lower.startsWith('javascript:') || lower.startsWith('vbscript:') || // oxlint-disable-line no-script-url -- scheme blocklist, not a script URL assignment
-        (isData && !isSafeDataImage)) {
+    if (!isSafeLinkHref(href)) {
       anchor.removeAttribute('href');
       continue;
     }

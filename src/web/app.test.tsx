@@ -34,7 +34,9 @@ const UNSANITIZED_TEXT = '<img src=x onerror=alert(1)> and [a](javascript:alert(
  *  `hardenLinks` exists to contain. */
 const LINK_PAYLOAD = '<a id="bad" href="javascript:alert(1)">bad</a>'
   + '<a id="good" href="https://example.com/page">good</a>'
-  + '<a id="data" href="data:text/html;base64,PHNjcmlwdD4=">data</a>';
+  + '<a id="data" href="data:text/html;base64,PHNjcmlwdD4=">data</a>'
+  + '<a id="obfuscated" href="java\tscript:alert(1)">obfuscated</a>'
+  + '<a id="protocol-relative" href="//evil.example/x">pr</a>';
 
 const clearCdn = (): void => {
   Reflect.deleteProperty(globalThis, 'marked');
@@ -324,6 +326,8 @@ test('a link that survives the sanitizer loses its script scheme', () => {
     renderMarkdown(markdownTarget, LINK_PAYLOAD);
     expect(markdownTarget.querySelector('#bad')?.getAttribute('href')).toBeNull();
     expect(markdownTarget.querySelector('#data')?.getAttribute('href')).toBeNull();
+    expect(markdownTarget.querySelector('#obfuscated')?.getAttribute('href')).toBeNull();
+    expect(markdownTarget.querySelector('#protocol-relative')?.getAttribute('href')).toBeNull();
     expect(markdownTarget.querySelector('#good')?.getAttribute('target')).toBe('_blank');
     expect(markdownTarget.querySelector('#good')?.getAttribute('rel')).toBe('noopener noreferrer');
   } finally {

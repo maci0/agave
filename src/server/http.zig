@@ -167,7 +167,11 @@ pub fn originMatchesHost(origin: []const u8, host: []const u8) bool {
 /// probes) with no ambient credentials to abuse, so it stays allowed.
 pub fn isCrossSiteFetch(headers: []const u8) bool {
     const site = getHeaderValue(headers, "sec-fetch-site") orelse return false;
-    return std.ascii.eqlIgnoreCase(site, "cross-site");
+    var start: usize = 0;
+    var end: usize = site.len;
+    while (start < end and (site[start] == ' ' or site[start] == '\t' or site[start] == '\r' or site[start] == '\n')) : (start += 1) {}
+    while (end > start and (site[end - 1] == ' ' or site[end - 1] == '\t' or site[end - 1] == '\r' or site[end - 1] == '\n')) : (end -= 1) {}
+    return std.ascii.eqlIgnoreCase(site[start..end], "cross-site");
 }
 
 /// Hostname from a Host header: strip `:port` or `[ipv6]:port`.
