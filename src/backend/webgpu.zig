@@ -1187,7 +1187,9 @@ pub const WebGpuBackend = struct {
             .iq4_xs => std.math.mul(usize, std.math.mul(usize, n, nb256) catch return, 136) catch return,
             .tq1_0 => std.math.mul(usize, std.math.mul(usize, n, nb256) catch return, 54) catch return,
             .tq2_0 => std.math.mul(usize, std.math.mul(usize, n, nb256) catch return, 66) catch return,
-            else => unreachable,
+            // Match the pipe switch above: fail closed instead of UB if reached.
+            .iq2_xxs, .iq2_xs, .iq2_s, .iq3_xxs, .iq3_s, .iq1_s, .iq1_m => @panic("WebGPU gemv: IQ2/IQ3/IQ1 kernels not implemented"),
+            else => std.debug.panic("WebGPU gemv: unsupported weight dtype {s}", .{@tagName(w.dtype)}),
         };
         const w_buf = self.getOrUpload(w.data, w_size);
 
