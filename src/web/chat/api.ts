@@ -7,25 +7,31 @@ import { clampMaxTokens } from './storage';
 
 const FORM_HEADERS = { 'Content-Type': 'application/x-www-form-urlencoded' } as const;
 
+let newRequestCounter = 0;
+
 /** Idempotency key for one mutating request. A fresh key is minted per user
  *  action, never per attempt, so an intentional second action still runs. */
 export const newRequestId = (): string => {
   // RandomUUID needs a secure context, and the UI is reachable over plain
   // HTTP on a LAN address, so the fallback keeps keys inside the sanitize set.
   // Date.now() alone collides for two actions in the same millisecond (and
-  // moves backwards on an NTP step), so the fallback mints from crypto
-  // randomness when available without a UUID, and only then falls back to a
-  // counter-suffixed wall clock that cannot repeat within a page session.
-  if ('randomUUID' in crypto) { return crypto.randomUUID(); }
-  const cryptoLike = crypto as unknown as { getRandomValues?: (arr: Uint8Array) => void };
-  if (typeof cryptoLike.getRandomValues === 'function') {
-    const bytes = new Uint8Array(16);
-    cryptoLike.getRandomValues(bytes);
-    return [...bytes].map((b) => b.toString(16).padStart(2, '0')).join('');
+  // Moves backwards on an NTP step), so the fallback mints from crypto
+  // Randomness when available without a UUID, and only then falls back to a
+  // Counter-suffixed wall clock that cannot repeat within a page session.
+  try {
+    return crypto.randomUUID();
+  } catch { // oxlint-disable-line @rikalabs/no-silent-catch-fallback -- in an insecure context randomUUID throws or is missing
+    try {
+      return Array.from(
+        crypto.getRandomValues(new Uint8Array(16)),
+        (rawByte) => rawByte.toString(16).padStart(2, '0'),
+      ).join('');
+    } catch { // oxlint-disable-line @rikalabs/no-silent-catch-fallback -- pure fallback if crypto is completely unavailable
+      newRequestCounter += 1;
+      return `${Date.now().toString(16)}.${newRequestCounter}`;
+    }
   }
-  return `${Date.now().toString(16)}.${newRequestCounter++}`;
 };
-let newRequestCounter = 0;
 
 /** Map HTTP status codes to short messages that say what to do next for the chat UI. */
 export const httpErrorMessage = (status: number): string => {

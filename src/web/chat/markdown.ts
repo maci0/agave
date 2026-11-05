@@ -168,8 +168,9 @@ const wrapTables = (root: HTMLElement): void => {
  *  `java&#x09;script:` href is inert as text but browsers strip tab/newline
  *  before scheme dispatch and run it, so a blocklist on the raw string misses
  *  it; what remains after stripping must start with an allowlisted scheme. */
-const stripUrlIgnorables = (value: string): string =>
-  value.replaceAll(/[\u0000-\u0020\u007f]/gu, '').toLowerCase();
+const stripUrlIgnorables = (rawUrl: string): string =>
+  // oxlint-disable-next-line no-control-regex -- stripping ASCII controls and C0/DEL is the sanitization contract
+  rawUrl.replaceAll(/[\u0000-\u0020\u007F]/gu, '').toLowerCase();
 
 const isSafeLinkHref = (href: string): boolean => {
   const stripped = stripUrlIgnorables(href);

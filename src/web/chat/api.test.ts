@@ -75,18 +75,24 @@ const painted = async (chunks: Array<Uint8Array>): Promise<string> => {
 afterEach(() => { globalThis.fetch = originalFetch; });
 
 /** Record every POST route and its idempotency key while answering 200. */
-const recordPosts = (seen: Array<{ url: string; key: string | null }>): void => {
-  // SAFETY: the stub answers only the mutating routes under test, and
-  // ignores whether the key is valid; it records it for the assertions.
+const recordPosts = (): Array<{ url: string; key: string | null }> => {
+  const recorded: Array<{ url: string; key: string | null }> = [];
+  // SAFETY: The stub answers only the mutating routes under test, and
+  // Ignores whether the key is valid; it records it for the assertions.
   globalThis.fetch = function (input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> {
-    seen.push({ url: String(input), key: new Headers(init.headers ?? {}).get('X-Request-Id') });
+    const requestUrl = ((): string => {
+      if (input instanceof Request) { return input.url; }
+      if (input instanceof URL) { return input.toString(); }
+      return input;
+    })();
+    recorded.push({ url: requestUrl, key: new Headers(init.headers ?? {}).get('X-Request-Id') });
     return Promise.resolve(Response.json({ ok: true }));
   } as typeof fetch;
+  return recorded;
 };
 
 test('delete and clear carry a fresh idempotency key per action', async () => {
-  const seen: Array<{ url: string; key: string | null }> = [];
-  recordPosts(seen);
+  const seen = recordPosts();
   await deleteConversation('7');
   await clearServerConversation();
   await clearServerConversation();
@@ -98,8 +104,7 @@ test('delete and clear carry a fresh idempotency key per action', async () => {
 });
 
 test('create mints a new key for each new conversation', async () => {
-  const seen: Array<{ url: string; key: string | null }> = [];
-  recordPosts(seen);
+  const seen = recordPosts();
   await createConversation();
   await createConversation();
   expect(seen.map((entry) => entry.url)).toEqual(['/v1/conversations', '/v1/conversations']);

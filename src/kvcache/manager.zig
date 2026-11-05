@@ -75,7 +75,6 @@ pub fn freeKvCache(allocator: Allocator, cache: KvCache) void {
 // Sequences reference blocks through a block table (indirection), allowing
 // fine-grained memory reclamation.
 
-
 /// Block-based paged KV cache allocator.
 pub const PagedKvCache = struct {
     blocks: []CacheBlock,
