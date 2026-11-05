@@ -14,6 +14,7 @@
 # Exit 0: every sidecar written, or every sidecar in DIR matches and every
 # `agave-*` binary in DIR has one. Exit 1 otherwise, naming what failed.
 set -euo pipefail
+export LC_ALL=C TZ=UTC
 
 usage() {
     echo "usage: $0 create FILE... | $0 verify DIR" >&2

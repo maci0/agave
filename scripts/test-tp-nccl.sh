@@ -14,6 +14,7 @@
 # Requires: zig build (with CUDA enabled, default), libnccl.so.2 on both nodes.
 
 set -euo pipefail
+export LC_ALL=C TZ=UTC
 
 RANK=${1:?Usage: $0 <rank> <peer_ip> <model_path>}
 PEER=${2:?Missing peer IP}

@@ -3,6 +3,7 @@
 #
 # Usage: ./scripts/profile-analyze.sh <file.trace> [--hot N] [--filter PATTERN]
 set -euo pipefail
+export LC_ALL=C TZ=UTC
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 

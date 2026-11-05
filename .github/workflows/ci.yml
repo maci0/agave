@@ -197,6 +197,8 @@ jobs:
             ENABLE_DFLASH2=false
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          provenance: true
+          sbom: true
 
       - name: Smoke test binary
         run: bash scripts/check-docker-image.sh agave:ci

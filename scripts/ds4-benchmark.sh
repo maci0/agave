@@ -5,6 +5,7 @@
 # DS4_BLOB_DIR is the default HuggingFace cache layout for the DS4 GGUF repo.
 # Models that are not there are reported as SKIP rather than silently scoring 0.
 set -euo pipefail
+export LC_ALL=C TZ=UTC
 
 AGAVE="${DS4_AGAVE:-./zig-out/bin/agave}"
 HF_CACHE="${HF_HUB_CACHE:-${HOME:-}/.cache/huggingface}"
