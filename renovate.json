@@ -1,6 +1,11 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": ["config:recommended", "schedule:weekly"],
+  "//": "One owner per ecosystem (docs/CONTRIBUTING.md): Dependabot owns GitHub Actions, Docker and Python, Renovate owns JavaScript. The Python manifests under tests/ and research/ are the Dependabot uv entries in .github/dependabot.yml, so ignorePaths keeps Renovate from opening a duplicate, conflicting bump for the same uv.lock. Without this both bots bump the same files and their PRs collide on the lock.",
+  "ignorePaths": [
+    "tests/**",
+    "research/**"
+  ],
   "packageRules": [
     {
       "groupName": "oxlint",

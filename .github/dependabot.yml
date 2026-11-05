@@ -2,7 +2,10 @@
 # Dependabot aborts with "detected that Bun is misconfigured" and "This
 # project has a `bun.lock` file but no `package-lock.json`, `yarn.lock` or
 # `pnpm-lock.yaml`". Renovate's npm manager reads bun.lock, so renovate.json
-# owns those packages, oxlint group included.
+# owns those packages, oxlint group included. The Python uv entries below
+# are the other half of the same split: renovate.json ignorePaths keeps
+# Renovate off tests/ and research/, so one bot owns each ecosystem and
+# their PRs cannot collide on uv.lock.
 version: 2
 # Cap open Dependabot PRs so the grouped github-actions / docker / uv / pip
 # bumpers cannot pile up stale, conflicting PRs (and the CI runners they
