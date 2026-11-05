@@ -19,13 +19,10 @@ without a major bump; they must appear in [CHANGELOG.md](CHANGELOG.md)).
 
 ## Reporting a vulnerability
 
-This repository does not currently publish a dedicated disclosure mailbox,
-private-reporting workflow, or fix-shipped SLA. Those are organizational
-fields; they are not invented here.
-
-The only in-repo path that exists is the project's public GitHub issue tracker.
-Do not attach exploit payloads, poisoned model files, or live credentials to a
-public issue.
+Report suspected vulnerabilities privately to **maci.stgn@gmail.com**.
+Include the affected commit, attacker prerequisites, impact, and a minimal
+reproducer. Do not attach exploit payloads, poisoned model files, or live
+credentials to a public issue. There is no promised response or fix-shipped SLA.
 
 ## Model
 
