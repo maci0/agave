@@ -360,11 +360,16 @@ fn fetchBody(
 
     var transfer_buf: [64 * 1024]u8 = undefined;
     const reader = response.reader(&transfer_buf);
-    var writer = try std.Io.Writer.Allocating.initCapacity(gpa, @min(max_size, 64 * 1024));
-    defer writer.deinit();
-    _ = reader.streamRemaining(&writer.writer) catch |err| return err;
+    const cap = max_size + 1;
+    const buf = try gpa.alloc(u8, cap);
+    defer gpa.free(buf);
+    var writer: std.Io.Writer = .fixed(buf);
+    _ = reader.streamRemaining(&writer) catch |err| {
+        if (err == error.WriteFailed) return error.PayloadTooLarge;
+        return err;
+    };
 
-    const data = writer.written();
+    const data = buf[0..writer.end];
     if (data.len > max_size) return error.PayloadTooLarge;
 
     return try arena.dupe(u8, data);
