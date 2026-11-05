@@ -61,6 +61,20 @@ pub const SpecState = struct {
     /// Caller-owned, must be freed separately (not freed by deinit).
     token_mask: ?[]bool = null,
 
+    /// Recurrent state as of `pre_draft_pos`, refilled by `beginRound`.
+    ///
+    /// Verification rewinds the target with `setKvSeqLen(pre_draft_pos)` and
+    /// replays the accepted prefix. That is an exact rewind for attention,
+    /// whose whole decode state is the KV cache, and no rewind at all for a
+    /// hybrid DeltaNet model, whose conv and recurrence states have already
+    /// absorbed every token the round forwarded. Replaying on top of them
+    /// double-consumes the prefix and the drift compounds every round.
+    /// Empty on attention-only models, where `ssmStateBytes()` is 0.
+    ssm_snapshot: []u8 = &.{},
+    /// Bytes `beginRound` actually wrote, so a round that never snapshotted
+    /// does not restore a stale buffer.
+    ssm_snapshot_len: usize = 0,
+
     /// Allocate draft log-prob and sampling buffers for speculative decoding.
     /// `k`: maximum draft length. `vocab_size`: model vocabulary size.
     /// Caller owns the returned state and must call `deinit` with the same allocator.
@@ -81,10 +95,32 @@ pub const SpecState = struct {
         };
     }
 
-    /// Free draft_log_probs and sampling_buf. Must use the same allocator passed to `init`.
+    /// Reserve the buffer that rewinds recurrent state on draft rejection.
+    /// No-op on attention-only models. Call once per state, before the first
+    /// round; without it `beginRound` and the rewinds are inert and a hybrid
+    /// model silently decodes from a drifted state.
+    pub fn reserveSsmRewind(self: *SpecState, allocator: std.mem.Allocator, model: *const Model) !void {
+        const bytes = model.ssmStateBytes();
+        if (bytes == 0 or self.ssm_snapshot.len == bytes) return;
+        if (self.ssm_snapshot.len > 0) allocator.free(self.ssm_snapshot);
+        self.ssm_snapshot = try allocator.alloc(u8, bytes);
+        self.ssm_snapshot_len = 0;
+    }
+
+    /// Capture the target's recurrent state at the round's committed position.
+    /// Call right after reading `pre_draft_pos` and before any drafting, which
+    /// on self-draft, ddtree and MTP modes runs through the target itself.
+    pub fn beginRound(self: *SpecState, model: *const Model) void {
+        if (self.ssm_snapshot.len == 0) return;
+        self.ssm_snapshot_len = model.saveSsmState(self.ssm_snapshot);
+    }
+
+    /// Free draft_log_probs, sampling_buf and the SSM snapshot. Must use the
+    /// same allocator passed to `init` and `reserveSsmRewind`.
     pub fn deinit(self: *SpecState, allocator: std.mem.Allocator) void {
         if (self.draft_log_probs.len > 0) allocator.free(self.draft_log_probs);
         if (self.sampling_buf.len > 0) allocator.free(self.sampling_buf);
+        if (self.ssm_snapshot.len > 0) allocator.free(self.ssm_snapshot);
     }
 
     /// Overall acceptance rate: total_accepted / total_drafted. Returns 0 if nothing drafted.
@@ -554,6 +590,62 @@ pub const Penalties = struct {
     }
 };
 
+/// The mask chain the non-speculative sampler applies to the target's logits.
+///
+/// Verification has to accept a draft token against the distribution the
+/// sampler would have drawn from, so these travel with the round. Dropping
+/// them leaves `--top-k`, `--top-p`, `--min-p` and `--xtc-*` doing nothing
+/// whenever `--spec-mode` is on.
+pub const Sampling = struct {
+    temperature: f32 = 0,
+    top_k: u32 = 0,
+    top_p: f32 = 1.0,
+    min_p: f32 = 0,
+    xtc_probability: f32 = 0,
+    xtc_threshold: f32 = 0.1,
+};
+
+/// Normalized target distribution for one verify step, in `state.sampling_buf`.
+/// Order matches the non-speculative path: penalties, min-p, XTC, then
+/// temperature with top-k and top-p.
+fn targetProbs(state: *SpecState, target_model: *Model, pen: Penalties, samp: Sampling, rng: std.Random) []f32 {
+    const vs = state.vocab_size;
+    const logits = applyPenalties(target_model, pen);
+    const tp = state.sampling_buf[0..vs];
+    @memcpy(tp, logits[0..vs]);
+    if (samp.min_p > 0) math_ops.applyMinP(tp, samp.min_p);
+    if (samp.xtc_probability > 0) math_ops.applyXtc(tp, samp.xtc_probability, samp.xtc_threshold, rng);
+
+    if (samp.temperature == 0) {
+        const best = math_ops.argmax(tp);
+        @memset(tp, 0);
+        tp[best] = 1.0;
+        return tp;
+    }
+
+    const dist = math_ops.truncatedDist(tp, samp.temperature, samp.top_k, samp.top_p);
+    if (dist.sum > 0 and std.math.isFinite(dist.sum)) {
+        const inv = 1.0 / dist.sum;
+        for (tp) |*p| p.* *= inv;
+    } else {
+        // Filtering left nothing. Collapse onto the token `sampleToken` would
+        // have returned, so accept/reject still sees a real distribution.
+        @memset(tp, 0);
+        tp[dist.fallback] = 1.0;
+    }
+    return tp;
+}
+
+/// Draw one token from the target with the full mask chain, for the bonus
+/// token after a fully accepted round. Mutates the model's logits buffer, the
+/// same way the non-speculative path does.
+fn sampleTarget(target_model: *Model, pen: Penalties, samp: Sampling, rng: std.Random) u32 {
+    const logits = applyPenalties(target_model, pen);
+    if (samp.min_p > 0) math_ops.applyMinP(logits, samp.min_p);
+    if (samp.xtc_probability > 0) math_ops.applyXtc(logits, samp.xtc_probability, samp.xtc_threshold, rng);
+    return math_ops.sampleToken(logits, samp.temperature, samp.top_k, samp.top_p, rng);
+}
+
 /// Mask the freshly computed target logits, then argmax. Falls back to the
 /// forward return value when no mask is configured, so the default path is
 /// unchanged and allocation free.
@@ -582,7 +674,7 @@ pub fn verifySequential(
     pen: Penalties,
 ) SpecResult {
     if (state.n_draft == 0) return .{ .accepted = 0, .next_token = last_accepted_token };
-    target_model.setKvSeqLen(pre_draft_pos);
+    rewindTarget(state, target_model, pre_draft_pos);
     var accepted: u32 = 0;
     // Prediction the target last made for the position after the committed
     // prefix. On a forward failure that is the only token still consistent
@@ -625,12 +717,12 @@ pub fn verifySampling(
     draft_model: *Model,
     last_accepted_token: u32,
     pre_draft_pos: usize,
-    temperature: f32,
+    samp: Sampling,
     pen: Penalties,
     rng: std.Random,
 ) SpecResult {
     if (state.n_draft == 0) return .{ .accepted = 0, .next_token = last_accepted_token };
-    target_model.setKvSeqLen(pre_draft_pos);
+    rewindTarget(state, target_model, pre_draft_pos);
     const vs = state.vocab_size;
     var accepted: u32 = 0;
     // See verifySequential: on a forward failure the cache holds exactly
@@ -646,10 +738,8 @@ pub fn verifySampling(
 
         // p is the target distribution we sample from, so the masks belong on it.
         // q stays unpenalized: it is only a proposal.
-        const target_logits = applyPenalties(target_model, pen);
         const draft_lp = state.draft_log_probs[i * vs ..][0..vs];
-        const tp = state.sampling_buf[0..vs];
-        softmaxWithTemp(target_logits, tp, temperature);
+        const tp = targetProbs(state, target_model, pen, samp, rng);
 
         const draft_tok = state.draft_tokens[i];
         const q_tok = @exp(draft_lp[draft_tok]);
@@ -671,7 +761,7 @@ pub fn verifySampling(
         std.log.warn("spec sampling: bonus forward failed: {s}", .{@errorName(err)});
         return finishRound(state, target_model, draft_model, accepted, pre_draft_pos, last_draft);
     };
-    const bonus = math_ops.sampleToken(applyPenalties(target_model, pen), temperature, 0, 1.0, rng);
+    const bonus = sampleTarget(target_model, pen, samp, rng);
     return finishRound(state, target_model, draft_model, accepted, pre_draft_pos, bonus);
 }
 
@@ -686,7 +776,7 @@ pub fn verifyDDTree(
 ) SpecResult {
     if (state.n_draft == 0) return .{ .accepted = 0, .next_token = last_accepted_token };
 
-    target_model.setKvSeqLen(pre_draft_pos);
+    rewindTarget(state, target_model, pre_draft_pos);
 
     var builder = ddtree.DDTreeBuilder{};
     builder.budget = @min(budget, ddtree.max_budget);
@@ -791,7 +881,7 @@ fn verifyDDTreeSequential(
     var input_tok = last_accepted_token;
     // The batch attempt may have left the cache wherever its failed
     // forwardTree stopped; this path replays the prefix from scratch.
-    target_model.setKvSeqLen(pre_draft_pos);
+    rewindTarget(state, target_model, pre_draft_pos);
 
     while (true) {
         const target_next = target_model.forward(input_tok) catch |err| {
@@ -836,7 +926,7 @@ fn commitTargetPrefix(
     pre_draft_pos: usize,
     count: u32,
 ) bool {
-    target_model.setKvSeqLen(pre_draft_pos);
+    rewindTarget(state, target_model, pre_draft_pos);
     var commit_tok = last_accepted_token;
     for (0..count) |i| {
         _ = target_model.forward(commit_tok) catch |err| {
@@ -846,6 +936,18 @@ fn commitTargetPrefix(
         commit_tok = state.draft_tokens[i];
     }
     return true;
+}
+
+/// Rewind the target to the round's committed position.
+///
+/// `setKvSeqLen` alone only rewinds attention. On a hybrid model the conv and
+/// recurrence states keep whatever the drafter and any earlier verify attempt
+/// pushed through them, so the snapshot `beginRound` took has to be put back
+/// before the accepted prefix is replayed.
+fn rewindTarget(state: *const SpecState, target_model: *Model, pre_draft_pos: usize) void {
+    target_model.setKvSeqLen(pre_draft_pos);
+    if (state.ssm_snapshot_len > 0)
+        target_model.restoreSsmState(state.ssm_snapshot[0..state.ssm_snapshot_len]);
 }
 
 /// Shared exit path: record stats, sync draft KV cache, return result.
@@ -858,56 +960,29 @@ fn finishRound(state: *SpecState, target_model: *Model, draft_model: *Model, acc
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-fn softmaxWithTemp(logits: []const f32, out: []f32, temperature: f32) void {
-    if (logits.len == 0) return;
-    const V8 = @Vector(8, f32);
-    const n = logits.len;
-    const safe_temp = if (temperature > 0) temperature else 1.0;
-    const inv_t = 1.0 / safe_temp;
-
-    const inv_tv: V8 = @splat(inv_t);
-    var max_v: V8 = @splat(-std.math.inf(f32));
-    var i: usize = 0;
-    while (i + 8 <= n) : (i += 8) {
-        max_v = @max(max_v, @as(V8, logits[i..][0..8].*) * inv_tv);
-    }
-    var max_val = @reduce(.Max, max_v);
-    while (i < n) : (i += 1) max_val = @max(max_val, logits[i] * inv_t);
-
-    const mv: V8 = @splat(max_val);
-    var sum_v: V8 = @splat(@as(f32, 0.0));
-    i = 0;
-    while (i + 8 <= n) : (i += 8) {
-        const exp_v = @exp(@as(V8, logits[i..][0..8].*) * inv_tv - mv);
-        out[i..][0..8].* = exp_v;
-        sum_v += exp_v;
-    }
-    var sum = @reduce(.Add, sum_v);
-    while (i < n) : (i += 1) {
-        out[i] = @exp(logits[i] * inv_t - max_val);
-        sum += out[i];
-    }
-
-    if (sum > 0) {
-        const inv_sum = 1.0 / sum;
-        const isv: V8 = @splat(inv_sum);
-        i = 0;
-        while (i + 8 <= n) : (i += 8) {
-            out[i..][0..8].* = @as(V8, out[i..][0..8].*) * isv;
-        }
-        while (i < n) : (i += 1) out[i] *= inv_sum;
-    }
-}
-
 /// Sample from norm(max(0, p_target - p_draft)).
 fn sampleResidual(target_probs: []const f32, draft_log_probs: []const f32, vs: u32, rng: std.Random, buf: []f32) u32 {
     const V8 = @Vector(8, f32);
     const zero: V8 = @splat(@as(f32, 0.0));
     const n: usize = vs;
     var sum_v: V8 = zero;
+    // `buf` aliases `target_probs` in every caller, so the most likely target
+    // token is tracked as the residual is written. Reading it back afterwards
+    // would argmax the residual instead.
+    var best: u32 = 0;
+    var best_p: f32 = -1.0;
     var i: usize = 0;
     while (i + 8 <= n) : (i += 8) {
         const p: V8 = target_probs[i..][0..8].*;
+        const chunk_max = @reduce(.Max, p);
+        if (chunk_max > best_p) {
+            for (0..8) |j| {
+                if (target_probs[i + j] > best_p) {
+                    best_p = target_probs[i + j];
+                    best = @intCast(i + j);
+                }
+            }
+        }
         const q = @exp(@as(V8, draft_log_probs[i..][0..8].*));
         const diff = @max(zero, p - q);
         buf[i..][0..8].* = diff;
@@ -915,11 +990,15 @@ fn sampleResidual(target_probs: []const f32, draft_log_probs: []const f32, vs: u
     }
     var sum = @reduce(.Add, sum_v);
     while (i < n) : (i += 1) {
+        if (target_probs[i] > best_p) {
+            best_p = target_probs[i];
+            best = @intCast(i);
+        }
         const diff = @max(0.0, target_probs[i] - @exp(draft_log_probs[i]));
         buf[i] = diff;
         sum += diff;
     }
-    if (sum <= 0) return math_ops.argmax(target_probs);
+    if (sum <= 0) return best;
     var r = rng.float(f32) * sum;
     for (0..n) |j| {
         r -= buf[j];
@@ -970,6 +1049,152 @@ fn logSoftmax(logits: []f32) void {
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────────
+
+/// Mock of a hybrid model: `kv_seq_len` rewinds by assignment, `ssm_state`
+/// does not. Every forward advances both, so a verify round that rewinds only
+/// the KV length leaves `ssm_state` carrying whatever the drafter pushed
+/// through it.
+const RecurrentMock = struct {
+    eos_token_id: u32 = 42,
+    vocab_size: u32 = 8,
+    n_layers: u32 = 1,
+    n_embd: u32 = 4,
+    n_head: u32 = 1,
+    n_head_kv: u32 = 1,
+    kv_seq_len: usize = 10,
+    logits_buf: []f32 = &.{},
+    cancelled: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    be: struct {
+        pub fn setThreadContext(_: *@This()) void {}
+    } = .{},
+    /// Stand-in for conv + recurrence state: one f32 the forwards accumulate.
+    ssm_state: f32 = 0,
+    forward_count: u32 = 0,
+
+    pub fn forward(self: *RecurrentMock, _: u32) @import("../models/model.zig").ForwardError!u32 {
+        self.ssm_state += 1.0;
+        self.kv_seq_len += 1;
+        self.forward_count += 1;
+        return 7;
+    }
+    pub fn prefill(_: *RecurrentMock, _: []const u32) @import("../models/model.zig").ForwardError!u32 {
+        return 7;
+    }
+    pub fn resetCache(self: *RecurrentMock) void {
+        self.ssm_state = 0;
+    }
+    pub fn cancel(_: *RecurrentMock) void {}
+    pub fn getBlockTable(_: *RecurrentMock) []const u32 {
+        return &.{};
+    }
+    pub fn ssmStateBytes(_: *const RecurrentMock) usize {
+        return @sizeOf(f32);
+    }
+    pub fn saveSsmState(self: *const RecurrentMock, buf: []u8) usize {
+        if (buf.len < @sizeOf(f32)) return 0;
+        @memcpy(buf[0..@sizeOf(f32)], std.mem.asBytes(&self.ssm_state));
+        return @sizeOf(f32);
+    }
+    pub fn restoreSsmState(self: *RecurrentMock, snapshot: []const u8) void {
+        if (snapshot.len != @sizeOf(f32)) return;
+        @memcpy(std.mem.asBytes(&self.ssm_state), snapshot);
+    }
+};
+
+test "verify rewinds recurrent state the drafter advanced" {
+    // Self-draft, ddtree and MTP modes draft through the target model, so by
+    // the time verification starts the recurrent state has already run past
+    // the committed position. setKvSeqLen cannot undo that: only the snapshot
+    // beginRound took can. Without the restore the state keeps the drafter's
+    // tokens and every later round compounds the drift.
+    const model_mod = @import("../models/model.zig");
+    var mock = RecurrentMock{ .ssm_state = 1.0, .kv_seq_len = 10 };
+    var logits = [_]f32{ 0, 0, 0, 0, 0, 0, 0, 0 };
+    mock.logits_buf = &logits;
+    var model = model_mod.Model.from(RecurrentMock, &mock);
+
+    var s = try SpecState.init(std.testing.allocator, 4, mock.vocab_size);
+    defer s.deinit(std.testing.allocator);
+    try s.reserveSsmRewind(std.testing.allocator, &model);
+    try std.testing.expectEqual(@as(usize, @sizeOf(f32)), s.ssm_snapshot.len);
+
+    const pre_draft_pos = model.kvSeqLen();
+    s.beginRound(&model);
+    try std.testing.expectEqual(@as(usize, @sizeOf(f32)), s.ssm_snapshot_len);
+
+    // The drafter runs three tokens through the target.
+    mock.ssm_state = 99.0;
+    mock.kv_seq_len = pre_draft_pos + 3;
+
+    // One draft token, which the mock (always predicting 7) rejects.
+    s.n_draft = 1;
+    s.draft_tokens[0] = 3;
+    const result = verifySequential(&s, &model, &model, 1, pre_draft_pos, .{});
+
+    try std.testing.expectEqual(@as(u32, 0), result.accepted);
+    try std.testing.expectEqual(@as(u32, 7), result.next_token);
+    // Rewound to the snapshot (1.0), then exactly one verify forward.
+    try std.testing.expectApproxEqAbs(@as(f32, 2.0), mock.ssm_state, 1e-6);
+    try std.testing.expectEqual(@as(usize, pre_draft_pos + 1), model.kvSeqLen());
+}
+
+test "verify leaves attention-only models untouched by the rewind" {
+    // ssmStateBytes() is 0, so reserveSsmRewind allocates nothing and the
+    // restore never fires. The KV length stays the only rewind.
+    const model_mod = @import("../models/model.zig");
+    var mock = RecurrentMock{ .ssm_state = 5.0, .kv_seq_len = 4 };
+    var logits = [_]f32{ 0, 0, 0, 0, 0, 0, 0, 0 };
+    mock.logits_buf = &logits;
+    var model = model_mod.Model.from(RecurrentMock, &mock);
+
+    var s = try SpecState.init(std.testing.allocator, 4, mock.vocab_size);
+    defer s.deinit(std.testing.allocator);
+    // Skip reserveSsmRewind: stands in for a model with no SSM layers.
+    try std.testing.expectEqual(@as(usize, 0), s.ssm_snapshot.len);
+
+    s.beginRound(&model);
+    try std.testing.expectEqual(@as(usize, 0), s.ssm_snapshot_len);
+
+    s.n_draft = 1;
+    s.draft_tokens[0] = 3;
+    _ = verifySequential(&s, &model, &model, 1, 4, .{});
+    try std.testing.expectApproxEqAbs(@as(f32, 6.0), mock.ssm_state, 1e-6);
+}
+
+test "target distribution carries the sampler truncation" {
+    // Without this, `--spec-mode` silently dropped --top-k/--top-p/--min-p:
+    // verification compared the draft against an untruncated softmax, so
+    // tokens the sampler had filtered out could still be accepted.
+    const model_mod = @import("../models/model.zig");
+    var mock = RecurrentMock{};
+    var logits = [_]f32{ 0.0, 1.0, 2.0, 8.0, 0.0, 0.0, 0.0, 0.0 };
+    mock.logits_buf = &logits;
+    var model = model_mod.Model.from(RecurrentMock, &mock);
+
+    var s = try SpecState.init(std.testing.allocator, 4, mock.vocab_size);
+    defer s.deinit(std.testing.allocator);
+    var prng = std.Random.DefaultPrng.init(1);
+
+    // top_k = 1 leaves only the argmax with any mass.
+    const one = targetProbs(&s, &model, .{}, .{ .temperature = 1.0, .top_k = 1 }, prng.random());
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0), one[3], 1e-5);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.0), one[2], 1e-5);
+
+    // Untruncated: every token keeps mass and the vector sums to one.
+    @memcpy(&logits, &[_]f32{ 0.0, 1.0, 2.0, 8.0, 0.0, 0.0, 0.0, 0.0 });
+    const all = targetProbs(&s, &model, .{}, .{ .temperature = 1.0 }, prng.random());
+    var sum: f32 = 0;
+    for (all) |p| {
+        try std.testing.expect(p > 0);
+        sum += p;
+    }
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0), sum, 1e-5);
+
+    // temperature 0 is greedy: one-hot on the argmax.
+    @memcpy(&logits, &[_]f32{ 0.0, 1.0, 2.0, 8.0, 0.0, 0.0, 0.0, 0.0 });
+    const greedy = targetProbs(&s, &model, .{}, .{ .temperature = 0 }, prng.random());
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0), greedy[3], 1e-5);
+}
 
 test "SpecState init and stats" {
     var s = try SpecState.init(std.testing.allocator, 5, 100);
@@ -1058,24 +1283,6 @@ test "logSoftmax produces valid log-probabilities" {
     try std.testing.expectApproxEqAbs(3.0 - log_sum_exp, logits[2], 1e-5);
 }
 
-test "softmaxWithTemp concentrates on max at low temperature" {
-    const logits = [_]f32{ 1.0, 2.0, 5.0 };
-    var out: [3]f32 = undefined;
-
-    softmaxWithTemp(&logits, &out, 0.1);
-
-    // At very low temperature, nearly all mass on the maximum (index 2)
-    try std.testing.expect(out[2] > 0.99);
-    // Max logit must produce highest probability; others must be ordered
-    try std.testing.expect(out[2] > out[1]);
-    try std.testing.expect(out[1] > out[0]);
-
-    // Sum should be 1.0
-    var sum: f32 = 0;
-    for (out) |v| sum += v;
-    try std.testing.expectApproxEqAbs(@as(f32, 1.0), sum, 1e-5);
-}
-
 test "SpecState recordRound with adaptive K profiling" {
     var s = try SpecState.init(std.testing.allocator, 5, 100);
     defer s.deinit(std.testing.allocator);
@@ -1143,49 +1350,6 @@ test "logSoftmax empty is no-op" {
     logSoftmax(&empty);
     // Empty input must remain empty (early return before SIMD reductions).
     try std.testing.expectEqual(@as(usize, 0), empty.len);
-}
-
-test "softmaxWithTemp temperature=1 is standard softmax" {
-    const logits = [_]f32{ 1.0, 2.0, 3.0 };
-    var out: [3]f32 = undefined;
-
-    softmaxWithTemp(&logits, &out, 1.0);
-
-    // Standard softmax
-    var sum: f32 = 0;
-    for (out) |v| sum += v;
-    try std.testing.expectApproxEqAbs(@as(f32, 1.0), sum, 1e-5);
-
-    // p(3) > p(2) > p(1)
-    try std.testing.expect(out[2] > out[1]);
-    try std.testing.expect(out[1] > out[0]);
-}
-
-test "softmaxWithTemp zero temperature uses temp=1 fallback" {
-    const logits = [_]f32{ 1.0, 2.0, 3.0 };
-    var out: [3]f32 = undefined;
-
-    // Zero temperature should fallback to 1.0 (safe_temp guard)
-    softmaxWithTemp(&logits, &out, 0.0);
-
-    var sum: f32 = 0;
-    for (out) |v| sum += v;
-    try std.testing.expectApproxEqAbs(@as(f32, 1.0), sum, 1e-5);
-}
-
-test "softmaxWithTemp SIMD path with >8 elements" {
-    var logits: [16]f32 = undefined;
-    var out: [16]f32 = undefined;
-    for (0..16) |i| logits[i] = @as(f32, @floatFromInt(i)) * 0.5;
-
-    softmaxWithTemp(&logits, &out, 0.5);
-
-    var sum: f32 = 0;
-    for (out) |v| {
-        try std.testing.expect(v >= 0);
-        sum += v;
-    }
-    try std.testing.expectApproxEqAbs(@as(f32, 1.0), sum, 1e-4);
 }
 
 test "sampleResidual all mass on draft returns target argmax fallback" {
@@ -1288,28 +1452,26 @@ test "fuzz: all spec_decode functions" {
             }
             try std.testing.expectApproxEqAbs(@as(f32, 1.0), sum_exp, 1e-3);
 
-            // -- softmaxWithTemp --
-            var inp: [vocab_size]f32 = undefined;
-            for (0..vocab_size) |i| {
-                const raw = smith.valueWithHash(i16, @intCast(i + 200));
-                inp[i] = @as(f32, @floatFromInt(raw)) * 0.01;
-            }
-            var out: [vocab_size]f32 = undefined;
-            const temp_raw = smith.valueWithHash(u8, 50);
-            const temp: f32 = @as(f32, @floatFromInt(temp_raw)) * 0.02 + 0.01;
-            softmaxWithTemp(&inp, &out, temp);
-            var prob_sum: f32 = 0;
-            for (out) |v| {
-                try std.testing.expect(v >= 0);
-                prob_sum += v;
-            }
-            try std.testing.expectApproxEqAbs(@as(f32, 1.0), prob_sum, 1e-3);
-
             // -- sampleResidual --
             var target_probs: [vocab_size]f32 = undefined;
             var draft_lp: [vocab_size]f32 = undefined;
             var sample_buf: [vocab_size]f32 = undefined;
-            softmaxWithTemp(&inp, &target_probs, 1.0);
+            const temp_raw = smith.valueWithHash(u8, 50);
+            const temp: f32 = @as(f32, @floatFromInt(temp_raw)) * 0.02 + 0.01;
+            for (0..vocab_size) |i| {
+                const raw = smith.valueWithHash(i16, @intCast(i + 200));
+                target_probs[i] = @as(f32, @floatFromInt(raw)) * 0.01;
+            }
+            const dist = math_ops.truncatedDist(&target_probs, temp, 0, 1.0);
+            var prob_sum: f32 = 0;
+            if (dist.sum > 0 and std.math.isFinite(dist.sum)) {
+                for (&target_probs) |*p| {
+                    p.* /= dist.sum;
+                    try std.testing.expect(p.* >= 0);
+                    prob_sum += p.*;
+                }
+                try std.testing.expectApproxEqAbs(@as(f32, 1.0), prob_sum, 1e-3);
+            }
             for (0..vocab_size) |i| {
                 const raw = smith.valueWithHash(i16, @intCast(i + 300));
                 draft_lp[i] = @as(f32, @floatFromInt(raw)) * 0.01;

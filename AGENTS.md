@@ -29,6 +29,7 @@ zig build fmt-check                # check formatting without writing
 bun run lint                       # oxlint (web TypeScript; blocking in CI)
 bun run typecheck                  # tsc --noEmit for src/web and web
 zig build bench                    # agave-bench micro-benchmarks
+zig build gate                     # decode tok/s and greedy determinism vs benchmarks/baselines.json. Needs models and the machine that recorded them, so it is not in `check` or `ci`. Baselines ship empty; record with `python3 scripts/perf-gate.py --update-baselines` (benchmarks/README.md)
 zig build run -- model.gguf "hi"   # run the ReleaseFast binary without installing
 ./zig-out/bin/agave model.gguf "prompt"
 ./zig-out/bin/agave model.gguf --serve
@@ -81,7 +82,7 @@ Non-negotiable. Every change must respect all of them.
 
 ### GPU backends
 - A kernel that exists for that backend but is missing at load `@panic`s. Fail closed; never `@panic` into a CPU path on load failure.
-- Per op, a backend either implements the kernel or deliberately routes to CPU, and that choice is commented. Both are fine; a silent, unjustified third option is the defect. CPU-routed today: `embLookup` on CUDA/ROCm/Metal (single-row CPU read beats dispatch overhead; Vulkan/WebGPU have GPU paths for f32/bf16/f16, host dequant for quantized rows), Metal `softmax` under `softmax_cpu_threshold` (128), `clampedSiluMul` on CUDA/ROCm/Vulkan/WebGPU (Metal uses a GPU kernel above 16384 elements, CPU at or below), CPU SDPA for KV layouts with no GPU kernel (`KvQuantType.cpuSdpaOnly` / `discreteGpuUsesCpuSdpa` in `src/ops/kv_quant.zig` — `nvfp4_ds_mla` everywhere, plus `q8_0` on the discrete backends), `gemm` as a sequential loop-of-GEMV on ROCm/Vulkan/WebGPU and for non-Q8_0 dtypes on CUDA (no native batched GEMM kernel), and CUDA `deltaNet` when the PTX has no `deltanet_recurrence_kernel`. Fail-closed instead: WebGPU IQ2/IQ3/IQ1 GEMV, Vulkan IQ2/IQ3/IQ1. Match the neighbours, not this list — it is not exhaustive.
+- Per op, a backend either implements the kernel or deliberately routes to CPU, and that choice is commented. Both are fine; a silent, unjustified third option is the defect. CPU-routed today: `embLookup` on CUDA/ROCm/Metal (single-row CPU read beats dispatch overhead; Vulkan/WebGPU have GPU paths for f32/bf16/f16, host dequant for quantized rows), Metal `softmax` under `softmax_cpu_threshold` (128), `clampedSiluMul` on CUDA/ROCm/Vulkan/WebGPU (Metal uses a GPU kernel above 16384 elements, CPU at or below), CPU SDPA for KV layouts with no GPU kernel (`KvQuantType.cpuSdpaOnly` / `discreteGpuUsesCpuSdpa` in `src/ops/kv_quant.zig`: `nvfp4_ds_mla` everywhere, plus `q8_0` on the discrete backends), `gemm` as a sequential loop-of-GEMV on ROCm/Vulkan/WebGPU and for non-Q8_0 dtypes on CUDA (no native batched GEMM kernel), and CUDA `deltaNet` when the PTX has no `deltanet_recurrence_kernel`. Fail-closed instead: WebGPU IQ2/IQ3/IQ1 GEMV, Vulkan IQ2/IQ3/IQ1. Match the neighbours, not this list: it is not exhaustive.
 - Keep the decision in one place per op: gate on a `KvQuantType` predicate or a function-pointer null check, not on backend name.
 - `--allow-cpu-fallback` is a stub (warns, does nothing). Do not add CPU fallbacks behind it.
 
@@ -111,8 +112,16 @@ Non-negotiable. Every change must respect all of them.
 - `std.debug.assert` for internal invariants. `pub` only for intended API.
 - Public functions and structs get `///` (purpose, ownership, returns, errors). Files get `//!`.
 - `test` blocks at the bottom of the relevant file. Backend tests use target guards.
-- Changes under `src/backend/`, `src/models/`, `src/kvcache/` ship before/after numbers (throughput, TTFT, VRAM, bandwidth) for the touched op. Measure with `agave model.gguf "prompt" --profile` (`--profile` is a boolean flag) and `zig build bench` (see docs/CONTRIBUTING.md, "How to Debug Performance Regressions"). A >5% regression needs a written justification in the change.
+- Changes under `src/backend/`, `src/models/`, `src/kvcache/` ship before/after numbers (throughput, TTFT, VRAM, bandwidth) for the touched op. Measure with `agave model.gguf "prompt" --profile` (`--profile` is a boolean flag) and `zig build bench` (see docs/CONTRIBUTING.md, "How to Debug Performance Regressions"). A >5% regression needs a written justification in the change. `zig build gate` enforces that 5% against `benchmarks/baselines.json` on a machine that has the models.
 - Kernel research and reference implementations stay in `research/kernels/` (Python/torch tooling plus `tilelang/` experiments). Port to native Zig + target IR before merging into `src/`.
+
+### Prose
+Applies to committed markdown, code comments, commit messages and PR bodies.
+- **No em dashes.** Use a comma, period, colon, or parentheses; rewrite the sentence if none fit. Not `--` or `...` either. `zig build docs-check` fails on one in markdown outside code spans and fences. They are the most reliable punctuation tell of machine-written prose, which is the point: this repo's text should read as a person's.
+- Cut what carries no meaning. An intro that lists the headings below it is restating the table of contents; say what the headings cannot.
+- No throat-clearing openers ("Here's the thing", "It turns out"), significance inflation ("stands as a testament to", "cornerstone of"), false agency ("the data tells a story"), or closing recaps that add no fact.
+- No vague attribution. Name the file, line, commit, or measurement, or drop the claim.
+- Facts are load-bearing: numbers, units, flags, symbol names and hedges that carry meaning ("never store secrets", "not yet wired") survive any rewrite.
 
 ### Models
 - New models: `megakernel_enabled` field so `setMegakernel()` vtable dispatch works; `ModelDesc` in `src/backend/mega_compose.zig` ([docs/MEGAKERNEL.md](docs/MEGAKERNEL.md) Tier 3).

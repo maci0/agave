@@ -8,10 +8,17 @@
 //!   2. `splitAttention()` checks the partition:
 //!      - All GPU → fast path: `be.sdpa()` (zero overhead).
 //!      - All CPU → CPU SDPA on thread pool (or calling thread if no pool).
-//!      - Mixed → full-sequence CPU SDPA after `be.sync()` (GPU backends do not
-//!        yet emit real per-head softmax stats; identity stats would corrupt merge).
-//!   3. When real GPU stats exist, `splitSdpaMerge()` can combine partial outputs
-//!      with FlashAttention-2 online softmax correction (exact, no approximation).
+//!      - Mixed, host-resident prefix then resident suffix → one partial per
+//!        side, combined by `splitSdpaMerge()`. That is the shape a tiered
+//!        cache produces, since it demotes oldest-first.
+//!      - Mixed and interleaved → full-sequence CPU SDPA after `be.sync()`.
+//!        Exact, just not split.
+//!   3. `splitSdpaMerge()` combines the partials with FlashAttention-2 online
+//!      softmax correction: exact, no approximation. It needs each side's real
+//!      per-head max and denominator, which is why `sdpaWithStats` must report
+//!      them rather than the identity (max=0, sum=1). A backend with no
+//!      stats-reporting kernel delegates to the CPU instead of writing the
+//!      identity, which would silently reweight both partials.
 
 const std = @import("std");
 const tiered = @import("../kvcache/tiered.zig");
@@ -31,6 +38,32 @@ const simd_width: usize = 8;
 /// Maximum number of contiguous ranges in a partition.
 /// Bounded by max blocks per sequence (256 blocks × block_size positions each).
 const max_ranges: usize = 256;
+
+/// Head count the merged split path keeps its per-head stats for on the
+/// stack. Past this the full-sequence CPU path runs instead, which needs no
+/// stats at all; no model in tree comes close, and a heap allocation here
+/// would be on the decode path.
+const max_split_heads: usize = 128;
+
+/// Boundary where a partition is exactly "CPU prefix, then GPU suffix", or
+/// null when the tiers interleave.
+///
+/// The merged split path handles two contiguous halves. A tiered cache
+/// demotes oldest-first, so that is the shape it produces, but a partition
+/// that interleaves cannot be served by one slice per side.
+fn contiguousPrefixSplit(partition: *const Partition, total: usize) ?usize {
+    if (partition.gpu_count == 0) return null;
+    const split = partition.total_cpu_positions;
+    if (split == 0 or split >= total) return null;
+    if (split + partition.total_gpu_positions != total) return null;
+    for (partition.cpu[0..partition.cpu_count]) |r| {
+        if (r.start + r.len > split) return null;
+    }
+    for (partition.gpu[0..partition.gpu_count]) |r| {
+        if (r.start < split) return null;
+    }
+    return split;
+}
 
 /// A contiguous range of sequence positions assigned to a tier.
 pub const SeqRange = struct {
@@ -230,20 +263,90 @@ pub fn splitAttention(
         return;
     }
 
-    // CPU path, used by both the all-CPU fast path and the mixed split path.
-    //
-    // Split path: mixed VRAM + RAM/SSD. GPU backends currently fill identity
-    // softmax stats (max=0, sum=1) after a normal SDPA. Online merge requires
-    // real per-head max/sum from each split; identity stats silently corrupt the
-    // result. Until backends emit real stats, run full-sequence CPU SDPA (exact,
-    // no merge) after syncing GPU work.
-
     be.sync();
     const kvd = nkv * hd;
     const k_off = kv_quant.kvByteOffset(kv_type_k, seq_len * kvd);
     const v_off = kv_quant.kvByteOffset(kv_type_v, seq_len * kvd);
     kv_quant.kvStore(kv_keys.ptr + k_off, k_new, kvd, kv_type_k);
     kv_quant.kvStore(kv_values.ptr + v_off, v_new, kvd, kv_type_v);
+
+    // Mixed tiers: CPU takes the host-resident prefix, the backend takes the
+    // resident suffix, and the two partials merge exactly.
+    //
+    // This used to run a full-sequence CPU SDPA instead, because GPU
+    // backends reported identity softmax stats (max=0, sum=1) and merging
+    // against those silently reweights both halves. They report real stats
+    // now.
+    //
+    // Only for the layout a tiered cache actually produces: older positions
+    // demoted to RAM or SSD, recent ones resident, so each side is one
+    // contiguous slice. Anything more interleaved falls through to the
+    // full-sequence CPU path below, which is exact.
+    if (partition.gpu_count > 0 and nh <= max_split_heads) {
+        if (contiguousPrefixSplit(partition, seq_len + 1)) |split| {
+            const start_elems = split * kvd;
+            if (split > 0 and
+                kv_quant.kvSliceable(kv_type_k, start_elems) and
+                kv_quant.kvSliceable(kv_type_v, start_elems))
+            {
+                var max_cpu: [max_split_heads]f32 = @splat(0);
+                var sum_cpu: [max_split_heads]f32 = @splat(0);
+                var max_gpu: [max_split_heads]f32 = @splat(0);
+                var sum_gpu: [max_split_heads]f32 = @splat(0);
+
+                // Host prefix, positions [0, split). The new token is in the
+                // suffix, so this half must not see it.
+                if (pool) |p| {
+                    var ctx = CpuSdpaJob{
+                        .q = q,
+                        .keys = kv_keys.ptr,
+                        .values = kv_values.ptr,
+                        .output = cpu_out,
+                        .head_max = &max_cpu,
+                        .head_sum = &sum_cpu,
+                        .nh = nh,
+                        .nkv = nkv,
+                        .hd = hd,
+                        .sl = split,
+                        .scale = scale,
+                        .kv_type_k = kv_type_k,
+                        .kv_type_v = kv_type_v,
+                    };
+                    p.parallelFor(nh, 1, @ptrCast(&ctx), CpuSdpaJob.work);
+                } else {
+                    for (0..nh) |h| {
+                        sdpa_cpu.sdpaQuantHeadWithStats(q, kv_keys.ptr, kv_values.ptr, cpu_out, h, nh, nkv, hd, split, scale, kv_type_k, kv_type_v, &max_cpu, &sum_cpu);
+                    }
+                }
+
+                // Resident suffix, positions [split, seq_len]. The backend
+                // re-appends the new K/V at the same bytes it already holds.
+                const k_slice_off = kv_quant.kvByteOffset(kv_type_k, start_elems);
+                const v_slice_off = kv_quant.kvByteOffset(kv_type_v, start_elems);
+                be.sdpaWithStats(
+                    q,
+                    kv_keys[k_slice_off..],
+                    kv_values[v_slice_off..],
+                    k_new,
+                    v_new,
+                    gpu_out,
+                    &max_gpu,
+                    &sum_gpu,
+                    nh,
+                    nkv,
+                    hd,
+                    seq_len - split,
+                    scale,
+                    kv_type_k,
+                    kv_type_v,
+                );
+                be.sync();
+
+                splitSdpaMerge(cpu_out, &max_cpu, &sum_cpu, gpu_out, &max_gpu, &sum_gpu, output, nh, hd);
+                return;
+            }
+        }
+    }
     if (pool) |p| {
         var ctx = CpuSdpaNoStatsJob{
             .q = q,
@@ -262,8 +365,6 @@ pub fn splitAttention(
     } else {
         sdpa_cpu.sdpaQuantHeads(q, kv_keys.ptr, kv_values.ptr, output, nh, nkv, hd, seq_len + 1, scale, kv_type_k, kv_type_v);
     }
-    _ = gpu_out;
-    _ = cpu_out;
 }
 
 /// Merge two partial SDPA outputs using online softmax correction.
@@ -590,4 +691,287 @@ test "fuzz: partitionBlocks and splitSdpaMerge" {
             for (merged) |v| try std.testing.expect(std.math.isFinite(v));
         }
     }.f, .{});
+}
+
+/// Attention over the whole sequence must equal the merge of attention over
+/// two halves, using each half's reported softmax stats. That identity is
+/// the whole basis of tiered split attention, and it only holds if
+/// `sdpaWithStats` reports the real per-head max and denominator: a backend
+/// returning the identity (max=0, sum=1) weights the two halves by their
+/// position counts instead of their softmax mass.
+fn checkSplitMatchesFull(be: Backend, label: []const u8) !void {
+    const nh: usize = 2;
+    const nkv: usize = 1;
+    const hd: usize = 8;
+    const kvd: usize = nkv * hd;
+    const seq_len: usize = 7; // positions 0..6 cached, new token lands at 7
+    const split_at: usize = 3; // part A covers 0..2, part B covers 3..7
+
+    var keys: [512]f32 = @splat(0);
+    var vals: [512]f32 = @splat(0);
+    // Spread the keys so the two halves have genuinely different maxima;
+    // equal maxima would hide a wrong correction factor.
+    for (0..seq_len) |t| {
+        for (0..hd) |d| {
+            keys[t * kvd + d] = @as(f32, @floatFromInt(t)) * 0.3 - 1.0 + @as(f32, @floatFromInt(d)) * 0.05;
+            vals[t * kvd + d] = @as(f32, @floatFromInt(t + 1)) + @as(f32, @floatFromInt(d)) * 0.1;
+        }
+    }
+    var k_new: [kvd]f32 = undefined;
+    var v_new: [kvd]f32 = undefined;
+    for (0..kvd) |d| {
+        k_new[d] = 0.7 + @as(f32, @floatFromInt(d)) * 0.02;
+        v_new[d] = 9.0 - @as(f32, @floatFromInt(d)) * 0.1;
+    }
+    var q: [nh * hd]f32 = undefined;
+    for (0..nh * hd) |i| q[i] = 0.1 + @as(f32, @floatFromInt(i)) * 0.03;
+
+    const scale: f32 = 0.35;
+
+    // Full-sequence reference.
+    var full_keys = keys;
+    var full_vals = vals;
+    var full_out: [nh * hd]f32 = @splat(0);
+    be.sdpa(
+        &q,
+        std.mem.sliceAsBytes(&full_keys),
+        std.mem.sliceAsBytes(&full_vals),
+        &k_new,
+        &v_new,
+        &full_out,
+        nh,
+        nkv,
+        hd,
+        seq_len,
+        scale,
+        .f32,
+        .f32,
+    );
+    be.sync();
+
+    // Split. Both halves read one cache that already holds the new token,
+    // so the append each performs rewrites bytes that are already correct.
+    var split_keys = keys;
+    var split_vals = vals;
+    @memcpy(split_keys[seq_len * kvd ..][0..kvd], &k_new);
+    @memcpy(split_vals[seq_len * kvd ..][0..kvd], &v_new);
+
+    // Part A: positions 0..split_at-1. Re-appends the key already at
+    // split_at-1, which is a no-op write.
+    var a_k: [kvd]f32 = undefined;
+    var a_v: [kvd]f32 = undefined;
+    @memcpy(&a_k, split_keys[(split_at - 1) * kvd ..][0..kvd]);
+    @memcpy(&a_v, split_vals[(split_at - 1) * kvd ..][0..kvd]);
+    var out_a: [nh * hd]f32 = @splat(0);
+    var max_a: [nh]f32 = @splat(0);
+    var sum_a: [nh]f32 = @splat(0);
+    be.sdpaWithStats(
+        &q,
+        std.mem.sliceAsBytes(&split_keys),
+        std.mem.sliceAsBytes(&split_vals),
+        &a_k,
+        &a_v,
+        &out_a,
+        &max_a,
+        &sum_a,
+        nh,
+        nkv,
+        hd,
+        split_at - 1,
+        scale,
+        .f32,
+        .f32,
+    );
+    be.sync();
+
+    // Part B: positions split_at..seq_len, read from a shifted base.
+    var out_b: [nh * hd]f32 = @splat(0);
+    var max_b: [nh]f32 = @splat(0);
+    var sum_b: [nh]f32 = @splat(0);
+    be.sdpaWithStats(
+        &q,
+        std.mem.sliceAsBytes(split_keys[split_at * kvd ..]),
+        std.mem.sliceAsBytes(split_vals[split_at * kvd ..]),
+        &k_new,
+        &v_new,
+        &out_b,
+        &max_b,
+        &sum_b,
+        nh,
+        nkv,
+        hd,
+        seq_len - split_at,
+        scale,
+        .f32,
+        .f32,
+    );
+    be.sync();
+
+    var merged: [nh * hd]f32 = @splat(0);
+    splitSdpaMerge(&out_a, &max_a, &sum_a, &out_b, &max_b, &sum_b, &merged, nh, hd);
+
+    for (0..nh * hd) |i| {
+        std.testing.expectApproxEqAbs(full_out[i], merged[i], 1e-3) catch |err| {
+            std.debug.print("{s}: element {d} full={d:.6} merged={d:.6}\n", .{ label, i, full_out[i], merged[i] });
+            return err;
+        };
+    }
+}
+
+test "split attention with real stats reproduces full attention on CPU" {
+    const BackendState = @import("../backend/backend.zig").BackendState;
+    var threaded = std.Io.Threaded.init(std.testing.allocator, .{});
+    defer threaded.deinit();
+    var bs = BackendState{};
+    bs.init(std.testing.allocator, .cpu, threaded.io(), 0);
+    defer if (bs.pool) |*p| p.deinit();
+    try checkSplitMatchesFull(bs.be, "cpu");
+}
+
+test "split attention with real stats reproduces full attention on the GPU" {
+    if (@import("builtin").os.tag != .macos) return error.SkipZigTest;
+    const BackendState = @import("../backend/backend.zig").BackendState;
+    var threaded = std.Io.Threaded.init(std.testing.allocator, .{});
+    defer threaded.deinit();
+    var bs = BackendState{};
+    bs.init(std.testing.allocator, .metal, threaded.io(), 0);
+    defer if (bs.pool) |*p| p.deinit();
+    if (bs.be != .metal) return error.SkipZigTest;
+    defer bs.metal_be.deinit();
+    try checkSplitMatchesFull(bs.be, "metal");
+}
+
+test "contiguousPrefixSplit accepts a demoted prefix and refuses interleaving" {
+    // A tiered cache demotes oldest-first, so the CPU side is a prefix.
+    var p = Partition{};
+    p.cpu[0] = .{ .start = 0, .len = 4 };
+    p.cpu_count = 1;
+    p.total_cpu_positions = 4;
+    p.gpu[0] = .{ .start = 4, .len = 5 };
+    p.gpu_count = 1;
+    p.total_gpu_positions = 5;
+    try std.testing.expectEqual(@as(?usize, 4), contiguousPrefixSplit(&p, 9));
+
+    // Several CPU ranges are fine as long as they stay inside the prefix.
+    var q = Partition{};
+    q.cpu[0] = .{ .start = 0, .len = 2 };
+    q.cpu[1] = .{ .start = 2, .len = 2 };
+    q.cpu_count = 2;
+    q.total_cpu_positions = 4;
+    q.gpu[0] = .{ .start = 4, .len = 5 };
+    q.gpu_count = 1;
+    q.total_gpu_positions = 5;
+    try std.testing.expectEqual(@as(?usize, 4), contiguousPrefixSplit(&q, 9));
+
+    // Interleaved: a GPU range sits before the end of the CPU side, so one
+    // slice per tier cannot describe it and the exact CPU path must run.
+    var r = Partition{};
+    r.cpu[0] = .{ .start = 0, .len = 2 };
+    r.cpu[1] = .{ .start = 4, .len = 2 };
+    r.cpu_count = 2;
+    r.total_cpu_positions = 4;
+    r.gpu[0] = .{ .start = 2, .len = 2 };
+    r.gpu[1] = .{ .start = 6, .len = 3 };
+    r.gpu_count = 2;
+    r.total_gpu_positions = 5;
+    try std.testing.expect(contiguousPrefixSplit(&r, 9) == null);
+
+    // All on one tier is not a split.
+    var g = Partition{};
+    g.gpu[0] = .{ .start = 0, .len = 9 };
+    g.gpu_count = 1;
+    g.total_gpu_positions = 9;
+    try std.testing.expect(contiguousPrefixSplit(&g, 9) == null);
+
+    // Counts that do not add up to the sequence mean a stale partition.
+    var bad = Partition{};
+    bad.cpu[0] = .{ .start = 0, .len = 4 };
+    bad.cpu_count = 1;
+    bad.total_cpu_positions = 4;
+    bad.gpu[0] = .{ .start = 4, .len = 2 };
+    bad.gpu_count = 1;
+    bad.total_gpu_positions = 2;
+    try std.testing.expect(contiguousPrefixSplit(&bad, 9) == null);
+}
+
+test "mixed-tier split attention equals full attention" {
+    // End to end through splitAttention: a partition with a demoted prefix
+    // must produce exactly what attending over the whole sequence does.
+    // Before the backends reported real softmax stats this path ran a
+    // full-sequence CPU SDPA to avoid the merge entirely.
+    const nh: usize = 2;
+    const nkv: usize = 1;
+    const hd: usize = 8;
+    const kvd: usize = nkv * hd;
+    const seq_len: usize = 9;
+    const split: usize = 4;
+
+    var keys: [512]f32 = @splat(0);
+    var vals: [512]f32 = @splat(0);
+    for (0..seq_len) |t| {
+        for (0..hd) |d| {
+            keys[t * kvd + d] = @as(f32, @floatFromInt(t)) * 0.25 - 1.0 + @as(f32, @floatFromInt(d)) * 0.04;
+            vals[t * kvd + d] = @as(f32, @floatFromInt(t + 1)) * 0.5 + @as(f32, @floatFromInt(d)) * 0.1;
+        }
+    }
+    var k_new: [kvd]f32 = undefined;
+    var v_new: [kvd]f32 = undefined;
+    for (0..kvd) |d| {
+        k_new[d] = 0.6 + @as(f32, @floatFromInt(d)) * 0.03;
+        v_new[d] = 4.0 - @as(f32, @floatFromInt(d)) * 0.07;
+    }
+    var q: [nh * hd]f32 = undefined;
+    for (0..nh * hd) |i| q[i] = 0.2 + @as(f32, @floatFromInt(i)) * 0.02;
+    const scale: f32 = 0.4;
+
+    const BackendState = @import("../backend/backend.zig").BackendState;
+    var threaded = std.Io.Threaded.init(std.testing.allocator, .{});
+    defer threaded.deinit();
+    var bs = BackendState{};
+    bs.init(std.testing.allocator, .cpu, threaded.io(), 0);
+    defer if (bs.pool) |*p| p.deinit();
+
+    var full_keys = keys;
+    var full_vals = vals;
+    var expected: [nh * hd]f32 = @splat(0);
+    bs.be.sdpa(&q, std.mem.sliceAsBytes(&full_keys), std.mem.sliceAsBytes(&full_vals), &k_new, &v_new, &expected, nh, nkv, hd, seq_len, scale, .f32, .f32);
+    bs.be.sync();
+
+    var part = Partition{};
+    part.cpu[0] = .{ .start = 0, .len = split };
+    part.cpu_count = 1;
+    part.total_cpu_positions = split;
+    part.gpu[0] = .{ .start = split, .len = seq_len + 1 - split };
+    part.gpu_count = 1;
+    part.total_gpu_positions = seq_len + 1 - split;
+
+    var split_keys = keys;
+    var split_vals = vals;
+    var got: [nh * hd]f32 = @splat(0);
+    var gpu_out: [nh * hd]f32 = @splat(0);
+    var cpu_out: [nh * hd]f32 = @splat(0);
+    splitAttention(
+        &q,
+        std.mem.sliceAsBytes(&split_keys),
+        std.mem.sliceAsBytes(&split_vals),
+        &k_new,
+        &v_new,
+        &got,
+        &gpu_out,
+        &cpu_out,
+        nh,
+        nkv,
+        hd,
+        seq_len,
+        scale,
+        bs.be,
+        .f32,
+        .f32,
+        &part,
+        if (bs.pool) |*p| p else null,
+    );
+
+    for (0..nh * hd) |i| {
+        try std.testing.expectApproxEqAbs(expected[i], got[i], 1e-4);
+    }
 }

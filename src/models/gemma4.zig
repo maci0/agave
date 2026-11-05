@@ -27,6 +27,8 @@ const quant = @import("../ops/quant.zig");
 const perf = @import("../perf.zig");
 const kv_quant = @import("../ops/kv_quant.zig");
 const kv_evict = @import("../ops/kv_evict.zig");
+const kv_window = @import("../kvcache/window.zig");
+const prefix_header = @import("../kvcache/prefix_header.zig");
 const kvcache = @import("../kvcache/manager.zig");
 const block_alloc_mod = @import("../kvcache/block_allocator.zig");
 const BlockAllocator = block_alloc_mod.BlockAllocator;
@@ -85,6 +87,18 @@ const default_moe_intermediate: u32 = 704;
 /// Maximum head dimension supported by Metal/GPU SDPA kernels. Layers with
 /// larger head_dim (e.g. global layers with hd=512) use CPU-side SDPA fallback.
 const gpu_sdpa_max_head_dim: usize = 256;
+/// Independent KV sequences a Gemma 4 model can hold. Each costs another
+/// full set of per-layer caches, so they are allocated on first use and a
+/// server that never interleaves requests pays for none of them.
+const max_kv_slots: u32 = 8;
+
+/// One KV sequence: its per-layer buffers and where it has got to.
+const KvSlot = struct {
+    keys: [][]f32,
+    values: [][]f32,
+    seq_len: usize,
+    base: [max_layers]usize,
+};
 
 // ── Attention scale ─────────────────────────────────────────────
 /// Gemma 4 uses QK norms instead of 1/sqrt(head_dim) scaling.
@@ -266,6 +280,17 @@ pub const Gemma4Model = struct {
     layer_values: [][]f32 = &.{},
     /// Per-layer KV dimension (nkv * hd for that layer).
     layer_kvd: [max_layers]usize = @splat(0),
+    /// Slots allocated per layer. A sliding-window layer holds two windows
+    /// rather than the whole context; a global layer holds `max_seq_len`.
+    layer_kv_cap: [max_layers]usize = @splat(0),
+    /// Absolute position stored at slot 0 of each layer. Nonzero only on a
+    /// sliding layer that has compacted at least once.
+    layer_kv_base: [max_layers]usize = @splat(0),
+    /// Extra KV sequences beyond slot 0, allocated on first selection.
+    kv_slots: [max_kv_slots]?KvSlot = @splat(null),
+    active_kv_slot: u32 = 0,
+    /// One-shot guard so a skipped eviction logs once, not every interval.
+    evict_window_warned: bool = false,
 
     // These fields are kept for Model vtable compatibility (ensureKvBlock, resetKvCache)
     paged_cache: PagedKvCache = undefined,
@@ -784,7 +809,17 @@ pub const Gemma4Model = struct {
                 self.layer_keys[i] = &.{};
                 self.layer_values[i] = &.{};
             } else {
-                const slot_size = max_sl * self.layer_kvd[i];
+                // A sliding-window layer can never read past its window, so
+                // it holds two windows rather than the whole context and
+                // compacts when it reaches the end (src/kvcache/window.zig).
+                // At a 32k context with a 1024 window that is 16x less per
+                // sliding layer, and most of Gemma 4's layers are sliding.
+                const slots = if (!is_gl and sliding_window > 0)
+                    kv_window.capacityFor(sliding_window, default_chunk_size, max_sl)
+                else
+                    max_sl;
+                self.layer_kv_cap[i] = slots;
+                const slot_size = slots * self.layer_kvd[i];
                 self.layer_keys[i] = try allocator.alloc(f32, slot_size);
                 self.layer_values[i] = try allocator.alloc(f32, slot_size);
             }
@@ -902,6 +937,23 @@ pub const Gemma4Model = struct {
     /// Release all heap allocations owned by this model.
     pub fn deinit(self: *Gemma4Model) void {
         self.be.sync();
+        // Extra KV sequences first, and put slot 0 back in place so the
+        // per-layer free below releases the buffers init allocated rather
+        // than whichever slot happened to be active.
+        if (self.active_kv_slot != 0) {
+            self.kv_slots[self.active_kv_slot] = self.liveKvSlot();
+            if (self.kv_slots[0]) |zero| {
+                self.installKvSlot(zero);
+                self.kv_slots[0] = null;
+            }
+            self.active_kv_slot = 0;
+        }
+        for (&self.kv_slots) |*maybe| {
+            if (maybe.*) |s| {
+                self.freeKvSlot(s);
+                maybe.* = null;
+            }
+        }
         // Free per-layer KV cache
         for (0..self.n_layers) |i| {
             if (self.kv_source[i] == @as(u32, @intCast(i))) {
@@ -1287,13 +1339,17 @@ pub const Gemma4Model = struct {
                 self.be.ropeBatched(self.pf_k.ptr, self.pf_positions.ptr, n_tok, nkv, hd, rd, self.sl_rope_theta);
             }
 
-            // Write K/V to cache for all tokens
+            // Write K/V to cache for all tokens. Reserve the whole batch
+            // first so a sliding layer's base is fixed for every write below
+            // and for the attention loop that reads them back.
             self.be.sync();
+            if (n_tok > 0) _ = self.prepareKvBatch(li, self.pf_positions[0], n_tok);
+            const kv_base = self.kvBase(li);
             const kv_view = self.getLayerKvView(li);
             for (0..n_tok) |t| {
-                const pos = self.pf_positions[t];
-                const k_off = @as(usize, pos) * kv_dim;
-                const v_off = @as(usize, pos) * kv_dim;
+                const pos = @as(usize, self.pf_positions[t]) - kv_base;
+                const k_off = pos * kv_dim;
+                const v_off = pos * kv_dim;
                 @memcpy(kv_view.keys[k_off..][0..kv_dim], self.pf_k[t * kv_dim ..][0..kv_dim]);
                 @memcpy(kv_view.values[v_off..][0..kv_dim], self.pf_v[t * kv_dim ..][0..kv_dim]);
             }
@@ -1322,14 +1378,17 @@ pub const Gemma4Model = struct {
         const kv_values_bytes: []u8 = std.mem.sliceAsBytes(kv_view.values);
         const scale: f32 = attn_scale;
 
+        // Local coordinates: the write loop above fixed this layer's base
+        // for the whole batch, so every index here is relative to it.
+        const attn_base = self.kvBase(li);
         for (0..n_tok) |t| {
-            const pos = self.pf_positions[t];
-            const sl = @as(usize, pos) + 1;
+            const pos = @as(usize, self.pf_positions[t]) - attn_base;
+            const sl = pos + 1;
 
             // For shared layers, re-read source K/V at current position
             if (!has_own_kv) {
-                const k_off = @as(usize, pos) * kv_dim;
-                const v_off = @as(usize, pos) * kv_dim;
+                const k_off = pos * kv_dim;
+                const v_off = pos * kv_dim;
                 @memcpy(self.k_buf[0..kv_dim], kv_view.keys[k_off..][0..kv_dim]);
                 @memcpy(self.v_buf[0..kv_dim], kv_view.values[v_off..][0..kv_dim]);
             } else {
@@ -1342,7 +1401,13 @@ pub const Gemma4Model = struct {
             // Copy this token's Q from pf_q
             @memcpy(self.q_buf[0..qkv_dim], self.pf_q[t * qkv_dim ..][0..qkv_dim]);
 
-            if (!is_global and self.sliding_window > 0 and hd > gpu_sdpa_max_head_dim) {
+            // Every sliding-window layer takes the window now, whatever the
+            // head dim. `scaledDotProductAttention` turns a window that ends
+            // at the current position into a shifted cache base and keeps
+            // the backend's fused kernel, so there is no longer a reason to
+            // skip the window for small heads and attend to the whole
+            // sequence instead.
+            if (!is_global and self.sliding_window > 0) {
                 const win: usize = @min(sl, self.sliding_window);
                 const start: usize = if (sl > self.sliding_window) sl - self.sliding_window else 0;
                 attn_ops.scaledDotProductAttention(
@@ -1615,6 +1680,9 @@ pub const Gemma4Model = struct {
     /// Reset the KV cache position for a new conversation.
     pub fn resetCache(self: *Gemma4Model) void {
         model_mod.resetKvCache(self);
+        // A stale base would place the next sequence's first token deep into
+        // the cache, or trip the assert in `place`.
+        self.layer_kv_base = @splat(0);
     }
 
     /// Signal an in-progress forward pass to abort. Thread-safe.
@@ -1622,14 +1690,35 @@ pub const Gemma4Model = struct {
         model_mod.signalCancel(&self.cancelled);
     }
 
+    /// Describe this model's cache for the prefix header, so an import can
+    /// tell whether a blob belongs to it.
+    fn prefixHeader(self: *const Gemma4Model, n_tokens: usize) prefix_header.Header {
+        return .{
+            .n_layers = self.n_layers,
+            .n_tokens = @intCast(n_tokens),
+            .head_dim = @intCast(self.layer_kvd[0]),
+            .shape_hash = prefix_header.shapeHash(self.layer_kvd[0..self.n_layers]),
+            .rope_theta_a = self.sl_rope_theta,
+            .rope_theta_b = self.gl_rope_theta,
+        };
+    }
+
     /// Export KV cache for positions [0, n_tokens) into a flat byte buffer.
-    /// Layout: [layer_0_keys | layer_0_values | layer_1_keys | ...] as f32
-    /// (unversioned; the checkpoint format is not implemented). Per-layer width is
-    /// `layer_kvd[i]`, so dual-attention layers may differ in byte size.
-    /// Returns bytes written (0 if dst too small or n_tokens > kv_seq_len).
+    /// Layout: a `prefix_header.Header` then
+    /// [layer_0_keys | layer_0_values | layer_1_keys | ...] as f32. Per-layer
+    /// width is `layer_kvd[i]`, so dual-attention layers may differ in byte
+    /// size, which is why the header carries a shape hash rather than one
+    /// width. Returns bytes written (0 if dst too small or n_tokens >
+    /// kv_seq_len).
     pub fn exportKvPrefix(self: *Gemma4Model, dst: []u8, n_tokens: usize) usize {
         if (n_tokens > self.kv_seq_len or n_tokens > self.max_seq_len) return 0;
-        var offset: usize = 0;
+        // The blob is positions [0, n_tokens) read from slot 0 onward. Once
+        // a sliding layer has compacted, slot 0 is not position 0 and the
+        // older part of the prefix is gone, so there is no such blob to
+        // hand out.
+        if (self.anyLayerCompacted()) return 0;
+        if (!prefix_header.write(dst, self.prefixHeader(n_tokens))) return 0;
+        var offset: usize = prefix_header.Header.size;
         for (self.layer_keys, self.layer_values, 0..) |keys, vals, i| {
             const kvd = self.layer_kvd[i];
             const k_floats = n_tokens * kvd;
@@ -1653,7 +1742,20 @@ pub const Gemma4Model = struct {
     /// byte-size math below.
     pub fn importKvPrefix(self: *Gemma4Model, src: []const u8, n_tokens: usize) bool {
         if (n_tokens > self.max_seq_len) return false;
-        var offset: usize = 0;
+        // An import writes positions [0, n_tokens) from slot 0, so it only
+        // means anything on a cache whose slot 0 is still position 0. The
+        // bases are reset here because a successful import defines a fresh
+        // sequence; a windowed layer too small for the blob is caught by
+        // the per-layer length check below.
+        self.layer_kv_base = @splat(0);
+        // The body arrives over POST /v1/kv_cache, so it is untrusted. A
+        // length check alone lets a blob from another architecture, another
+        // cache geometry or another RoPE base restore cleanly and then decode
+        // nonsense; the header is what makes those a refusal.
+        const incoming = prefix_header.read(src) orelse return false;
+        if (!incoming.compatible(self.prefixHeader(n_tokens))) return false;
+        if (incoming.n_tokens != n_tokens) return false;
+        var offset: usize = prefix_header.Header.size;
         for (self.layer_keys, self.layer_values, 0..) |keys, vals, i| {
             const kvd = self.layer_kvd[i];
             const k_floats = n_tokens * kvd;
@@ -1703,6 +1805,19 @@ pub const Gemma4Model = struct {
     fn evictKvCache(self: *Gemma4Model) !void {
         const seq_len = self.kv_seq_len;
         if (seq_len == 0) return;
+
+        // Eviction scores and rewrites positions by absolute index. Once a
+        // sliding layer has compacted, slot 0 is no longer position 0, so
+        // those indices name the wrong tokens. The two do not compose yet;
+        // skipping is the safe half, since the window has already dropped
+        // what eviction would have been choosing between on those layers.
+        if (self.anyLayerCompacted()) {
+            if (!self.evict_window_warned) {
+                self.evict_window_warned = true;
+                std.log.warn("kv eviction skipped: a sliding-window layer has compacted its cache, and eviction indexes by absolute position", .{});
+            }
+            return;
+        }
 
         // Lazy-allocate scratch buffers on first eviction (init-phase allocation, not hot path).
         if (self.eviction_scores.len == 0) {
@@ -1772,6 +1887,147 @@ pub const Gemma4Model = struct {
 
     /// Get flat f32 view of KV cache for a layer (resolves shared KV mapping).
     /// Returns the per-layer KV buffers with correct per-layer kvd stride.
+    /// Local slot for absolute position `pos` in `layer`'s cache, compacting
+    /// the live window down to slot 0 first when `pos` would land past the
+    /// end.
+    ///
+    /// A global layer keeps base 0 and returns `pos` unchanged, so only a
+    /// sliding layer that has run past two windows ever moves anything.
+    /// Must be called before any index into that layer's cache for this
+    /// position, and exactly once per position: it is what advances the base.
+    fn prepareKvSlot(self: *Gemma4Model, layer: usize, pos: usize) usize {
+        return self.prepareKvBatch(layer, pos, 1);
+    }
+
+    /// Local slot for the first of `n` consecutive positions starting at
+    /// `first`, compacting once beforehand if the batch would not fit.
+    ///
+    /// Reserving the whole batch up front is what keeps the base fixed from
+    /// a token's write until the attention that reads it: prefill writes a
+    /// batch and then attends to it, and a base that moved in between would
+    /// leave the earlier tokens' indices pointing at the wrong slots.
+    fn prepareKvBatch(self: *Gemma4Model, layer: usize, first: usize, n: usize) usize {
+        const src = self.kv_source[layer];
+        const cap = self.layer_kv_cap[src];
+        const is_windowed = cap > 0 and cap < self.max_seq_len;
+        if (!is_windowed) return first;
+
+        const base = self.layer_kv_base[src];
+        const p = kv_window.placeBatch(self.sliding_window, cap, base, first, n);
+        if (p.move_from) |from| {
+            const kvd = self.layer_kvd[src];
+            const keys = self.layer_keys[src];
+            const vals = self.layer_values[src];
+            const moved = p.keep * kvd;
+            std.mem.copyForwards(f32, keys[0..moved], keys[from * kvd ..][0..moved]);
+            std.mem.copyForwards(f32, vals[0..moved], vals[from * kvd ..][0..moved]);
+            self.layer_kv_base[src] = p.base;
+        }
+        return p.local;
+    }
+
+    /// Absolute position held at slot 0 of this layer's cache.
+    fn kvBase(self: *const Gemma4Model, layer: usize) usize {
+        return self.layer_kv_base[self.kv_source[layer]];
+    }
+
+    /// Independent KV sequences this model can hold. Slot 0 is the one
+    /// allocated at init; the rest are allocated the first time they are
+    /// selected, so a single-request server pays nothing for them.
+    pub fn kvSlotCount(_: *const Gemma4Model) u32 {
+        return max_kv_slots;
+    }
+
+    /// Make `slot` the active KV sequence.
+    ///
+    /// A pointer swap, not a copy: each slot owns its own per-layer buffers
+    /// and its own sequence length and window bases, and switching exchanges
+    /// which set the forward path sees. That is what lets the server
+    /// interleave requests at token granularity instead of running one to
+    /// completion before starting the next.
+    ///
+    /// Returns false when the slot index is out of range or its buffers
+    /// could not be allocated, leaving the active slot unchanged.
+    pub fn selectKvSlot(self: *Gemma4Model, slot: u32) bool {
+        if (slot >= max_kv_slots) return false;
+        if (slot == self.active_kv_slot) return true;
+
+        // Allocate on first use, before touching any live state, so a
+        // failure leaves the current slot intact.
+        if (self.kv_slots[slot] == null) {
+            self.kv_slots[slot] = self.allocKvSlot() catch return false;
+        }
+        self.kv_slots[self.active_kv_slot] = self.liveKvSlot();
+        self.installKvSlot(self.kv_slots[slot].?);
+        self.active_kv_slot = slot;
+        return true;
+    }
+
+    /// The live cache as a slot record.
+    fn liveKvSlot(self: *const Gemma4Model) KvSlot {
+        return .{
+            .keys = self.layer_keys,
+            .values = self.layer_values,
+            .seq_len = self.kv_seq_len,
+            .base = self.layer_kv_base,
+        };
+    }
+
+    fn installKvSlot(self: *Gemma4Model, s: KvSlot) void {
+        self.layer_keys = s.keys;
+        self.layer_values = s.values;
+        self.kv_seq_len = s.seq_len;
+        self.layer_kv_base = s.base;
+    }
+
+    /// Buffers for one additional sequence, laid out exactly like slot 0's
+    /// so every index and capacity already computed stays valid.
+    fn allocKvSlot(self: *Gemma4Model) !KvSlot {
+        const a = self.allocator;
+        const nl = self.n_layers;
+        const keys = try a.alloc([]f32, nl);
+        errdefer a.free(keys);
+        const values = try a.alloc([]f32, nl);
+        errdefer a.free(values);
+        @memset(keys, &.{});
+        @memset(values, &.{});
+        errdefer for (keys) |s| if (s.len > 0) a.free(s);
+        errdefer for (values) |s| if (s.len > 0) a.free(s);
+        for (0..nl) |i| {
+            // A shared layer has no storage of its own in slot 0 either;
+            // getLayerKvView redirects it to its source.
+            if (self.kv_source[i] != @as(u32, @intCast(i))) continue;
+            const n = self.layer_kv_cap[i] * self.layer_kvd[i];
+            keys[i] = try a.alloc(f32, n);
+            values[i] = try a.alloc(f32, n);
+            // A new sequence starts like a reset cache. Attention only
+            // reads below seq_len so this is not load bearing, but it costs
+            // one pass per slot and makes a slot indistinguishable from a
+            // freshly reset one.
+            @memset(keys[i], 0);
+            @memset(values[i], 0);
+        }
+        return .{ .keys = keys, .values = values, .seq_len = 0, .base = @splat(0) };
+    }
+
+    fn freeKvSlot(self: *Gemma4Model, s: KvSlot) void {
+        const a = self.allocator;
+        for (s.keys) |buf| if (buf.len > 0) a.free(buf);
+        for (s.values) |buf| if (buf.len > 0) a.free(buf);
+        a.free(s.keys);
+        a.free(s.values);
+    }
+
+    /// Whether any layer's slot 0 has moved off absolute position 0.
+    /// Anything that indexes the cache by absolute position has to check
+    /// this first.
+    fn anyLayerCompacted(self: *const Gemma4Model) bool {
+        for (self.layer_kv_base[0..self.n_layers]) |b| {
+            if (b != 0) return true;
+        }
+        return false;
+    }
+
     fn getLayerKvView(self: *Gemma4Model, layer: usize) kvcache.KvF32View {
         const src_layer = self.kv_source[layer];
         return .{
@@ -1908,6 +2164,17 @@ pub const Gemma4Model = struct {
         // For has_own_kv: append new K/V and attend. For shared: attend to source's existing cache.
         t = self.perf.start();
 
+        // Slot this position occupies in the layer's cache. Equal to
+        // kv_seq_len on a global layer; on a sliding layer the cache holds
+        // two windows and this compacts when it fills, so every index below
+        // is local to the cache rather than absolute in the sequence. The
+        // source layer of a shared pair already advanced the base, so this
+        // only reads it back.
+        const kv_pos = if (has_own_kv)
+            self.prepareKvSlot(li, self.kv_seq_len)
+        else
+            self.kv_seq_len - self.kvBase(li);
+
         const kv_view = self.getLayerKvView(li);
         const src_kvd = self.layer_kvd[src_layer];
         const kv_keys_bytes: []u8 = std.mem.sliceAsBytes(kv_view.keys);
@@ -1916,13 +2183,13 @@ pub const Gemma4Model = struct {
 
         // For shared layers, we use the full seq_len+1 because the source layer
         // already wrote its K/V at position kv_seq_len earlier in this forward pass.
-        const sl = self.kv_seq_len + 1;
+        const sl = kv_pos + 1;
 
         // For shared layers, re-read the source's K/V from cache at current position
         // so the SDPA "append" is a harmless no-op (writes same data back).
         if (!has_own_kv) {
-            const k_off = self.kv_seq_len * src_kvd;
-            const v_off = self.kv_seq_len * src_kvd;
+            const k_off = kv_pos * src_kvd;
+            const v_off = kv_pos * src_kvd;
             @memcpy(self.k_buf[0..src_kvd], kv_view.keys[k_off..][0..src_kvd]);
             @memcpy(self.v_buf[0..src_kvd], kv_view.values[v_off..][0..src_kvd]);
         }
@@ -1931,7 +2198,11 @@ pub const Gemma4Model = struct {
         // the full image region so each query attends to ALL image positions
         // bidirectionally. The KV cache already has all entries from Pass 1.
         // We force the windowed path which does NOT apply a causal mask.
-        if (self.non_causal_attn and self.image_batch_end > 0) {
+        // The image region is absolute, the cache is local: on a sliding
+        // layer that has compacted, the part of the image older than the
+        // window is gone, which is what a sliding layer can see anyway.
+        const image_local_end = self.image_batch_end -| self.kvBase(li);
+        if (self.non_causal_attn and image_local_end > 0) {
             attn_ops.scaledDotProductAttention(
                 self.q_buf.ptr,
                 kv_keys_bytes,
@@ -1943,17 +2214,23 @@ pub const Gemma4Model = struct {
                 nh,
                 nkv,
                 hd,
-                self.kv_seq_len,
+                kv_pos,
                 scale,
                 self.be,
-                .{ .start = 0, .len = self.image_batch_end },
+                .{ .start = 0, .len = image_local_end },
                 0,
                 .f32,
                 .f32,
             );
-        } else if (!is_global and self.sliding_window > 0 and hd > gpu_sdpa_max_head_dim) {
-            // CPU windowed SDPA only for large-head SWA (hd > 256). For hd ≤ 256,
-            // fall through to Metal SDPA, CPU windowed is broken for 12B GQA (nkv=8).
+        } else if (!is_global and self.sliding_window > 0) {
+            // Every sliding-window layer takes the window now, whatever the
+            // head dim. Small heads used to fall through to an unwindowed
+            // backend SDPA, so the layer attended to the whole sequence once
+            // it grew past the window; the CPU windowed loop was avoided
+            // because it is wrong for 12B GQA (nkv=8).
+            // `scaledDotProductAttention` now serves a window that ends at
+            // the current position from the backend's fused kernel on a
+            // shifted cache base, so neither workaround is needed.
             const win: usize = @min(sl, self.sliding_window);
             const start: usize = if (sl > self.sliding_window) sl - self.sliding_window else 0;
             attn_ops.scaledDotProductAttention(
@@ -1967,7 +2244,7 @@ pub const Gemma4Model = struct {
                 nh,
                 nkv,
                 hd,
-                self.kv_seq_len,
+                kv_pos,
                 scale,
                 self.be,
                 .{ .start = start, .len = win },
@@ -1987,7 +2264,7 @@ pub const Gemma4Model = struct {
                 nh,
                 nkv,
                 hd,
-                self.kv_seq_len,
+                kv_pos,
                 scale,
                 self.be,
                 .{ .start = 0, .len = sl },
@@ -2021,7 +2298,7 @@ pub const Gemma4Model = struct {
                 nh,
                 nkv,
                 hd,
-                self.kv_seq_len,
+                kv_pos,
                 scale,
                 self.be,
                 null,
@@ -3053,10 +3330,10 @@ test "Gemma4 importKvPrefix round-trips an exported prefix" {
     var cpu_be: backend_mod.CpuBackend = .{};
     var m = kvOnlyModel(keys, vals, &layer_tables, &cpu_be);
 
-    var blob: [cap * kvd * @sizeOf(f32) * 2]u8 = undefined;
+    var blob: [prefix_header.Header.size + cap * kvd * @sizeOf(f32) * 2]u8 = undefined;
     m.kv_seq_len = 3;
     const n = m.exportKvPrefix(&blob, 3);
-    try std.testing.expectEqual(@as(usize, 3 * kvd * @sizeOf(f32) * 2), n);
+    try std.testing.expectEqual(@as(usize, prefix_header.Header.size + 3 * kvd * @sizeOf(f32) * 2), n);
 
     // Import into a fresh cache restores the same floats.
     const keys2 = try allocator.alloc(f32, cap * kvd);
@@ -3112,11 +3389,48 @@ test "Gemma4 importKvPrefix rejects oversized or short inputs" {
         try std.testing.expectEqual(@as(usize, 0), m.kv_seq_len);
     }
 
-    // Exact-size import at capacity still succeeds.
+    // A correctly sized body with no header is refused: that is exactly the
+    // pre-header blob shape, and accepting it would restore foreign keys.
     {
-        const body = try allocator.alloc(u8, full_bytes);
+        const body = try allocator.alloc(u8, prefix_header.Header.size + full_bytes);
         defer allocator.free(body);
         @memset(body, 0);
+        try std.testing.expect(!m.importKvPrefix(body, cap));
+        try std.testing.expectEqual(@as(usize, 0), m.kv_seq_len);
+    }
+
+    // A header describing a different cache geometry is refused even though
+    // the payload is the right length.
+    {
+        const body = try allocator.alloc(u8, prefix_header.Header.size + full_bytes);
+        defer allocator.free(body);
+        @memset(body, 0);
+        var foreign = m.prefixHeader(cap);
+        foreign.shape_hash ^= 1;
+        try std.testing.expect(prefix_header.write(body, foreign));
+        try std.testing.expect(!m.importKvPrefix(body, cap));
+        try std.testing.expectEqual(@as(usize, 0), m.kv_seq_len);
+    }
+
+    // A header from a model with a different RoPE base is refused: the keys
+    // carry a rotation this model cannot interpret at these positions.
+    {
+        const body = try allocator.alloc(u8, prefix_header.Header.size + full_bytes);
+        defer allocator.free(body);
+        @memset(body, 0);
+        var retuned = m.prefixHeader(cap);
+        retuned.rope_theta_a += 1.0;
+        try std.testing.expect(prefix_header.write(body, retuned));
+        try std.testing.expect(!m.importKvPrefix(body, cap));
+        try std.testing.expectEqual(@as(usize, 0), m.kv_seq_len);
+    }
+
+    // Exact-size import at capacity, with this model's own header, succeeds.
+    {
+        const body = try allocator.alloc(u8, prefix_header.Header.size + full_bytes);
+        defer allocator.free(body);
+        @memset(body, 0);
+        try std.testing.expect(prefix_header.write(body, m.prefixHeader(cap)));
         try std.testing.expect(m.importKvPrefix(body, cap));
         try std.testing.expectEqual(@as(usize, cap), m.kv_seq_len);
     }
@@ -3137,9 +3451,12 @@ test "Gemma4 exportKvPrefix rejects positions beyond capacity" {
     var m = kvOnlyModel(keys, vals, &layer_tables, &cpu_be);
     m.kv_seq_len = cap;
 
-    var dst: [cap * kvd * @sizeOf(f32) * 2]u8 = undefined;
+    var dst: [prefix_header.Header.size + cap * kvd * @sizeOf(f32) * 2]u8 = undefined;
     try std.testing.expectEqual(@as(usize, 0), m.exportKvPrefix(&dst, cap + 1));
     try std.testing.expectEqual(@as(usize, 0), m.exportKvPrefix(dst[0 .. dst.len - 1], cap));
+    // A buffer with room for the header but not the payload also writes
+    // nothing, rather than a header describing data that is not there.
+    try std.testing.expectEqual(@as(usize, 0), m.exportKvPrefix(dst[0 .. prefix_header.Header.size + 1], cap));
     try std.testing.expectEqual(dst.len, m.exportKvPrefix(&dst, cap));
 }
 
@@ -3286,4 +3603,73 @@ test "fuzz: all gemma4 functions" {
             }
         }
     }.f, .{});
+}
+
+test "KV slots are independent sequences and switching is a swap" {
+    // The scheduler interleaves requests by switching slots between
+    // forwards, so a slot must keep its own contents and its own sequence
+    // length, and switching must not copy or clobber either.
+    const allocator = std.testing.allocator;
+    const cap: usize = 4;
+    const kvd: usize = 2;
+    const keys = try allocator.alloc(f32, cap * kvd);
+    defer allocator.free(keys);
+    const vals = try allocator.alloc(f32, cap * kvd);
+    defer allocator.free(vals);
+    @memset(keys, 0);
+    @memset(vals, 0);
+    var layer_tables: [2][1][]f32 = undefined;
+    var cpu_be: backend_mod.CpuBackend = .{};
+    var m = kvOnlyModel(keys, vals, &layer_tables, &cpu_be);
+    m.allocator = allocator;
+    m.layer_kv_cap[0] = cap;
+    m.max_seq_len = cap;
+    defer {
+        // Only the lazily allocated slots: slot 0's buffers are the
+        // caller's `keys` / `vals` above.
+        if (m.active_kv_slot != 0) {
+            m.kv_slots[m.active_kv_slot] = m.liveKvSlot();
+            if (m.kv_slots[0]) |z| {
+                m.installKvSlot(z);
+                m.kv_slots[0] = null;
+            }
+            m.active_kv_slot = 0;
+        }
+        for (&m.kv_slots) |*s| {
+            if (s.*) |slot| {
+                m.freeKvSlot(slot);
+                s.* = null;
+            }
+        }
+    }
+
+    try std.testing.expect(m.kvSlotCount() > 1);
+
+    // Write a marker into slot 0 and advance its sequence.
+    m.layer_keys[0][0] = 11.0;
+    m.kv_seq_len = 3;
+
+    try std.testing.expect(m.selectKvSlot(1));
+    // A fresh slot starts empty and at position 0, not sharing slot 0's.
+    try std.testing.expectEqual(@as(usize, 0), m.kv_seq_len);
+    try std.testing.expectEqual(@as(f32, 0.0), m.layer_keys[0][0]);
+    m.layer_keys[0][0] = 22.0;
+    m.kv_seq_len = 1;
+
+    // Back to slot 0: its marker and position survived untouched.
+    try std.testing.expect(m.selectKvSlot(0));
+    try std.testing.expectEqual(@as(usize, 3), m.kv_seq_len);
+    try std.testing.expectEqual(@as(f32, 11.0), m.layer_keys[0][0]);
+
+    // And slot 1 kept its own.
+    try std.testing.expect(m.selectKvSlot(1));
+    try std.testing.expectEqual(@as(usize, 1), m.kv_seq_len);
+    try std.testing.expectEqual(@as(f32, 22.0), m.layer_keys[0][0]);
+
+    // Selecting the active slot is a no-op, and an out-of-range slot is
+    // refused without disturbing what is live.
+    try std.testing.expect(m.selectKvSlot(1));
+    try std.testing.expect(!m.selectKvSlot(max_kv_slots));
+    try std.testing.expectEqual(@as(usize, 1), m.kv_seq_len);
+    try std.testing.expectEqual(@as(f32, 22.0), m.layer_keys[0][0]);
 }

@@ -63,7 +63,7 @@ A KV cache is a type of data storage system that stores key-value pairs, allowin
 - **2 Formats**: GGUF, SafeTensors (multi-shard, MLX quantized, NVFP4)
 - **20+ Quantization Types**: F32, F16, BF16, Q2_K, Q3_K, Q4_0, Q4_1, Q4_K, Q5_0, Q5_K, Q6_K, Q8_0, TQ1_0, IQ4_XS, IQ4_NL, FP8 E4M3, FP8 E5M2, NVFP4, MXFP4, MLX 4/6/8-bit, GPTQ
 - **19 KV Cache Quantization Types**: F32, F16, Q8_0, INT8, FP8, NVFP4, NVFP4-MLA, TurboQuant 2/3/4-bit, PlanarQuant 2/3/4-bit, IsoQuant 2/3/4-bit, RotorQuant 2/3/4-bit, with asymmetric K/V support and paged SDPA
-- **Tiered KV Cache**: VRAM + RAM + SSD offloading with async prefetch, on unified-memory backends only (`--kv-tiers vram+ram+ssd`). Split-attention SDPA over mixed tiers has no complete implementation on any current architecture: it warns and may produce incorrect output on long sequences
+- **Tiered KV Cache**: VRAM + RAM + SSD offloading with async prefetch, on unified-memory backends only (`--kv-tiers vram+ram+ssd`). Attention over mixed tiers runs one partial per tier and combines them with FlashAttention-2 online softmax correction, which is exact. A partition whose tiers interleave instead of splitting into a demoted prefix and a resident suffix falls back to a full-sequence CPU pass, also exact
 - **Chat Templates**: Data-driven per-architecture prompt formatting (ChatML, Gemma 4, Qwen 3.5, DeepSeek V4, Llama 4)
 - **Recipes**: Optional proven-default configs per model/hardware/quant combo
 - **Model Download**: `agave pull <org/repo>`, download GGUF models from HuggingFace Hub with auto quant selection
@@ -73,7 +73,7 @@ A KV cache is a type of data storage system that stores key-value pairs, allowin
 - **Structured Output**: GBNF grammar (`--grammar-string`, `--grammar`), JSON schema (`--json-schema`), JSON mode (`--json-output`), server `response_format: json_object/json_schema`
 - **Full Sampling**: CLI: temperature, top-k, top-p, min-p, repeat penalty, DRY, XTC, Mirostat, seed. HTTP API also: frequency/presence penalties, stop sequences
 - **Batched Prefill**: Chunked GEMM + fused FlashAttention-2 for fast prompt processing
-- **Distributed Inference**: Tensor parallelism (TP), pipeline parallelism (PP), disaggregated prefill/decode. Same-node multi-GPU via POSIX shm (zero-copy IPC, needs 32 MB of `/dev/shm` per rank pair — see [Parallelism](docs/PARALLELISM.md#posix-shared-memory)), cross-node via TCP. Heterogeneous: mix CUDA + Vulkan + CPU across x86_64 + aarch64
+- **Distributed Inference**: Tensor parallelism (TP), pipeline parallelism (PP), disaggregated prefill/decode. Same-node multi-GPU via POSIX shm (zero-copy IPC, needs 32 MB of `/dev/shm` per rank pair, see [Parallelism](docs/PARALLELISM.md#posix-shared-memory)), cross-node via TCP. Heterogeneous: mix CUDA + Vulkan + CPU across x86_64 + aarch64
 - **Speculative Decoding**: Modes: auto, standard, ddtree, self, ngram, suffix, lookahead, mtp/medusa, eagle, eagle3, mlp, pflash, dspark, dflash2; plus FR-Spec vocab map and LoRA (`--lora`)
 - **Fused Megakernels**: Composable GPU megakernels, gate+up+SiLU fused into single dispatch (3→1)
 - **Sparse GEMV**: Skip near-zero FFN activation blocks (~40% sparsity from SiLU). CPU +21%, Metal +12%, all GPU backends. Inspired by PowerInfer/TurboSparse
@@ -330,13 +330,14 @@ light or dark setting.
 | `/v1/chat` | POST | Built-in web chat UI |
 | `/v1/chat/regenerate` | POST | Regenerate last assistant response |
 | `/v1/conversations` | GET, POST | Conversation management |
+| `/v1/systemone` | POST | Typed decision questions (noul, choice, score) answered by a logit read |
 | `/v1/tokenize` | POST | Count tokens in text |
 | `/v1/detokenize` | POST | Convert token IDs to text |
 | `/health` | GET | Health check |
 | `/ready` | GET | Readiness check |
 | `/metrics` | GET | Prometheus metrics |
 
-Server features: up to 64 concurrent connections, request scheduler (120s timeout), 30s connection read timeout, Bearer token auth, CORS support. The scheduler admits one request at a time while the model layer exposes a single shared KV sequence; `--max-batch-size` takes effect once per-request paged KV lands.
+Server features: up to 64 concurrent connections, request scheduler (120s timeout), 30s connection read timeout, Bearer token auth, CORS support. Concurrency is one running request per KV sequence the model holds: Gemma 4 gives each request its own, so `--max-batch-size` binds there, and an architecture with a single sequence still runs requests one at a time because two sharing a cache corrupt each other.
 
 ## Interactive REPL
 
@@ -503,7 +504,7 @@ agave [OPTIONS] <model> [prompt]
       --diffusion-canvas <N> DiffusionGemma canvas size [default: 256]
       --diffusion-confidence <F>  Diffusion acceptance threshold [default: 0.5]
       --sleep-after <N>    Server sleep after N seconds idle (0=off)
-      --max-batch-size <N> Server concurrent batch size [default: 8] (admission is one-at-a-time until per-request paged KV is wired)
+      --max-batch-size <N> Server concurrent batch size [default: 8] (capped by the model's KV sequence count; 1 on architectures with a single cache)
       --rate-limit-rpm <N> Server max requests/min (0=unlimited)
       --rate-limit-tpm <N> Server max prompt tokens/min (0=unlimited)
       --conv-store <PATH>  Persist web-UI conversations [default: $XDG_CACHE_HOME/agave/conversations.json]

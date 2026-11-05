@@ -1,5 +1,9 @@
 // In-place Rotary Position Embedding (RoPE).
-// Applies rotation to adjacent pairs (d, d+1) for d < rope_dim within each head.
+// Rotates element i against element i + rope_dim/2 within each head, which is
+// the half-split (NeoX) layout the CPU and Metal kernels use and the layout
+// GGUF weights are stored for. This shader used to pair adjacent elements
+// (d, d+1) instead, a different rotation, so every model decoded wrong on
+// WebGPU.
 // One thread per pair. Total threads = n_heads * (rope_dim / 2).
 
 struct Params {
@@ -32,9 +36,8 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let cos_a = cos(angle);
     let sin_a = sin(angle);
 
-    let d = 2u * i;
-    let x0 = data[base + d];
-    let x1 = data[base + d + 1u];
-    data[base + d]      = x0 * cos_a - x1 * sin_a;
-    data[base + d + 1u] = x0 * sin_a + x1 * cos_a;
+    let r = data[base + i];
+    let im = data[base + i + half_rope];
+    data[base + i]             = r * cos_a - im * sin_a;
+    data[base + i + half_rope] = r * sin_a + im * cos_a;
 }

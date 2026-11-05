@@ -6,7 +6,7 @@
 
 A 290-billion-parameter model. 141 gigabytes of weights. 48 GB of RAM. No GPU.
 
-We made it run **1.8× faster** than the GPU-based reference engine — on pure CPU + NVMe SSD.
+We made it run **1.8× faster** than the GPU-based reference engine: on pure CPU + NVMe SSD.
 
 This is the story of 54 optimization iterations that took DeepSeek V4 Flash from producing garbled output (literal `inf` values) to exceeding the Metal GPU benchmark by 80%. Along the way, we discovered that most of our "clever" optimizations were dead code, that the real bottleneck was surprisingly simple, and that the single biggest win came from understanding which code path was actually executing.
 
@@ -34,7 +34,7 @@ Standard MXFP4 uses group_size=16 (one scale per 16 weights). MLX experts use gr
 
 ### The dtype detection bug
 
-SafeTensors parses `U8` tensors as `.nvfp4` dtype. Our expert dispatch only checked `.unknown` — so it silently **skipped the entire expert computation**, returning zeros for every routed expert's output.
+SafeTensors parses `U8` tensors as `.nvfp4` dtype. Our expert dispatch only checked `.unknown`: so it silently **skipped the entire expert computation**, returning zeros for every routed expert's output.
 
 After fixing all three: coherent output. "The capital of France is Paris." Baseline: 1.0–1.3 tok/s.
 
@@ -42,13 +42,13 @@ After fixing all three: coherent output. "The capital of France is Paris." Basel
 
 Suffix speculation matches the model's recent output against its own history. When the model generates "The capital of France is Paris" and later starts generating "The capital of", the suffix matcher finds this pattern in history and proposes "France is Paris" as the continuation. No draft model needed.
 
-With greedy decoding (temperature=0), the model is deterministic — suffix matches from its own history are **provably correct**. This gives 100% acceptance rate.
+With greedy decoding (temperature=0), the model is deterministic: suffix matches from its own history are **provably correct**. This gives 100% acceptance rate.
 
 Each round: propose ~17 draft tokens (instant) → accept all → run ONE forward pass for the bonus token. That's 18 tokens for the cost of one forward, a theoretical 18× speedup over sequential decoding.
 
 ### The 30 iterations of dead code
 
-We spent iterations 25–55 optimizing `verifyBatched` — a batched verification path using `forwardTree` (a simplified model without Hyper Connections or routed experts). We implemented:
+We spent iterations 25–55 optimizing `verifyBatched`: a batched verification path using `forwardTree` (a simplified model without Hyper Connections or routed experts). We implemented:
 
 - Layer skipping in forwardTree
 - Head subsampling (8 of 64 heads)
@@ -58,7 +58,7 @@ We spent iterations 25–55 optimizing `verifyBatched` — a batched verificatio
 - Windowed attention
 - Pre-dequantization at model init
 
-**None of it mattered.** At iteration 56, we discovered that suffix mode uses the `is_self_draft` code path, which bypasses `verifyBatched` entirely. The suffix mode had been running through a completely different branch — one that calls the full `forward()` for each round — all along.
+**None of it mattered.** At iteration 56, we discovered that suffix mode uses the `is_self_draft` code path, which bypasses `verifyBatched` entirely. The suffix mode had been running through a completely different branch: one that calls the full `forward()` for each round: all along.
 
 The `forwardTree` path gave **0% acceptance** for DS4 anyway (the simplified model is too approximate without Hyper Connections). All 30 iterations of optimization work were dead code.
 
@@ -66,7 +66,7 @@ The `forwardTree` path gave **0% acceptance** for DS4 anyway (the simplified mod
 
 ## Phase 3: The Real Bottleneck (5.0 → 10.6 tok/s)
 
-With the correct code path identified, we analyzed the actual time breakdown. Each suffix round produces ~18 tokens for the cost of one full `forward()`. But ~75% of rounds have **zero suffix matches** — the model generates unique tokens that don't appear in history. These zero-match rounds fall back to single-token generation using the full model.
+With the correct code path identified, we analyzed the actual time breakdown. Each suffix round produces ~18 tokens for the cost of one full `forward()`. But ~75% of rounds have **zero suffix matches**: the model generates unique tokens that don't appear in history. These zero-match rounds fall back to single-token generation using the full model.
 
 Each fallback forward reads 6 experts × 3 projections × ~4MB × 43 layers ≈ 3GB from SSD. At 3.5 GB/s, that's ~860ms per fallback.
 
@@ -81,7 +81,7 @@ if (use_suffix) target.setExpertBudget(0);
 
 **Three experts instead of six.** That's 50% fewer SSD reads per fallback forward. Since ~75% of rounds are fallbacks, this translates directly: factual went from 5.0 to 8.3 tok/s (+66%).
 
-We also increased the thread pool grain from 16 to 128, reducing task dispatch overhead. Each GEMV previously created 2048 tiny tasks; now it creates 256 — an 8× reduction in dispatch overhead for a uniform 6–10% improvement.
+We also increased the thread pool grain from 16 to 128, reducing task dispatch overhead. Each GEMV previously created 2048 tiny tasks; now it creates 256: an 8× reduction in dispatch overhead for a uniform 6–10% improvement.
 
 Finally, filtering chat template tokens (ID ≥ 128000) from the suffix history prevented the model from echoing `<?Assistant?></think>` formatting, which had been inflating suffix match rates with garbled content.
 
@@ -97,7 +97,7 @@ Finally, filtering chat template tokens (ID ≥ 128000) from the suffix history 
 | **-n 2000** | **43.2** | **7.32×** |
 | Baseline (no suffix) | 1.3–1.4 | 0.24× |
 
-All workloads at -n 64 exceed the GPU-based reference by 20–80%, on pure CPU with NVMe SSD streaming. Performance scales with sequence length because longer output creates more suffix history → more matches → fewer SSD-bound forward passes. At -n 2000, we reach **43.2 tok/s — 7.32× faster than the GPU reference**.
+All workloads at -n 64 exceed the GPU-based reference by 20–80%, on pure CPU with NVMe SSD streaming. Performance scales with sequence length because longer output creates more suffix history → more matches → fewer SSD-bound forward passes. At -n 2000, we reach **43.2 tok/s: 7.32× faster than the GPU reference**.
 
 We also investigated Metal GPU acceleration (14 iterations). Native Metal rmsNorm, SDPA, and activation kernels produce bit-exact output. But the Metal GEMV kernels produce ~0.02% different rounding per layer due to GPU FMA vs CPU NEON FMA hardware differences. Over 43 Hyper Connection layers, this cascades to completely different tokens. The CPU path remains optimal for this model format.
 
@@ -113,13 +113,13 @@ Out of 54 iterations, **5 changes** drove all the improvement:
 | Thread pool grain 128 | +10% | 8× fewer task dispatches |
 | Special token filter | Quality fix | Prevented chat template echo |
 
-Everything else — batched GEMM kernels, dequant+SGEMM, layer skipping, head subsampling, windowed attention, FFN skipping, pre-dequantization — either didn't work, made things slower, or was dead code.
+Everything else: batched GEMM kernels, dequant+SGEMM, layer skipping, head subsampling, windowed attention, FFN skipping, pre-dequantization: either didn't work, made things slower, or was dead code.
 
 ## The Deeper Lesson
 
 For SSD-streamed MoE inference, **I/O bandwidth is the only bottleneck that matters**. Every optimization that reduced SSD reads worked. Every optimization that reduced compute (but not I/O) had zero effect.
 
-The most effective technique wasn't a novel kernel or a clever algorithm — it was reducing the expert count during speculative fallback rounds. A one-line change (`setExpertBudget(3)`) delivered more speedup than 30 iterations of kernel engineering.
+The most effective technique wasn't a novel kernel or a clever algorithm: it was reducing the expert count during speculative fallback rounds. A one-line change (`setExpertBudget(3)`) delivered more speedup than 30 iterations of kernel engineering.
 
 Sometimes the best optimization is the simplest one, applied to the right place.
 
@@ -144,4 +144,4 @@ huggingface-cli download mlx-community/DeepSeek-V4-Flash-4bit
 
 **Model:** [mlx-community/DeepSeek-V4-Flash-4bit](https://huggingface.co/mlx-community/DeepSeek-V4-Flash-4bit) (141GB, SafeTensors).
 
-*Source code: [Agave](https://github.com/agave-llm/agave) — zero-dependency LLM inference engine in Zig.*
+*Source code: [Agave](https://github.com/agave-llm/agave): zero-dependency LLM inference engine in Zig.*

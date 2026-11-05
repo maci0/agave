@@ -87,6 +87,17 @@ die() {
     exit 1
 }
 
+# BSD chmod, which is what macOS ships, has no `--` end-of-options separator
+# and fails outright on one. An option-like path is disarmed by making it
+# explicitly relative instead, which both implementations accept.
+chmod_path() {
+    local mode="$1" path="$2"
+    case "$path" in
+        -*) path="./$path" ;;
+    esac
+    chmod "$mode" "$path"
+}
+
 note() {
     echo "conv-store-backup: $*"
 }
@@ -434,7 +445,7 @@ verify_store() {
 copy_atomic() {
     local src="$1" dest="$2"
     cp -- "$src" "$dest.tmp" || die "copy $src -> $dest.tmp failed"
-    chmod 600 -- "$dest.tmp" || die "could not restrict permissions on $dest.tmp"
+    chmod_path 600 "$dest.tmp" || die "could not restrict permissions on $dest.tmp"
     if ! command -v sync >/dev/null 2>&1; then
         die "no sync command available; cannot flush $dest.tmp to disk (install coreutils or busybox)"
     fi
@@ -443,7 +454,7 @@ copy_atomic() {
     sync -- "$(dirname -- "$dest")" || die "could not flush the directory holding $dest"
 }
 
-do_backup() {
+do_backup() (
     local live dest dir
     live="$(live_store_path)" || die "neither XDG_CACHE_HOME nor HOME is set; pass --store PATH"
     dir="$(backup_dir)"
@@ -451,7 +462,7 @@ do_backup() {
     acquire_backup_lock "$dir"
     # The backup dir holds nothing but copies of the conversation store, so it
     # is owner-only even when the operator's umask is not.
-    chmod 700 -- "$dir" || die "cannot restrict permissions on $dir"
+    chmod_path 700 "$dir" || die "cannot restrict permissions on $dir"
     if [[ ! -f "$live" ]]; then
         die "no conversation store at $live (nothing to back up; the server writes one on its first conversation)"
     fi
@@ -487,7 +498,7 @@ do_backup() {
     done
     prune "$dir"
     note "backed up $live -> $dest"
-}
+)
 
 # Prune oldest first, never below one file in a tier, and only files this
 # script names: a retention job that can reach zero backups, or that reaches a
@@ -580,7 +591,7 @@ prune_tier() {
     done
 }
 
-do_restore() {
+do_restore() (
     local file="${1:-}"
     [[ -n "$file" ]] || die "restore needs a backup file: scripts/conv-store-backup.sh restore FILE"
     verify_store "$file"
@@ -596,7 +607,7 @@ do_restore() {
     dir="$(backup_dir)"
     mkdir -p -- "$dir" || die "cannot create $dir"
     acquire_backup_lock "$dir"
-    chmod 700 -- "$dir" || die "cannot restrict permissions on $dir"
+    chmod_path 700 "$dir" || die "cannot restrict permissions on $dir"
     if [[ -f "$live" ]]; then
         local snap
         snap="$dir/conversations-prerestore-$(stamp).json"
@@ -609,7 +620,7 @@ do_restore() {
     verify_store "$live" || die "restored copy at $live does not verify; the backup file is untouched"
     note "restored $file -> $live"
     note "restart the server (docker compose restart agave) to load it; a store it cannot parse is quarantined, not dropped"
-}
+)
 
 # Is the backup tier still a recovery path? A backup job that stopped running
 # looks exactly like a backup job that has nothing to do, so freshness and

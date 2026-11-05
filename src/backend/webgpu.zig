@@ -23,7 +23,6 @@ const wgsl_gelu_mul = @embedFile("kernels/webgpu/gelu_mul.wgsl");
 const wgsl_rms_norm = @embedFile("kernels/webgpu/rms_norm.wgsl");
 const wgsl_softmax = @embedFile("kernels/webgpu/softmax.wgsl");
 const wgsl_rope = @embedFile("kernels/webgpu/rope.wgsl");
-const wgsl_embedding = @embedFile("kernels/webgpu/embedding.wgsl");
 const wgsl_gemv_f32 = @embedFile("kernels/webgpu/gemv_f32.wgsl");
 const wgsl_gemv_bf16 = @embedFile("kernels/webgpu/gemv_bf16.wgsl");
 const wgsl_gemv_f16 = @embedFile("kernels/webgpu/gemv_f16.wgsl");
@@ -282,7 +281,6 @@ const act_pool_capacity: u32 = 32;
 /// Max params buffers to defer-destroy per sync cycle.
 const max_deferred_destroy: u32 = 256;
 /// Max vocab rows uploaded to GPU for f32 embedding lookup.
-const emb_max_vocab: usize = 256000;
 /// Max heads for deltaNet stack arrays (gate, beta, gate_beta).
 const delta_net_max_heads: usize = 256;
 /// Max Q+K elements for deltaNet combined buffer (num_k_heads * head_k_dim * 2).
@@ -349,7 +347,6 @@ pub const WebGpuBackend = struct {
     pipe_rms_norm: PipelineInfo = .{},
     pipe_softmax: PipelineInfo = .{},
     pipe_rope: PipelineInfo = .{},
-    pipe_embedding: PipelineInfo = .{},
     pipe_gemv_f32: PipelineInfo = .{},
     pipe_gemv_bf16: PipelineInfo = .{},
     pipe_gemv_f16: PipelineInfo = .{},
@@ -469,13 +466,13 @@ pub const WebGpuBackend = struct {
         };
         self.lib = @import("../dynlib.zig").open(soname) orelse return error.WebGpuNotAvailable;
         errdefer self.lib.close();
-        std.log.info("WebGPU: library loaded", .{});
+        std.log.debug("WebGPU: library loaded", .{});
 
         self.loadFunctions() catch |err| {
             std.log.warn("WebGPU: loadFunctions failed: {s}", .{@errorName(err)});
             return error.WebGpuNotAvailable;
         };
-        std.log.warn("WebGPU: functions loaded", .{});
+        std.log.debug("WebGPU: functions loaded", .{});
 
         const desc = WGPUInstanceDescriptor{};
         self.instance = self.fn_create_instance(&desc);
@@ -599,7 +596,6 @@ pub const WebGpuBackend = struct {
         self.pipe_rms_norm = try self.createPipeline(wgsl_rms_norm);
         self.pipe_softmax = try self.createPipeline(wgsl_softmax);
         self.pipe_rope = try self.createPipeline(wgsl_rope);
-        self.pipe_embedding = try self.createPipeline(wgsl_embedding);
         self.pipe_gemv_f32 = try self.createPipeline(wgsl_gemv_f32);
         self.pipe_gemv_bf16 = try self.createPipeline(wgsl_gemv_bf16);
         self.pipe_gemv_f16 = try self.createPipeline(wgsl_gemv_f16);
@@ -1097,41 +1093,31 @@ pub const WebGpuBackend = struct {
     }
 
     /// Embedding table lookup: copy row `token_id` from table into output.
-    pub fn embLookup(self: *WebGpuBackend, table: TensorData, token_id: u32, output: [*]f32, dim: usize) void {
-        // For non-f32 tables, dequant the single row on host and upload f32.
-        // This avoids uploading the entire multi-hundred-MB vocab table to GPU.
-        if (table.dtype != .f32) {
-            const quant = @import("../ops/quant.zig");
-            const DType = @import("../format/dtype.zig").DType;
-            const row_dtype: DType = switch (table.dtype) {
-                .q8_0 => .q8_0,
-                .bf16 => .bf16,
-                .f16 => .f16,
-                else => @panic("WebGPU embLookup: unsupported dtype"),
-            };
-            const bpe = backend_mod.weightBytes(row_dtype, 1, dim);
-            const row_offset = @as(usize, token_id) * bpe;
-            quant.dequantToF32(output[0..dim], table.data + row_offset, row_dtype, dim);
-            return;
-        }
-        std.debug.assert(token_id < emb_max_vocab); // vocab exceeds emb_max_vocab
-        const table_size = dim * @sizeOf(f32) * emb_max_vocab;
-        const table_buf = self.getOrUpload(table.data, table_size);
-        const out_size = dim * @sizeOf(f32);
-        const out_buf = self.createOutputBuf(out_size);
-
-        const Params = extern struct { n_embd: u32, dtype: u32, token_id_v: u32, _pad: u32 };
-        const params = Params{ .n_embd = @intCast(dim), .dtype = 0, .token_id_v = token_id, ._pad = 0 };
-        const params_buf = self.createUniformBuf(Params, params);
-        self.deferDestroy(params_buf);
-
-        const entries = [_]WGPUBindGroupEntry{
-            storageEntry(0, table_buf, table_size),
-            storageEntry(1, out_buf, out_size),
-            uniformEntry(2, params_buf, Params),
+    /// Read one embedding row on the host.
+    ///
+    /// Every dtype takes this path, including f32. The f32 path used to
+    /// upload the table and dispatch a shader, sizing the upload as
+    /// `dim * 4 * emb_max_vocab` because the signature carries no row count:
+    /// at dim 1024 that is 1.05 GB read from whatever the table actually is,
+    /// so it ran off the end of any model whose vocab is under 256000 and
+    /// segfaulted outright on a smaller table.
+    ///
+    /// A lookup is one row. There is nothing to parallelise and no reason to
+    /// move a vocab table to the device for it, which is the same call Metal
+    /// makes.
+    pub fn embLookup(_: *WebGpuBackend, table: TensorData, token_id: u32, output: [*]f32, dim: usize) void {
+        const quant = @import("../ops/quant.zig");
+        const DType = @import("../format/dtype.zig").DType;
+        const row_dtype: DType = switch (table.dtype) {
+            .f32 => .f32,
+            .q8_0 => .q8_0,
+            .bf16 => .bf16,
+            .f16 => .f16,
+            else => @panic("WebGPU embLookup: unsupported dtype"),
         };
-        self.dispatchCompute(self.pipe_embedding, &entries, @intCast((dim + workgroup_size - 1) / workgroup_size));
-        self.cacheGpuResult(output, out_buf, out_size);
+        const bpe = backend_mod.weightBytes(row_dtype, 1, dim);
+        const row_offset = @as(usize, token_id) * bpe;
+        quant.dequantToF32(output[0..dim], table.data + row_offset, row_dtype, dim);
     }
 
     /// General matrix-vector multiply: y[n] = W[n,k] @ x[k]. Dispatches by quant type.
@@ -1415,6 +1401,17 @@ pub const WebGpuBackend = struct {
             cpu.sdpa(q, keys, values, k_new, v_new, output, nh, nkv, hd, seq_len, scale, kv_type_k, kv_type_v);
             return;
         }
+        if (kv_type_k == .f16 or kv_type_v == .f16) {
+            // Deliberate CPU route, not a missing kernel. WGSL has no f16
+            // without the shader-f16 extension, so the cache would have to
+            // be unpacked from u32 pairs; the CPU already reads f16 KV
+            // natively and `--kv-type f16` is the default, so routing beats
+            // refusing. Metal dequants f16 in-kernel (`bits_k == 16`).
+            self.sync();
+            var cpu = CpuBackend{};
+            cpu.sdpa(q, keys, values, k_new, v_new, output, nh, nkv, hd, seq_len, scale, kv_type_k, kv_type_v);
+            return;
+        }
         if (kv_type_k != .f32 or kv_type_v != .f32)
             @panic("WebGPU sdpa: only f32 KV supported, use --kv-type f32");
 
@@ -1469,12 +1466,13 @@ pub const WebGpuBackend = struct {
 
     /// SDPA with per-head max/sum statistics (for disaggregated attention merging).
     pub fn sdpaWithStats(self: *WebGpuBackend, q: [*]const f32, keys: []u8, values: []u8, k_new: [*]const f32, v_new: [*]const f32, output: [*]f32, head_max: [*]f32, head_sum: [*]f32, nh: usize, nkv: usize, hd: usize, seq_len: usize, scale: f32, kv_type_k: KvQuantType, kv_type_v: KvQuantType) void {
-        self.sdpa(q, keys, values, k_new, v_new, output, nh, nkv, hd, seq_len, scale, kv_type_k, kv_type_v);
-        // Identity stats (max=0, sum=1), GPU SDPA output is already normalized
-        for (0..nh) |h| {
-            head_max[h] = 0.0;
-            head_sum[h] = 1.0;
-        }
+        // No stats-reporting shader here yet. Running the normal SDPA and
+        // writing identity stats (max=0, sum=1) would not be "no stats": a
+        // merge weights the partials by them, so the identity silently
+        // reweights both sides. The CPU path reports real ones.
+        self.sync();
+        var cpu = CpuBackend{};
+        cpu.sdpaWithStats(q, keys, values, k_new, v_new, output, head_max, head_sum, nh, nkv, hd, seq_len, scale, kv_type_k, kv_type_v);
     }
 
     /// Paged SDPA: block-table-indexed attention for non-contiguous KV cache.
@@ -2164,8 +2162,6 @@ test "WebGPU tuning constants are valid" {
     try testing.expect(max_map_poll_iterations > 0);
 
     try testing.expectEqual(@as(u32, 65535), max_workgroups_per_dim);
-    // Qwen3.8-27B vocab (248320) and emb_max_vocab both exceed the 1D dispatch cap.
-    try testing.expect(emb_max_vocab > max_workgroups_per_dim);
 
     try testing.expectEqual(@as(u32, 8), mxfp4_min_group_size);
     try testing.expectEqual(@as(u32, 0), mxfp4_scale_e4m3);

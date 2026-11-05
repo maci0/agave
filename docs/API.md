@@ -358,6 +358,69 @@ Not implemented. Returns `501` (`code: not_implemented`). Experimental stub:
 not part of the supported HTTP contract until a changelog entry ships a real
 implementation.
 
+### POST /v1/systemone
+
+Answer typed decision questions about a state. Nothing is generated: each
+question is one prefill, and the answer is the softmax over the question's
+label tokens in the first position's logits. `usage.output_tokens` is
+therefore always `0`.
+
+```bash
+POST /v1/systemone
+{
+  "state": "the printer is on fire and the demo is in ten minutes",
+  "questions": {
+    "urgent": {"type": "noul", "instructions": "Is this urgent?"},
+    "tier":   {"type": "choice", "instructions": "Pick a tier.",
+               "criteria": {"low": "can wait", "high": "page someone"}},
+    "mood":   {"type": "score", "criteria": ["calm", "mildly annoyed", "angry"]}
+  }
+}
+```
+
+```json
+{
+  "answers": {
+    "urgent": {"type": "noul", "noul": 0.990000},
+    "tier": {"type": "choice", "choice": "high", "confidence": 0.880000,
+             "probabilities": {"low": 0.120000, "high": 0.880000}},
+    "mood": {"type": "score", "score": 0.950000, "confidence": 0.910000,
+             "legend": {"0": "calm", "1": "mildly annoyed", "2": "angry"},
+             "probabilities": {"0": 0.070000, "1": 0.910000, "2": 0.020000}}
+  },
+  "model": "qwen3.5-0.8b",
+  "usage": {"input_tokens": 391, "output_tokens": 0}
+}
+```
+
+`state` is a string, object or array; an object or array is passed to the
+model as raw JSON rather than flattened. `questions` is keyed by caller-chosen
+names, and each key comes back as a key in `answers`.
+
+| Type | `criteria` | Answer |
+|------|-----------|--------|
+| `noul` | none | `noul`: probability the answer is yes |
+| `choice` | object mapping value to description, 2 to 26 entries | `choice`, `confidence`, `probabilities` per value |
+| `score` | array of levels, lowest first, 2 to 10 entries. An element is a string or `{"label": ..., "description": ...}` | `score` (probability-weighted mean of the level indices), `confidence`, `legend`, `probabilities` per index |
+
+A `score` lands between levels: a model split evenly between level 0 and
+level 1 scores `0.5`, not `0` or `1`.
+
+Limits are 1 to 64 questions, 2 to 26 choices and 2 to 10 score levels; past
+any of them the request is `400` (`code: invalid_value`). So is an unknown
+`type`, a repeated choice value, a `state` and question that overflow the 32
+KiB prompt buffer, and a label the model's tokenizer does not render as a
+single token.
+
+Labels are `yes`/`no` for `noul`, `A`, `B`, `C`, … in request order for
+`choice`, and `0`, `1`, `2`, … for `score`. Probabilities are normalised over
+those labels alone, not the vocabulary, so a confidence does not move with how
+talkative the model is.
+
+Each question is a separate read that resets the KV cache, so a
+`/v1/systemone` call invalidates any cached prompt prefix. There is no
+streaming.
+
 ### POST /v1/tokenize
 
 Count tokens for a text string or messages array. Accepts `text`, `content`, or `messages` (applies the model's chat template before counting). A non-string `text` or `content` returns `400` (`code: invalid_value`); when none of the three is present, `400` (`code: missing_required_parameter`).
@@ -603,10 +666,33 @@ Cache is invalidated when the prompt prefix changes (e.g., switching conversatio
 
 For deployments with multiple agave instances serving the same model, KV cache prefixes can be transferred between instances:
 
-**Wire format** (unversioned; not the disk `checkpoint.KVC` header):
+**Wire format** (not the disk `checkpoint.KVC` header): a 40-byte header, then
 `layer₀_K | layer₀_V | layer₁_K | layer₁_V | …` as little-endian f32.
 Per-layer K/V length is `n_tokens × kvd_layer × 4` bytes (`kvd` may differ across layers on dual-attention / MLA models).
-Only architectures that implement `exportKvPrefix` / `importKvPrefix` support this (currently Gemma 4). Export on any other architecture returns `501` (`code: not_implemented`); import returns `400` (`code: kv_import_failed`), which also covers a blob whose size does not match `n_tokens`.
+
+| Offset | Size | Field |
+|-------:|-----:|-------|
+| 0 | 8 | magic `AGVKVPFX` |
+| 8 | 4 | format version (currently `1`) |
+| 12 | 4 | layer count |
+| 16 | 4 | token count, must equal the `n_tokens` query parameter |
+| 20 | 4 | KV width of layer 0 |
+| 24 | 4 | reserved, zero |
+| 28 | 8 | FNV-1a hash of the per-layer KV widths |
+| 36 | 4 | first RoPE base the stored keys were rotated with |
+| 40 | 4 | second RoPE base (architectures with one base repeat it) |
+
+Import refuses a blob whose magic, version, layer count, layer-0 width, shape
+hash or RoPE bases disagree with the loaded model. The body is untrusted, and
+without those fields a prefix from a different architecture, cache geometry or
+RoPE base restores cleanly and then decodes nonsense.
+
+Stored keys carry the rotation of the positions they were exported from, and
+no backend has a rope-delta kernel, so a prefix only restores at the offset it
+was taken from. The header turns a mismatch into a rejection; it does not
+repair one.
+
+Only architectures that implement `exportKvPrefix` / `importKvPrefix` support this (currently Gemma 4). Export on any other architecture returns `501` (`code: not_implemented`); import returns `400` (`code: kv_import_failed`), which also covers a blob whose size, header or `n_tokens` does not match.
 The blob does **not** include prompt token IDs, so a following OpenAI-style request with `reset` still re-prefills unless the server already holds matching prefix-cache IDs from a prior local generation.
 
 **Export**, serialize `N` tokens of KV cache as a binary blob (`n_tokens` is a required query parameter):

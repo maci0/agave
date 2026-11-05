@@ -207,6 +207,10 @@ pub const MetalBackend = struct {
     pipe_gemv_iq2_xxs: objc.id,
     pipe_gemm_f32: objc.id,
     pipe_gemm_bf16: objc.id,
+    /// See sdpaStatsRefs: where the SDPA kernels put their per-head softmax
+    /// stats when nobody asked for them.
+    sdpa_stats_scratch_max: [sdpa_max_heads]f32 = @splat(0),
+    sdpa_stats_scratch_sum: [sdpa_max_heads]f32 = @splat(0),
     pipe_gemm_q8_0: objc.id,
     pipe_gemm_q4_0: objc.id,
     pipe_gemm_q4_k: objc.id,
@@ -2062,8 +2066,15 @@ pub const MetalBackend = struct {
         setBuf(enc, y_ref, 2);
         setBytes(enc, @ptrCast(&od), @sizeOf(u32), 3);
         setBytes(enc, @ptrCast(&id), @sizeOf(u32), 4);
-        // One threadgroup per output element
-        self.endEncode1D(enc, self.pipe_gemv_t_q8_0, out_dim);
+        // One threadgroup per output element: the kernel reads `tgid` as the
+        // output index and strides the threadgroup's threads over `in_dim`
+        // before a threadgroup reduction. `endEncode1D` dispatches `out_dim`
+        // *threads*, which gave `ceil(out_dim / tg)` groups instead, so all
+        // but the first few outputs were never written. Its threadgroup size
+        // is also the pipeline maximum, which on Apple GPUs is 1024 and
+        // overruns the kernel's 8-entry reduction scratch; `threadgroup_size`
+        // is the 256 that scratch is sized for.
+        self.endEncodeThreadgroups(enc, out_dim, threadgroup_size);
     }
 
     // ── Add Scaled ────────────────────────────────────────────
@@ -2572,10 +2583,73 @@ pub const MetalBackend = struct {
     /// `gpu_sdpa_max_head_dim` falls back to the CPU.
     const sdpa_gpu_threshold: usize = 8192;
 
+    /// Scratch the SDPA kernels write their per-head softmax stats into when
+    /// the caller did not ask for them. The kernels always write, so there
+    /// has to be somewhere; sizing it by the head count the dispatch uses
+    /// keeps it a single small allocation on the backend rather than a
+    /// per-call one on the hot path.
+    const sdpa_max_heads: usize = 128;
+
+    const SdpaStatsRefs = struct { max_ref: BufRef, sum_ref: BufRef };
+
+    /// Hand an SDPA call to the CPU, carrying the stats request with it.
+    ///
+    /// `sdpaInner` delegates to the CPU for short sequences, for KV layouts
+    /// with no Metal kernel, and for oversized heads. Each of those used to
+    /// call `cpu.sdpa`, which leaves the stats buffers untouched: the caller
+    /// then merges against a zero denominator, which drops the partial
+    /// entirely.
+    fn cpuSdpaCarryingStats(
+        pool: ?*ThreadPool,
+        q: [*]const f32,
+        keys: []u8,
+        values: []u8,
+        k_new: [*]const f32,
+        v_new: [*]const f32,
+        output: [*]f32,
+        head_max: ?[*]f32,
+        head_sum: ?[*]f32,
+        nh: usize,
+        nkv: usize,
+        hd: usize,
+        seq_len: usize,
+        scale: f32,
+        kv_type_k: backend_mod.KvQuantType,
+        kv_type_v: backend_mod.KvQuantType,
+    ) void {
+        var cpu = CpuBackend{ .pool = pool };
+        if (head_max) |hm| {
+            cpu.sdpaWithStats(q, keys, values, k_new, v_new, output, hm, head_sum.?, nh, nkv, hd, seq_len, scale, kv_type_k, kv_type_v);
+        } else {
+            cpu.sdpa(q, keys, values, k_new, v_new, output, nh, nkv, hd, seq_len, scale, kv_type_k, kv_type_v);
+        }
+    }
+
+    /// Buffers for buffers 9/10 (f32 path) or 13/14 (turbo path): the
+    /// caller's when it wants the stats, otherwise the backend's scratch.
+    fn sdpaStatsRefs(self: *MetalBackend, head_max: ?[*]f32, head_sum: ?[*]f32, nh: usize) SdpaStatsRefs {
+        const bytes = nh * @sizeOf(f32);
+        const max_ptr = head_max orelse @as([*]f32, &self.sdpa_stats_scratch_max);
+        const sum_ptr = head_sum orelse @as([*]f32, &self.sdpa_stats_scratch_sum);
+        return .{
+            .max_ref = self.getBufRef(@ptrCast(max_ptr), bytes),
+            .sum_ref = self.getBufRef(@ptrCast(sum_ptr), bytes),
+        };
+    }
+
     pub fn sdpa(self: *MetalBackend, q: [*]const f32, keys: []u8, values: []u8, k_new: [*]const f32, v_new: [*]const f32, output: [*]f32, nh: usize, nkv: usize, hd: usize, seq_len: usize, scale: f32, kv_type_k: backend_mod.KvQuantType, kv_type_v: backend_mod.KvQuantType) void {
+        self.sdpaInner(q, keys, values, k_new, v_new, output, null, null, nh, nkv, hd, seq_len, scale, kv_type_k, kv_type_v);
+    }
+
+    fn sdpaInner(self: *MetalBackend, q: [*]const f32, keys: []u8, values: []u8, k_new: [*]const f32, v_new: [*]const f32, output: [*]f32, head_max: ?[*]f32, head_sum: ?[*]f32, nh: usize, nkv: usize, hd: usize, seq_len: usize, scale: f32, kv_type_k: backend_mod.KvQuantType, kv_type_v: backend_mod.KvQuantType) void {
         self.active_pipeline_label = if (kv_type_k.isTurbo()) "sdpa_turbo" else if (kv_type_k == .q8_0) "sdpa_turbo" else "sdpa_fa2";
-        const is_turbo_k = kv_type_k.isTurbo() or kv_type_k == .q8_0;
-        const is_turbo_v = kv_type_v.isTurbo() or kv_type_v == .q8_0;
+        // f16 goes down the same in-kernel dequant path as q8_0 and turbo.
+        // It is not a block format, so the kernel reads `turboBits() == 16`
+        // as a width tag and indexes elements directly. Before this it fell
+        // past every branch into the unsupported-type panic, which made
+        // `--kv-type f16` unusable on Metal even though it is the default.
+        const is_turbo_k = kv_type_k.isTurbo() or kv_type_k == .q8_0 or kv_type_k == .f16;
+        const is_turbo_v = kv_type_v.isTurbo() or kv_type_v == .q8_0 or kv_type_v == .f16;
         const is_f32_k = (kv_type_k == .f32);
         const is_f32_v = (kv_type_v == .f32);
 
@@ -2584,8 +2658,7 @@ pub const MetalBackend = struct {
         // uncompressed decode uses the same path. CPU is faster than a GPU
         // round-trip for single-token decode of this layout.
         if (kv_type_k.cpuSdpaOnly() or kv_type_v.cpuSdpaOnly()) {
-            var cpu = self.cpuFallback();
-            cpu.sdpa(q, keys, values, k_new, v_new, output, nh, nkv, hd, seq_len, scale, kv_type_k, kv_type_v);
+            cpuSdpaCarryingStats(self.pool, q, keys, values, k_new, v_new, output, head_max, head_sum, nh, nkv, hd, seq_len, scale, kv_type_k, kv_type_v);
             return;
         }
 
@@ -2600,15 +2673,27 @@ pub const MetalBackend = struct {
         // CPU SDPA handles hd≤512 (max_head_dim=512) and all quantized KV types natively.
         if (sl <= sdpa_gpu_threshold and hd <= 512) {
             if (self.active_cmd != null) self.sync();
-            var cpu = CpuBackend{ .pool = self.pool };
-            cpu.sdpa(q, keys, values, k_new, v_new, output, nh, nkv, hd, seq_len, scale, kv_type_k, kv_type_v);
+            cpuSdpaCarryingStats(self.pool, q, keys, values, k_new, v_new, output, head_max, head_sum, nh, nkv, hd, seq_len, scale, kv_type_k, kv_type_v);
             return;
         }
 
         if (sl > sdpa_max_seq_len) @panic("Metal SDPA: sequence length exceeds GPU limit (" ++ std.fmt.comptimePrint("{d}", .{sdpa_max_seq_len}) ++ "), reduce --ctx-size");
 
         // Route hd>256 turbo/q8_0 to the DS4 hd512 kernel instead of panicking.
+        // f16 above the standard head dim has no kernel: the hd512 path is
+        // DS4's and reads turbo or q8_0 blocks only. Route to the CPU, which
+        // reads f16 KV natively, rather than reach a kernel that refuses it.
+        if (hd > sdpa_max_head_dim and (kv_type_k == .f16 or kv_type_v == .f16)) {
+            cpuSdpaCarryingStats(self.pool, q, keys, values, k_new, v_new, output, head_max, head_sum, nh, nkv, hd, seq_len, scale, kv_type_k, kv_type_v);
+            return;
+        }
         if (hd > sdpa_max_head_dim and (is_turbo_k or is_turbo_v) and !is_f32_k and !is_f32_v) {
+            // The hd512 DS4 kernel reports no stats, so a caller that needs
+            // them takes the CPU instead of a silently zeroed denominator.
+            if (head_max != null) {
+                cpuSdpaCarryingStats(self.pool, q, keys, values, k_new, v_new, output, head_max, head_sum, nh, nkv, hd, seq_len, scale, kv_type_k, kv_type_v);
+                return;
+            }
             self.ds4SdpaTurboHd512(q, keys, values, k_new, v_new, output, nh, nkv, hd, seq_len, scale, kv_type_k, kv_type_v);
             return;
         }
@@ -2667,6 +2752,9 @@ pub const MetalBackend = struct {
             setBytes(enc, @ptrCast(&hd_u), @sizeOf(u32), 6);
             setBytes(enc, @ptrCast(&sl_u), @sizeOf(u32), 7);
             setBytes(enc, @ptrCast(&scale), @sizeOf(f32), 8);
+            const stats = self.sdpaStatsRefs(head_max, head_sum, nh);
+            setBuf(enc, stats.max_ref, 9);
+            setBuf(enc, stats.sum_ref, 10);
             self.endEncodeThreadgroups(enc, nh, sdpa_threadgroup_size);
         } else {
             // Turbo or mixed path: use sdpa_fa2_turbo kernel with in-GPU dequant
@@ -2698,6 +2786,9 @@ pub const MetalBackend = struct {
             setBytes(enc, @ptrCast(&bits_v_u), @sizeOf(u32), 10);
             setBytes(enc, @ptrCast(&bb_k_u), @sizeOf(u32), 11);
             setBytes(enc, @ptrCast(&bb_v_u), @sizeOf(u32), 12);
+            const stats = self.sdpaStatsRefs(head_max, head_sum, nh);
+            setBuf(enc, stats.max_ref, 13);
+            setBuf(enc, stats.sum_ref, 14);
             self.endEncodeThreadgroups(enc, nh, sdpa_threadgroup_size);
         }
     }
@@ -2786,12 +2877,27 @@ pub const MetalBackend = struct {
     /// SDPA with per-head softmax stats for split-attention merge.
     /// Fills identity stats (max=0, sum=1), GPU SDPA already produces
     /// normalized output, so the merge formula treats it as-is.
+    /// SDPA that also reports each head's softmax running max and
+    /// denominator, so a partial over one slice of the sequence can be
+    /// merged with a partial over another (`splitSdpaMerge`).
+    ///
+    /// This used to run a plain SDPA and write max=0, sum=1. Those are not
+    /// this head's stats, they are the identity, and merging against them
+    /// silently weights the two partials wrongly; split attention over mixed
+    /// KV tiers avoided the merge entirely because of it. The kernels now
+    /// write the real values.
     pub fn sdpaWithStats(self: *MetalBackend, q: [*]const f32, keys: []u8, values: []u8, k_new: [*]const f32, v_new: [*]const f32, output: [*]f32, head_max: [*]f32, head_sum: [*]f32, nh: usize, nkv: usize, hd: usize, seq_len: usize, scale: f32, kv_type_k: KvQuantType, kv_type_v: KvQuantType) void {
-        self.sdpa(q, keys, values, k_new, v_new, output, nh, nkv, hd, seq_len, scale, kv_type_k, kv_type_v);
-        for (0..nh) |h| {
-            head_max[h] = 0.0;
-            head_sum[h] = 1.0;
+        if (nh > sdpa_max_heads) {
+            // Beyond the scratch bound the dispatch below is still fine, but
+            // the CPU path is the one that can size itself; fall back rather
+            // than report stats this backend cannot bound.
+            var cpu = self.cpuFallback();
+            cpu.sdpaWithStats(q, keys, values, k_new, v_new, output, head_max, head_sum, nh, nkv, hd, seq_len, scale, kv_type_k, kv_type_v);
+            return;
         }
+        self.sdpaInner(q, keys, values, k_new, v_new, output, head_max, head_sum, nh, nkv, hd, seq_len, scale, kv_type_k, kv_type_v);
+        // The stats live in the caller's buffers only after the GPU is done.
+        self.sync();
     }
 
     // ── DS4 Hyper-Connection GPU Dispatch ──────────────────────────
@@ -4439,8 +4545,15 @@ test "MetalBackend.sdpaWithStats" {
     be.sdpaWithStats(&q, keys_bytes, vals_bytes, &k_new, &v_new, &output, &head_max, &head_sum, nh, nkv, hd, 0, scale, .f32, .f32);
     be.sync();
 
-    // Identity stats: max=0, sum=1
-    try std.testing.expectApproxEqAbs(@as(f32, 0.0), head_max[0], 1e-6);
+    // Real softmax stats, not the identity this used to assert. One
+    // position, q·k = 1 and scale = 1/sqrt(4), so the only score is 0.5 and
+    // it is therefore the running max; the denominator is exp(0.5 - 0.5).
+    //
+    // The identity (max=0, sum=1) is not "no stats": `splitSdpaMerge`
+    // weights each partial by them, so reporting it silently reweights the
+    // merge. That is why split attention over mixed KV tiers used to skip
+    // the merge entirely.
+    try std.testing.expectApproxEqAbs(@as(f32, 0.5), head_max[0], 1e-6);
     try std.testing.expectApproxEqAbs(@as(f32, 1.0), head_sum[0], 1e-6);
 }
 

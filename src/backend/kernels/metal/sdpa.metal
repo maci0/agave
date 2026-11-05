@@ -117,6 +117,12 @@ kernel void sdpa_fa2(
     constant uint& hd,
     constant uint& sl,           // actual sequence length (1..4096)
     constant float& scale,
+    // Per-head softmax running max and denominator, the stats an online
+    // merge needs to combine this partial with another over a different
+    // slice of the sequence. Always written; the caller passes scratch when
+    // it does not want them.
+    device float* head_max       [[buffer(9)]],
+    device float* head_sum       [[buffer(10)]],
     uint h     [[threadgroup_position_in_grid]],
     uint tid   [[thread_index_in_threadgroup]],
     uint tg_sz [[threads_per_threadgroup]])
@@ -252,6 +258,12 @@ kernel void sdpa_fa2(
     for (uint d = tid; d < hd; d += tg_sz) {
         output[h * hd + d] = out_acc[d] * inv_l;
     }
+    // The output above is normalized, so a merge needs m_i and l_i to
+    // reweight it against another partial.
+    if (tid == 0) {
+        head_max[h] = m_i;
+        head_sum[h] = l_i;
+    }
 }
 
 // ── Large head-dim SDPA, hd up to 512 ──────────────────────────
@@ -272,6 +284,9 @@ kernel void sdpa_fa2_hd512(
     constant uint& hd,
     constant uint& sl,
     constant float& scale,
+    // See sdpa_fa2: per-head softmax stats for an online merge.
+    device float* head_max       [[buffer(9)]],
+    device float* head_sum       [[buffer(10)]],
     uint h     [[threadgroup_position_in_grid]],
     uint tid   [[thread_index_in_threadgroup]],
     uint tg_sz [[threads_per_threadgroup]])
@@ -394,6 +409,10 @@ kernel void sdpa_fa2_hd512(
     const float inv_l = (l_i > 0.0f) ? (1.0f / l_i) : 0.0f;
     for (uint d = tid; d < hd; d += tg_sz) {
         output[h * hd + d] = out_acc[d] * inv_l;
+    }
+    if (tid == 0) {
+        head_max[h] = m_i;
+        head_sum[h] = l_i;
     }
 }
 
@@ -743,6 +762,9 @@ kernel void sdpa_fa2_turbo(
     constant uint& bits_v,           // 0=f32, 2/3/4=turbo
     constant uint& block_bytes_k,    // bytes per 32-element turbo block (K)
     constant uint& block_bytes_v,    // bytes per 32-element turbo block (V)
+    // See sdpa_fa2: per-head softmax stats for an online merge.
+    device float* head_max           [[buffer(13)]],
+    device float* head_sum           [[buffer(14)]],
     uint h     [[threadgroup_position_in_grid]],
     uint tid   [[thread_index_in_threadgroup]],
     uint tg_sz [[threads_per_threadgroup]])
@@ -789,6 +811,14 @@ kernel void sdpa_fa2_turbo(
                 uint k_base = t_global * kvd + kvh * hd;
                 for (uint d = 0; d < hd; d++) {
                     kv_block[t * hd + d] = K_f32[k_base + d];
+                }
+            } else if (bits_k == 16) {
+                // f16: element addressable, no blocks. Halves the cache
+                // against f32 and converts on load.
+                device const half* K_f16 = (device const half*)K_cache;
+                uint elem_base = t_global * kvd + kvh * hd;
+                for (uint d = 0; d < hd; d++) {
+                    kv_block[t * hd + d] = float(K_f16[elem_base + d]);
                 }
             } else if (bits_k == 8) {
                 // Q8_0 dequant: 34 bytes per 32-element block (f16 scale + 32 × i8)
@@ -893,6 +923,13 @@ kernel void sdpa_fa2_turbo(
                 for (uint d = 0; d < hd; d++) {
                     kv_block[t * hd + d] = V_f32[v_base + d];
                 }
+            } else if (bits_v == 16) {
+                // f16: see the K side above.
+                device const half* V_f16 = (device const half*)V_cache;
+                uint elem_base = t_global * kvd + kvh * hd;
+                for (uint d = 0; d < hd; d++) {
+                    kv_block[t * hd + d] = float(V_f16[elem_base + d]);
+                }
             } else if (bits_v == 8) {
                 // Q8_0 dequant for V
                 uint elem_base = t_global * kvd + kvh * hd;
@@ -940,5 +977,9 @@ kernel void sdpa_fa2_turbo(
     // ── Final normalization: output = out_acc / l_i ────────────────
     for (uint d = tid; d < hd; d += tg_sz) {
         output[h * hd + d] = out_acc[d] / l_i;
+    }
+    if (tid == 0) {
+        head_max[h] = m_i;
+        head_sum[h] = l_i;
     }
 }

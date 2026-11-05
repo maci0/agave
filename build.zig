@@ -524,17 +524,18 @@ pub fn build(b: *std.Build) void {
     const validate_step = b.step("validate", "Validate every GPU kernel against the CPU backend");
     {
         const kernels = [_][]const u8{
-            "gemv_f32",         "gemv_f16",      "gemv_bf16",      "gemv_q8_0",
-            "gemv_q4_0",        "gemv_q4_1",     "gemv_q5_0",      "gemv_q2_k",
-            "gemv_q3_k",        "gemv_q4_k",     "gemv_q5_k",      "gemv_q6_k",
-            "gemv_iq4_nl",      "gemv_iq4_xs",   "gemv_tq1_0",     "gemv_tq2_0",
-            "gemv_fp8_e4m3",    "gemv_fp8_e5m2", "gemm_q8_0",      "rms_norm_batched",
-            "rope_batched",     "sdpa_prefill",  "rms_norm_multi", "rms_norm",
-            "silu",             "gelu",          "softmax",        "l2_norm",
-            "add",              "mul",           "rope",           "add_aliased",
-            "silu_mul_aliased", "deinterleave",  "split_q_gate",   "add_rms_norm",
-            "rms_norm_add",     "sigmoid_mul",   "gelu_mul",       "clamped_silu_mul",
-            "add_scaled",       "gemv_multi",    "gemv_t",         "emb_lookup",
+            "gemv_f32",         "gemv_f16",         "gemv_bf16",    "gemv_q8_0",
+            "gemv_q4_0",        "gemv_q4_1",        "gemv_q5_0",    "gemv_q2_k",
+            "gemv_q3_k",        "gemv_q4_k",        "gemv_q5_k",    "gemv_q6_k",
+            "gemv_iq4_nl",      "gemv_iq4_xs",      "gemv_tq1_0",   "gemv_tq2_0",
+            "gemv_fp8_e4m3",    "gemv_fp8_e5m2",    "gemm_q8_0",    "gemm_q4_0",
+            "rms_norm_batched", "rope_batched",     "sdpa_prefill", "rms_norm_multi",
+            "rms_norm",         "silu",             "gelu",         "softmax",
+            "l2_norm",          "add",              "mul",          "rope",
+            "add_aliased",      "silu_mul_aliased", "deinterleave", "split_q_gate",
+            "add_rms_norm",     "rms_norm_add",     "sigmoid_mul",  "gelu_mul",
+            "clamped_silu_mul", "add_scaled",       "gemv_multi",   "gemv_t",
+            "emb_lookup",
         };
         // Deliberately absent:
         //   rope_mrope     - CPU and Metal only; it panics on ROCm and Vulkan by
@@ -548,7 +549,7 @@ pub fn build(b: *std.Build) void {
         for (k_values) |kv| {
             for (kernels) |kern| {
                 const run = b.addRunArtifact(exe_bench);
-                run.addArgs(&.{ kern, "--backend", validate_backend, "--n", "1024", "--k", kv, "--iters", "3", "--validate" });
+                run.addArgs(&.{ kern, "--backend", validate_backend, "--n", "1024", "--k", kv, "--iters", "3", "--warmup-ms", "0", "--validate" });
                 run.expectExitCode(0);
                 validate_step.dependOn(&run.step);
             }
@@ -639,6 +640,23 @@ pub fn build(b: *std.Build) void {
         } else {
             docs_check_step.dependOn(&b.addFail(
                 "python3 not found; zig build check needs Python 3.11+ for scripts/check-docs.py",
+            ).step);
+        }
+
+        // Decode throughput and greedy determinism against committed
+        // baselines. Not in `check` or `ci`: it needs model files and the
+        // machine that recorded the baselines, so it stays a deliberate run.
+        const gate_step = b.step("gate", "Decode throughput and determinism vs benchmarks/baselines.json (needs models; see benchmarks/README.md)");
+        if (python3) |py| {
+            const gate_cmd = b.addSystemCommand(&.{ py, "scripts/perf-gate.py" });
+            gate_cmd.setCwd(repo_cwd);
+            pin_spawned_python(gate_cmd);
+            gate_cmd.has_side_effects = true;
+            gate_cmd.addPassthruArgs();
+            gate_step.dependOn(&gate_cmd.step);
+        } else {
+            gate_step.dependOn(&b.addFail(
+                "python3 not found; zig build gate needs Python 3.11+ for scripts/perf-gate.py",
             ).step);
         }
 

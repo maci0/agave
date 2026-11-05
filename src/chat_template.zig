@@ -74,6 +74,18 @@ pub const ChatTemplate = struct {
     /// reasoning, Gemma4 selects channel 0 (`<|channel>0\n<channel|>`),
     /// GLM-4 leaves empty (reasoning disabled by default).
     generation_prefix: []const u8 = "",
+    /// Delimiters the model wraps a tool call in. The server writes them into
+    /// the tool-use system prompt and parses them back out of the response,
+    /// so both ends come from here rather than from a per-model branch in the
+    /// server. The defaults are ChatML's, which most architectures inherit.
+    tool_call_open: []const u8 = "<tool_call>",
+    tool_call_close: []const u8 = "</tool_call>",
+    /// Delimiters around reasoning the server splits into `reasoning_content`.
+    /// An architecture that emits a different pair sets it here; leaving the
+    /// defaults in place on a model that uses another marker is what made the
+    /// reasoning land in `content` with the tags still in it.
+    reasoning_open: []const u8 = "<think>",
+    reasoning_close: []const u8 = "</think>",
 
     /// Format a single-turn chat prompt using this template.
     pub fn format(self: ChatTemplate, allocator: std.mem.Allocator, system_msg: ?[]const u8, user_msg: []const u8) ![]u8 {

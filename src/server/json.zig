@@ -330,6 +330,120 @@ pub fn extractObjectField(json_buf: []const u8, field: []const u8) ?[]const u8 {
     return null;
 }
 
+/// One `"key": value` pair from an object, both as raw slices. `key` still
+/// carries its JSON escapes; `value` includes its braces, brackets or quotes.
+pub const Member = struct {
+    key: []const u8,
+    value: []const u8,
+};
+
+/// Walk the members of a JSON object in source order.
+///
+/// `extractField` and friends look a key up by name, which is enough when the
+/// schema names every field. `/v1/systemone` does not: its `questions` object
+/// is keyed by caller-chosen question names, so the keys have to be read out
+/// rather than searched for.
+///
+/// Takes the object including its braces. Malformed input ends iteration
+/// rather than erroring: the caller sees fewer members and rejects the
+/// request on its own count checks.
+pub const ObjectIterator = struct {
+    buf: []const u8,
+    pos: usize,
+
+    pub fn init(object: []const u8) ObjectIterator {
+        // Step inside the opening brace when there is one, so a caller can
+        // pass either the braced object or its contents.
+        const start: usize = if (object.len > 0 and object[0] == '{') 1 else 0;
+        return .{ .buf = object, .pos = start };
+    }
+
+    pub fn next(self: *ObjectIterator) ?Member {
+        var i = self.pos;
+        while (i < self.buf.len and (self.buf[i] == ',' or isJsonSpace(self.buf[i]))) : (i += 1) {}
+        if (i >= self.buf.len or self.buf[i] != '"') return null;
+
+        const key_start = i + 1;
+        const key_end = findJsonStringEnd(self.buf, key_start);
+        if (key_end >= self.buf.len) return null;
+        i = key_end + 1;
+
+        while (i < self.buf.len and isJsonSpace(self.buf[i])) : (i += 1) {}
+        if (i >= self.buf.len or self.buf[i] != ':') return null;
+        i += 1;
+        while (i < self.buf.len and isJsonSpace(self.buf[i])) : (i += 1) {}
+        if (i >= self.buf.len) return null;
+
+        const value_end = scanJsonValueEnd(self.buf, i) orelse return null;
+        self.pos = value_end;
+        return .{ .key = self.buf[key_start..key_end], .value = self.buf[i..value_end] };
+    }
+};
+
+fn isJsonSpace(c: u8) bool {
+    return c == ' ' or c == '\t' or c == '\n' or c == '\r';
+}
+
+/// Index one past the end of the JSON value starting at `start`, or null when
+/// the value runs off the end of the buffer.
+fn scanJsonValueEnd(json: []const u8, start: usize) ?usize {
+    if (start >= json.len) return null;
+    switch (json[start]) {
+        '"' => {
+            const end = findJsonStringEnd(json, start + 1);
+            return if (end < json.len) end + 1 else null;
+        },
+        '{', '[' => {
+            const open = json[start];
+            const close: u8 = if (open == '{') '}' else ']';
+            var depth: usize = 1;
+            var i = start + 1;
+            while (i < json.len) : (i += 1) {
+                if (json[i] == '"') {
+                    i = findJsonStringEnd(json, i + 1);
+                    if (i >= json.len) return null;
+                } else if (json[i] == open) {
+                    depth += 1;
+                } else if (json[i] == close) {
+                    depth -= 1;
+                    if (depth == 0) return i + 1;
+                }
+            }
+            return null;
+        },
+        else => {
+            var i = start;
+            while (i < json.len and json[i] != ',' and json[i] != '}' and json[i] != ']') : (i += 1) {}
+            // Trim trailing whitespace so a bare value does not carry it.
+            var end = i;
+            while (end > start and isJsonSpace(json[end - 1])) end -= 1;
+            return if (end > start) end else null;
+        },
+    }
+}
+
+/// Walk the elements of a JSON array in source order, as raw slices.
+/// `/v1/systemone` score questions carry their levels as an array of strings
+/// or objects, and the order is the score scale, so index matters.
+pub const ArrayIterator = struct {
+    buf: []const u8,
+    pos: usize,
+
+    pub fn init(array: []const u8) ArrayIterator {
+        const start: usize = if (array.len > 0 and array[0] == '[') 1 else 0;
+        return .{ .buf = array, .pos = start };
+    }
+
+    pub fn next(self: *ArrayIterator) ?[]const u8 {
+        var i = self.pos;
+        while (i < self.buf.len and (self.buf[i] == ',' or isJsonSpace(self.buf[i]))) : (i += 1) {}
+        if (i >= self.buf.len or self.buf[i] == ']') return null;
+        const end = scanJsonValueEnd(self.buf, i) orelse return null;
+        self.pos = end;
+        return self.buf[i..end];
+    }
+};
+
 /// Extract the last "content" field value from a JSON body.
 /// Scans for all "content" keys and returns the final match, or null if none found.
 pub fn extractLastMessage(json: []const u8) ?[]const u8 {
@@ -2594,4 +2708,64 @@ test "thinking budget above u32 range clamps instead of panicking" {
     var sp3 = SamplingParams{};
     parseSampling(&sp3, "{\"thinking_budget_tokens\":2000}");
     try std.testing.expectEqual(@as(u32, 2000), sp3.thinking_budget_tokens);
+}
+
+test "ObjectIterator walks caller-named keys in order" {
+    const body =
+        \\{"urgent":{"type":"noul"},"tier":{"type":"choice","criteria":{"low":"a","high":"b"}},"n":3}
+    ;
+    var it = ObjectIterator.init(body);
+    const a = it.next() orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("urgent", a.key);
+    try std.testing.expectEqualStrings("{\"type\":\"noul\"}", a.value);
+
+    const b = it.next() orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("tier", b.key);
+    // Nested braces must not end the value early.
+    try std.testing.expectEqualStrings(
+        "{\"type\":\"choice\",\"criteria\":{\"low\":\"a\",\"high\":\"b\"}}",
+        b.value,
+    );
+
+    const c = it.next() orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("n", c.key);
+    try std.testing.expectEqualStrings("3", c.value);
+
+    try std.testing.expect(it.next() == null);
+}
+
+test "ObjectIterator is not fooled by braces and colons inside strings" {
+    const body =
+        \\{"a":"}{:,","b":"x"}
+    ;
+    var it = ObjectIterator.init(body);
+    const a = it.next() orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("a", a.key);
+    try std.testing.expectEqualStrings("\"}{:,\"", a.value);
+    const b = it.next() orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("b", b.key);
+    try std.testing.expect(it.next() == null);
+}
+
+test "ObjectIterator ends rather than loops on truncated input" {
+    // An unterminated object must not spin or read past the buffer.
+    var truncated = ObjectIterator.init("{\"a\":{\"b\":1");
+    try std.testing.expect(truncated.next() == null);
+    var no_colon = ObjectIterator.init("{\"a\" 1}");
+    try std.testing.expect(no_colon.next() == null);
+    var empty = ObjectIterator.init("{}");
+    try std.testing.expect(empty.next() == null);
+    var nothing = ObjectIterator.init("");
+    try std.testing.expect(nothing.next() == null);
+}
+
+test "ArrayIterator yields elements in order" {
+    var it = ArrayIterator.init("[\"calm\",\"annoyed\",{\"label\":\"angry\"}]");
+    try std.testing.expectEqualStrings("\"calm\"", it.next() orelse return error.TestUnexpectedResult);
+    try std.testing.expectEqualStrings("\"annoyed\"", it.next() orelse return error.TestUnexpectedResult);
+    try std.testing.expectEqualStrings("{\"label\":\"angry\"}", it.next() orelse return error.TestUnexpectedResult);
+    try std.testing.expect(it.next() == null);
+
+    var empty = ArrayIterator.init("[]");
+    try std.testing.expect(empty.next() == null);
 }

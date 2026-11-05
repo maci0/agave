@@ -318,7 +318,12 @@ each other, so the offline copy of such a diagram is untitled per group.
 
 1. Add a `pub const` to `src/chat_template.zig` with role prefixes/suffixes and EOG token names
 2. Map arch → template in `src/arch.zig: Arch.chatTemplate()`
-3. Add format test verifying correct prompt assembly
+3. Set `tool_call_open` / `tool_call_close` and `reasoning_open` / `reasoning_close` if the
+   architecture does not use ChatML's `<tool_call>` and `<think>` pairs. The server writes these
+   into the tool-use system prompt and parses them back out of the response, so a wrong pair means
+   tool calls never parse and reasoning reaches the client as content with the tags still in it.
+   There is no per-model parser to add: declaring the delimiters is the whole change.
+4. Add format test verifying correct prompt assembly
 
 ## How to Add a New Recipe
 
@@ -403,6 +408,24 @@ See `src/spec/ddtree.zig` for the tree construction algorithm and `src/backend/k
 3. **Research kernels**: `cd research/kernels && uv run run.py bench sdpa --backend cpu`
 4. **Check allocations**: Use `std.testing.allocator` in tests (detects leaks automatically)
 5. **Verify comptime dispatch**: Ensure `inline else` dispatch is still used in `backend.zig`
+
+### Gating a regression
+
+`zig build gate` measures `--benchmark` decode throughput for every entry in
+`benchmarks/baselines.json` and fails on anything more than 5% under its
+baseline, the same threshold the change rules use. It also runs each entry
+twice at a fixed seed and virtual clock and fails if greedy output is not
+byte-identical, which catches the uninitialised-memory and stale-cache
+classes that a throughput number alone hides.
+
+It needs model files, so it is deliberately outside `zig build check` and
+`zig build ci`. Baselines ship empty: a number recorded on other hardware is
+not a baseline for yours. Record them once per machine with
+`python3 scripts/perf-gate.py --update-baselines`, and re-record after a
+hardware, Zig, or build-flag change. See [benchmarks/README.md](../benchmarks/README.md).
+
+An entry whose model is missing is reported as skipped, never as a pass, and
+a run where everything skipped says so rather than printing a green result.
 
 ## Kernel Artifact Regeneration
 

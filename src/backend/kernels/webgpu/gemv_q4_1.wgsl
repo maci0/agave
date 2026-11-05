@@ -37,7 +37,11 @@ fn main(
         return;
     }
 
-    let nb = params.k / BLOCK_ELEMS;
+    // Round up: nb is the row stride as well as the loop bound, so
+    // truncating both dropped the tail block and strided every row after the
+    // first into the previous row's blocks whenever k was not a multiple of
+    // BLOCK_ELEMS. Every other WebGPU GEMV already rounds up.
+    let nb = (params.k + BLOCK_ELEMS - 1u) / BLOCK_ELEMS;
     // Each block is 20 bytes = 5 u32 words
     let words_per_block: u32 = 5u;
     let row_word_offset = row * nb * words_per_block;

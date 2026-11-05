@@ -1585,11 +1585,16 @@ pub const RocmBackend = struct {
     /// GPU stats export not yet implemented, syncs GPU, then runs CPU-side
     /// sdpaQuantHeadsWithStats as fallback. Native GPU stats is future work.
     pub fn sdpaWithStats(self: *RocmBackend, q: [*]const f32, keys: []u8, values: []u8, k_new: [*]const f32, v_new: [*]const f32, output: [*]f32, head_max: [*]f32, head_sum: [*]f32, nh: usize, nkv: usize, hd: usize, seq_len: usize, scale: f32, kv_type_k: KvQuantType, kv_type_v: KvQuantType) void {
-        self.sdpa(q, keys, values, k_new, v_new, output, nh, nkv, hd, seq_len, scale, kv_type_k, kv_type_v);
-        for (0..nh) |h| {
-            head_max[h] = 0.0;
-            head_sum[h] = 1.0;
-        }
+        // No stats-reporting kernel here yet. Running the normal SDPA and
+        // writing identity stats (max=0, sum=1) would not be "no stats": a
+        // merge weights the partials by them, so the identity silently
+        // reweights both sides. The cpu path reports real ones.
+        self.sync();
+        // No thread pool on this backend; the cpu kernel runs single
+        // threaded, which is acceptable for a path that only triggers on a
+        // tiered cache this backend does not support anyway.
+        var cpu = CpuBackend{};
+        cpu.sdpaWithStats(q, keys, values, k_new, v_new, output, head_max, head_sum, nh, nkv, hd, seq_len, scale, kv_type_k, kv_type_v);
     }
 
     /// Paged SDPA: block-table-indexed attention for non-contiguous KV cache.

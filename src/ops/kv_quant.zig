@@ -562,6 +562,9 @@ pub const KvQuantType = enum {
             .turbo3, .planar3, .iso3, .rotor3 => 3,
             .turbo4, .planar4, .iso4, .rotor4 => 4,
             .q8_0 => 8,
+            // Not a block format: element addressable, two bytes each. The
+            // GPU SDPA kernels read this as a width tag, not a block size.
+            .f16 => 16,
             else => 0,
         };
     }
@@ -657,6 +660,28 @@ pub fn kvByteOffset(kv_type: KvQuantType, i: usize) usize {
         .turbo2, .planar2, .iso2, .rotor2 => std.math.mul(usize, i / turbo_block_size, turbo2_block_bytes) catch std.math.maxInt(usize),
         .turbo3, .planar3, .iso3, .rotor3 => std.math.mul(usize, i / turbo_block_size, turbo3_block_bytes) catch std.math.maxInt(usize),
         .turbo4, .planar4, .iso4, .rotor4 => std.math.mul(usize, i / turbo_block_size, turbo4_block_bytes) catch std.math.maxInt(usize),
+    };
+}
+
+/// Whether a cache of this type can be re-based at element `i`, i.e. whether
+/// `kvByteOffset(kv_type, i)` names the exact start of element `i` rather
+/// than the start of the block containing it.
+///
+/// Windowed attention hands the backend a shifted cache base so the fused
+/// kernel runs over the window instead of the whole sequence. A packed type
+/// holds several elements per block and cannot be cut mid-block: the shifted
+/// base would silently point at the block's first element, shifting every
+/// position in the window.
+pub fn kvSliceable(kv_type: KvQuantType, i: usize) bool {
+    return switch (kv_type) {
+        // Element-addressable: any offset is exact.
+        .f32, .f16, .fp8_e4m3 => true,
+        .q8_0, .int8 => i % block_size == 0,
+        .nvfp4 => i % nvfp4_block == 0,
+        // Two interleaved planes with their own strides; a shifted base does
+        // not describe it.
+        .nvfp4_ds_mla => false,
+        .turbo2, .planar2, .iso2, .rotor2, .turbo3, .planar3, .iso3, .rotor3, .turbo4, .planar4, .iso4, .rotor4 => i % turbo_block_size == 0,
     };
 }
 

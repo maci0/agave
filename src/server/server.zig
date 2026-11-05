@@ -38,8 +38,32 @@ const VisionEncoder = @import("../models/model.zig").VisionEncoder;
 const image_mod = @import("../image.zig");
 const engine_version = @import("build_options").version;
 const grammar_mod = @import("../grammar.zig");
+const prefix_header = @import("../kvcache/prefix_header.zig");
+const systemone = @import("systemone.zig");
+
+/// Prompt scratch for one decision read: the state plus the question's
+/// instructions and labelled options. A question past this is a 400 rather
+/// than a silently clipped state.
+const systemone_prompt_buf_size: usize = 32 * 1024;
+/// Response scratch for `/v1/systemone`. Bounded by `max_questions` answers,
+/// each carrying at most `max_choices` labelled probabilities.
+const systemone_response_buf_size: usize = 256 * 1024;
 
 const Mutex = Io.Mutex;
+
+/// Carry the request's truncation into speculative verification, so a draft
+/// token is accepted against the distribution the non-speculative path would
+/// have sampled from rather than the untruncated softmax.
+fn specSampling(s: SamplingParams) spec_decode.Sampling {
+    return .{
+        .temperature = s.temperature,
+        .top_k = s.top_k,
+        .top_p = s.top_p,
+        .min_p = s.min_p,
+        .xtc_probability = s.xtc_probability,
+        .xtc_threshold = s.xtc_threshold,
+    };
+}
 
 // ── Server constants ────────────────────────────────────────────
 const slog_buf_size: usize = 4096;
@@ -90,7 +114,10 @@ fn estimateKvExportBytes(model: Model, n_tokens: usize) usize {
     const per_token3 = std.math.mul(usize, per_token2, @sizeOf(f32)) catch return kv_export_max_bytes;
     const per_token4 = std.math.mul(usize, per_token3, kv_export_dim_headroom) catch return kv_export_max_bytes;
     const raw = std.math.mul(usize, n_tokens, per_token4) catch return kv_export_max_bytes;
-    return @min(if (raw == 0) kv_export_max_bytes else raw, kv_export_max_bytes);
+    // The blob leads with a prefix header, so a buffer sized to the payload
+    // alone makes exportKvPrefix fail and fall back to the cap for nothing.
+    const with_header = std.math.add(usize, raw, prefix_header.Header.size) catch return kv_export_max_bytes;
+    return @min(if (raw == 0) kv_export_max_bytes else with_header, kv_export_max_bytes);
 }
 const conv_title_max_len = conv_store.max_title_len;
 const conv_list_buf_size: usize = 8192;
@@ -421,6 +448,7 @@ const known_endpoints = [_]KnownEndpoint{
     .{ .path = "/v1/chat", .allow = "POST, OPTIONS", .msg = "Use POST." },
     .{ .path = "/v1/chat/regenerate", .allow = "POST, OPTIONS", .msg = "Use POST." },
     .{ .path = "/v1/conversations", .allow = "GET, POST, OPTIONS", .msg = "Use GET or POST." },
+    .{ .path = "/v1/systemone", .allow = "POST, OPTIONS", .msg = "Use POST." },
     .{ .path = "/v1/tokenize", .allow = "POST, OPTIONS", .msg = "Use POST." },
     .{ .path = "/v1/detokenize", .allow = "POST, OPTIONS", .msg = "Use POST." },
     .{ .path = "/v1/models", .allow = "GET, OPTIONS", .msg = "Use GET." },
@@ -1015,6 +1043,102 @@ fn lockModelWithScheduler() void {
 /// Release the scheduler's model mutex acquired by lockModelWithScheduler().
 fn unlockModelWithScheduler() void {
     if (g_server.request_manager) |rm| rm.model_mutex.unlock(g_server.io);
+}
+
+/// Outcome of reading one decision question's label probabilities.
+const ReadOutcome = union(enum) {
+    ok,
+    /// A label the tokenizer does not render as a single token. The read
+    /// looks at one position, so there is nothing to report for it.
+    multi_token_label: []const u8,
+    prompt_too_long,
+    forward_failed,
+};
+
+/// Read one question: prefill its prompt and softmax the label logits.
+///
+/// Writes `q.labelCount()` probabilities into `probs`. The caller holds
+/// `g_server.mutex` and the scheduler's model mutex, because this resets and
+/// refills the shared KV cache.
+fn readDecision(
+    state: []const u8,
+    q: systemone.Question,
+    probs: []f32,
+    input_tokens: *usize,
+) ReadOutcome {
+    var prompt_buf: [systemone_prompt_buf_size]u8 = undefined;
+    const prompt = systemone.renderPrompt(&prompt_buf, state, q) orelse return .prompt_too_long;
+
+    var label_ids: [systemone.max_choices]u32 = undefined;
+    for (0..q.labelCount()) |i| {
+        const label = q.label(i);
+        label_ids[i] = systemone.resolveLabelToken(g_server.tokenizer, g_server.allocator, label) orelse
+            return .{ .multi_token_label = label };
+    }
+
+    const token_ids = g_server.tokenizer.encode(prompt) catch return .forward_failed;
+    defer g_server.allocator.free(token_ids);
+    if (token_ids.len == 0) return .forward_failed;
+    input_tokens.* += token_ids.len;
+
+    // Each question is its own read. Sharing the cache across questions would
+    // need the prompts to share a prefix exactly, and the per-question text
+    // sits after the state, so the saving would not survive a question whose
+    // instructions differ in length.
+    g_server.model.resetCache();
+    _ = g_server.model.prefill(token_ids) catch return .forward_failed;
+
+    const logits = g_server.model.getLogits();
+    var label_logits: [systemone.max_choices]f32 = undefined;
+    for (0..q.labelCount()) |i| {
+        if (label_ids[i] >= logits.len) return .forward_failed;
+        label_logits[i] = logits[label_ids[i]];
+    }
+    systemone.labelProbabilities(label_logits[0..q.labelCount()], probs[0..q.labelCount()]);
+    return .ok;
+}
+
+/// Serialize one answer in the System One shape for its question type.
+fn writeDecisionAnswer(w: *std.Io.Writer, q: systemone.Question, probs: []const f32) !void {
+    var key_buf: [systemone.max_name_len * 2]u8 = undefined;
+    const name = json.jsonEscapeInto(&key_buf, q.name) orelse q.name;
+    try w.print("\"{s}\":{{\"type\":\"", .{name});
+    switch (q.kind) {
+        .noul => {
+            // Index 0 is "yes", so its mass is the probability the answer is
+            // true, which is the whole answer for this type.
+            try w.print("noul\",\"noul\":{d:.6}}}", .{probs[0]});
+        },
+        .choice => {
+            const top = systemone.peak(probs);
+            var val_buf: [systemone.max_option_len * 2]u8 = undefined;
+            const chosen = json.jsonEscapeInto(&val_buf, q.options[top.index].value) orelse q.options[top.index].value;
+            try w.print("choice\",\"choice\":\"{s}\",\"confidence\":{d:.6},\"probabilities\":{{", .{ chosen, top.probability });
+            for (q.options, probs, 0..) |opt, p, i| {
+                if (i > 0) try w.writeAll(",");
+                var opt_buf: [systemone.max_option_len * 2]u8 = undefined;
+                const label = json.jsonEscapeInto(&opt_buf, opt.value) orelse opt.value;
+                try w.print("\"{s}\":{d:.6}", .{ label, p });
+            }
+            try w.writeAll("}}");
+        },
+        .score => {
+            const top = systemone.peak(probs);
+            try w.print("score\",\"score\":{d:.6},\"confidence\":{d:.6},\"legend\":{{", .{ systemone.expectedScore(probs), top.probability });
+            for (q.options, 0..) |opt, i| {
+                if (i > 0) try w.writeAll(",");
+                var opt_buf: [systemone.max_option_len * 2]u8 = undefined;
+                const label = json.jsonEscapeInto(&opt_buf, opt.value) orelse opt.value;
+                try w.print("\"{d}\":\"{s}\"", .{ i, label });
+            }
+            try w.writeAll("},\"probabilities\":{");
+            for (probs, 0..) |p, i| {
+                if (i > 0) try w.writeAll(",");
+                try w.print("\"{d}\":{d:.6}", .{ i, p });
+            }
+            try w.writeAll("}}");
+        },
+    }
 }
 
 /// Snapshot the model's KV sequence length with the model excluded.
@@ -1645,12 +1769,16 @@ fn buildToolSystemPrompt(allocator: Allocator, tmpl: ChatTemplate, tp: *const js
         try tmpl.writeUntrusted(allocator, &buf, tool.parameters_json);
         try buf.appendSlice(allocator, "\n");
     }
-    try buf.appendSlice(allocator,
-        \\
-        \\To call a tool, output a JSON object wrapped in <tool_call> tags:
-        \\<tool_call>{"name": "tool_name", "arguments": {"param": "value"}}</tool_call>
-        \\You may call multiple tools.
-    );
+    // Same delimiters the response parser looks for, so instructing the
+    // model and reading it back cannot drift apart.
+    const tags = serverToolTags();
+    try buf.appendSlice(allocator, "\nTo call a tool, output a JSON object wrapped in ");
+    try buf.appendSlice(allocator, tags.open);
+    try buf.appendSlice(allocator, " tags:\n");
+    try buf.appendSlice(allocator, tags.open);
+    try buf.appendSlice(allocator, "{\"name\": \"tool_name\", \"arguments\": {\"param\": \"value\"}}");
+    try buf.appendSlice(allocator, tags.close);
+    try buf.appendSlice(allocator, "\nYou may call multiple tools.");
     if (std.mem.eql(u8, tp.tool_choice, "required")) {
         try buf.appendSlice(allocator, " You MUST call at least one tool.");
     } else {
@@ -1659,9 +1787,12 @@ fn buildToolSystemPrompt(allocator: Allocator, tmpl: ChatTemplate, tp: *const js
     return buf.toOwnedSlice(allocator);
 }
 
-/// Parse tool calls from model output. Looks for <tool_call>...</tool_call> patterns.
-fn hasToolCalls(text: []const u8) bool {
-    return std.mem.indexOf(u8, text, "<tool_call>") != null;
+/// Parse tool calls from model output. The delimiters come from the loaded
+/// chat template, so an architecture that wraps calls in something other than
+/// ChatML's `<tool_call>` pair is parsed by declaring it, not by adding a
+/// branch here.
+fn hasToolCalls(text: []const u8, tags: ToolTags) bool {
+    return std.mem.indexOf(u8, text, tags.open) != null;
 }
 
 /// Drop tool-call tag markup from assistant text that is returned as plain
@@ -1670,9 +1801,9 @@ fn hasToolCalls(text: []const u8) bool {
 /// client that scans for them the same text the server just refused to trust.
 /// Text after an unterminated opening tag is dropped. Returns the input slice
 /// when there is no tag to remove.
-fn stripToolCallTags(allocator: Allocator, text: []const u8) error{OutOfMemory}![]const u8 {
-    const tc_start_tag = "<tool_call>";
-    const tc_end_tag = "</tool_call>";
+fn stripToolCallTags(allocator: Allocator, text: []const u8, tags: ToolTags) error{OutOfMemory}![]const u8 {
+    const tc_start_tag = tags.open;
+    const tc_end_tag = tags.close;
     if (std.mem.indexOf(u8, text, tc_start_tag) == null) return text;
     var out = std.ArrayList(u8).empty;
     errdefer out.deinit(allocator);
@@ -1705,8 +1836,8 @@ const PlainContent = struct {
     }
 };
 
-fn plainContent(allocator: Allocator, raw: []const u8, escaped_fallback: []const u8) PlainContent {
-    const stripped = stripToolCallTags(allocator, raw) catch raw;
+fn plainContent(allocator: Allocator, raw: []const u8, escaped_fallback: []const u8, tags: ToolTags) PlainContent {
+    const stripped = stripToolCallTags(allocator, raw, tags) catch raw;
     if (stripped.ptr == raw.ptr) return .{ .text = escaped_fallback, .owned = false };
     // jsonEscape aliases its input when there is nothing to escape, so the
     // stripped buffer is either handed to the caller or freed here.
@@ -1730,7 +1861,25 @@ const ToolCallCtx = struct {
     model_name: []const u8,
     registry: *const tools_mod.Registry,
     tp: *const json.ToolParams,
+    /// Delimiters this model wraps a tool call in, from its chat template.
+    /// Defaulted to ChatML's so a test can build a context without a server.
+    tags: ToolTags = .{},
 };
+
+/// The delimiters a model wraps a tool call in. Carried rather than read from
+/// the global so the parsers stay pure and testable.
+const ToolTags = struct {
+    open: []const u8 = "<tool_call>",
+    close: []const u8 = "</tool_call>",
+};
+
+/// The loaded model's tool-call delimiters.
+fn serverToolTags() ToolTags {
+    return .{
+        .open = g_server.chat_template.tool_call_open,
+        .close = g_server.chat_template.tool_call_close,
+    };
+}
 
 /// The tool-call context of the running server, for the request's own tools.
 fn serverToolCallCtx(tp: *const json.ToolParams) ToolCallCtx {
@@ -1739,6 +1888,7 @@ fn serverToolCallCtx(tp: *const json.ToolParams) ToolCallCtx {
         .model_name = g_server.model_name,
         .registry = &g_server.tool_registry,
         .tp = tp,
+        .tags = serverToolTags(),
     };
 }
 
@@ -1746,8 +1896,8 @@ fn serverToolCallCtx(tp: *const json.ToolParams) ToolCallCtx {
 /// `name` is in the request tools or the process registry. Returns the JSON
 /// between the tags, or null when none remain. Undeclared names are skipped.
 fn nextAllowedToolCall(text: []const u8, search_pos: *usize, ctx: ToolCallCtx) ?[]const u8 {
-    const tc_start_tag = "<tool_call>";
-    const tc_end_tag = "</tool_call>";
+    const tc_start_tag = ctx.tags.open;
+    const tc_end_tag = ctx.tags.close;
     while (search_pos.* < text.len) {
         const tc_start = std.mem.indexOfPos(u8, text, search_pos.*, tc_start_tag) orelse return null;
         const json_start = tc_start + tc_start_tag.len;
@@ -1814,10 +1964,15 @@ fn escapedToolCall(allocator: Allocator, tc_json: []const u8) ?EscapedToolCall {
 /// Detects <think>...</think> (DeepSeek R1, QwQ) and similar markers.
 /// Returns reasoning slice and content slice, both reference the original text (no alloc).
 const ThinkingSplit = struct { reasoning: []const u8, content: []const u8 };
-fn splitThinkingContent(text: []const u8) ThinkingSplit {
+
+/// Split with the loaded template's reasoning markers.
+fn splitThinking(text: []const u8) ThinkingSplit {
+    return splitThinkingWith(text, g_server.chat_template.reasoning_open, g_server.chat_template.reasoning_close);
+}
+
+fn splitThinkingWith(text: []const u8, think_open: []const u8, think_close: []const u8) ThinkingSplit {
+    if (think_open.len == 0 or think_close.len == 0) return .{ .reasoning = "", .content = text };
     // Pattern: <think>REASONING</think>CONTENT
-    const think_open = "<think>";
-    const think_close = "</think>";
     if (std.mem.startsWith(u8, text, think_open)) {
         if (std.mem.indexOf(u8, text, think_close)) |end| {
             const reasoning = text[think_open.len..end];
@@ -2666,13 +2821,13 @@ fn handleRequest(stream: http.TcpStream, req: http.HttpRequest) void {
         const total = gen.stats.tokens_generated + gen.stats.prompt_tokens;
         var resp_buf: [response_buf_size]u8 = undefined;
 
-        const json_body = if (toolsWanted(&tool_params) and hasToolCalls(gen.raw)) blk: {
+        const json_body = if (toolsWanted(&tool_params) and hasToolCalls(gen.raw, serverToolTags())) blk: {
             const tc_resp = buildToolCallResponse(&resp_buf, gen.raw, req_id, created, gen.stats.prompt_tokens, gen.stats.tokens_generated, serverToolCallCtx(&tool_params));
             if (tc_resp.len > 0) break :blk tc_resp;
             // No declared tool parsed. Return the text without the tag markup:
             // the server just refused this payload, so a client that scans for
             // tags must not find it in the content either.
-            const plain = plainContent(g_server.allocator, gen.raw, gen.escaped);
+            const plain = plainContent(g_server.allocator, gen.raw, gen.escaped, serverToolTags());
             defer plain.deinit(g_server.allocator);
             break :blk std.fmt.bufPrint(&resp_buf,
                 \\{{"id":"chatcmpl-{d}","object":"chat.completion","created":{d},"model":"{s}","system_fingerprint":"{s}","choices":[{{"index":0,"message":{{"role":"assistant","content":"{s}"}},"finish_reason":"{s}"}}],"usage":{{"prompt_tokens":{d},"completion_tokens":{d},"total_tokens":{d}}}}}
@@ -2685,7 +2840,7 @@ fn handleRequest(stream: http.TcpStream, req: http.HttpRequest) void {
             };
         } else blk: {
             // Split reasoning_content from content for thinking models (DeepSeek R1, QwQ, Gemma 4 12B).
-            const split = splitThinkingContent(gen.raw);
+            const split = splitThinking(gen.raw);
             if (split.reasoning.len > 0) {
                 // Emit separate reasoning_content field (DeepSeek/o1 compatible API)
                 const reasoning_escaped = json.jsonEscape(g_server.allocator, split.reasoning) catch {
@@ -2815,6 +2970,103 @@ fn handleRequest(stream: http.TcpStream, req: http.HttpRequest) void {
         g_server.metrics.recordTokens(@intCast(gen.stats.tokens_generated));
         g_server.metrics.recordCompletion();
 
+        logRequestDone(method, path, 200, elapsedMs(request_start));
+        return;
+    }
+
+    // ── /v1/systemone: typed decision questions answered by a logit read ──────
+    if (is_post and std.mem.eql(u8, path, "/v1/systemone")) {
+        logRequest(method, path);
+        g_server.metrics.recordRequest();
+        var decision_req = systemone.parseRequest(g_server.allocator, req.body) catch |err| {
+            const msg: []const u8 = switch (err) {
+                error.MalformedRequest => "Provide a state and a questions object",
+                error.QuestionCount => "questions must hold 1 to 64 entries",
+                error.UnknownQuestionType => "question type must be noul, choice or score",
+                error.OptionCount => "choice needs 2 to 26 criteria, score needs 2 to 10 levels",
+                error.DuplicateOption => "criteria must not repeat a value",
+                error.TooLong => "a question name or option is too long",
+                error.OutOfMemory => "Out of memory",
+            };
+            if (err == error.OutOfMemory) {
+                sendJsonError(stream, "500 Internal Server Error", "server_error", msg);
+                g_server.metrics.recordFailure();
+                logRequestDone(method, path, 500, elapsedMs(request_start));
+            } else {
+                sendJsonErrorEx(stream, "400 Bad Request", "invalid_request_error", msg, "questions", "invalid_value");
+                g_server.metrics.recordClientError();
+                logRequestDone(method, path, 400, elapsedMs(request_start));
+            }
+            return;
+        };
+        defer decision_req.deinit();
+
+        const resp_buf = g_server.allocator.alloc(u8, systemone_response_buf_size) catch {
+            sendJsonError(stream, "500 Internal Server Error", "server_error", "Out of memory");
+            g_server.metrics.recordFailure();
+            logRequestDone(method, path, 500, elapsedMs(request_start));
+            return;
+        };
+        defer g_server.allocator.free(resp_buf);
+
+        var w = std.Io.Writer.fixed(resp_buf);
+        var input_tokens: usize = 0;
+        var failure: ?ReadOutcome = null;
+        {
+            g_server.mutex.lockUncancelable(g_server.io);
+            defer g_server.mutex.unlock(g_server.io);
+            lockModelWithScheduler();
+            defer unlockModelWithScheduler();
+            // The reads rewrite the shared KV cache, so whatever prefix the
+            // server had cached no longer describes it.
+            defer g_server.clearCachedPromptIds();
+
+            w.writeAll("{\"answers\":{") catch {};
+            for (decision_req.questions, 0..) |q, qi| {
+                var probs: [systemone.max_choices]f32 = undefined;
+                switch (readDecision(decision_req.state, q, &probs, &input_tokens)) {
+                    .ok => {},
+                    else => |bad| {
+                        failure = bad;
+                        break;
+                    },
+                }
+                if (qi > 0) w.writeAll(",") catch {};
+                writeDecisionAnswer(&w, q, probs[0..q.labelCount()]) catch {};
+            }
+        }
+        if (failure) |bad| {
+            switch (bad) {
+                .multi_token_label => |label| {
+                    var msg_buf: [160]u8 = undefined;
+                    const msg = std.fmt.bufPrint(&msg_buf, "label '{s}' is not a single token for this model's tokenizer", .{label}) catch "a label is not a single token for this model's tokenizer";
+                    sendJsonErrorEx(stream, "400 Bad Request", "invalid_request_error", msg, "questions", "invalid_value");
+                    g_server.metrics.recordClientError();
+                    logRequestDone(method, path, 400, elapsedMs(request_start));
+                },
+                .prompt_too_long => {
+                    sendJsonErrorEx(stream, "400 Bad Request", "invalid_request_error", "state and question do not fit the prompt buffer", "state", "invalid_value");
+                    g_server.metrics.recordClientError();
+                    logRequestDone(method, path, 400, elapsedMs(request_start));
+                },
+                else => {
+                    sendJsonError(stream, "500 Internal Server Error", "server_error", "Decision read failed");
+                    g_server.metrics.recordFailure();
+                    logRequestDone(method, path, 500, elapsedMs(request_start));
+                },
+            }
+            return;
+        }
+        // output_tokens is 0 by construction: a decision is read off the
+        // logits, never generated.
+        w.print("}},\"model\":\"{s}\",\"usage\":{{\"input_tokens\":{d},\"output_tokens\":0}}}}", .{ g_server.model_name, input_tokens }) catch {
+            sendJsonError(stream, "500 Internal Server Error", "server_error", "Response too large");
+            g_server.metrics.recordFailure();
+            logRequestDone(method, path, 500, elapsedMs(request_start));
+            return;
+        };
+        sendJson(stream, w.buffered());
+        g_server.metrics.recordCompletion();
         logRequestDone(method, path, 200, elapsedMs(request_start));
         return;
     }
@@ -3222,11 +3474,11 @@ fn handleRequest(stream: http.TcpStream, req: http.HttpRequest) void {
         // A tool-call tag that names no declared tool leaves call_idx at 0 and
         // returns "", so unparseable output degrades to a plain message item
         // with the tag markup removed, as on /v1/chat/completions.
-        const tc_body = if (toolsWanted(&tool_params_r) and hasToolCalls(gen.raw))
+        const tc_body = if (toolsWanted(&tool_params_r) and hasToolCalls(gen.raw, serverToolTags()))
             buildResponsesToolCallResponse(&resp_buf, gen.raw, req_id, created, gen.stats.prompt_tokens, gen.stats.tokens_generated, serverToolCallCtx(&tool_params_r))
         else
             "";
-        const plain = plainContent(g_server.allocator, gen.raw, gen.escaped);
+        const plain = plainContent(g_server.allocator, gen.raw, gen.escaped, serverToolTags());
         defer plain.deinit(g_server.allocator);
         const json_body = if (tc_body.len > 0) tc_body else std.fmt.bufPrint(&resp_buf,
             \\{{"id":"resp-{d}","object":"response","created_at":{d},"status":"completed","model":"{s}","stop_reason":"{s}","output":[{{"type":"message","id":"msg_0","status":"completed","role":"assistant","content":[{{"type":"output_text","text":"{s}"}}]}}],"usage":{{"input_tokens":{d},"output_tokens":{d},"total_tokens":{d}}}}}
@@ -3386,7 +3638,7 @@ fn handleRequest(stream: http.TcpStream, req: http.HttpRequest) void {
         // Falls back to the plain text response when no <tool_call> payload
         // parses (small-model malformed output), mirroring /v1/chat/completions.
         var resp_buf_tc: [response_buf_size]u8 = undefined;
-        if (want_tools_m and hasToolCalls(gen.raw)) {
+        if (want_tools_m and hasToolCalls(gen.raw, serverToolTags())) {
             const anth_tc = buildAnthropicToolCallResponse(&resp_buf_tc, gen.raw, req_id, gen.stats.prompt_tokens, gen.stats.tokens_generated, serverToolCallCtx(&tool_params_m));
             if (anth_tc.len > 0) {
                 sendJson(stream, anth_tc);
@@ -3399,7 +3651,7 @@ fn handleRequest(stream: http.TcpStream, req: http.HttpRequest) void {
         }
 
         var resp_buf: [response_buf_size]u8 = undefined;
-        const plain = plainContent(g_server.allocator, gen.raw, gen.escaped);
+        const plain = plainContent(g_server.allocator, gen.raw, gen.escaped, serverToolTags());
         defer plain.deinit(g_server.allocator);
         const json_body = std.fmt.bufPrint(&resp_buf,
             \\{{"id":"msg_{d}","type":"message","role":"assistant","content":[{{"type":"text","text":"{s}"}}],"model":"{s}","stop_reason":"{s}","stop_sequence":null,"usage":{{"input_tokens":{d},"output_tokens":{d}}}}}
@@ -4734,6 +4986,11 @@ fn generateNPre(formatted: []const u8, reset: bool, max_tokens: usize, sampling:
         if (spec_decode.SpecState.init(g_server.allocator, g_server.spec_tokens, model.vocabSize())) |ok| {
             spec_state_storage = ok;
             spec_state_valid = true;
+            spec_state_storage.reserveSsmRewind(g_server.allocator, model) catch {
+                spec_state_storage.deinit(g_server.allocator);
+                spec_state_storage = spec_decode.SpecState{ .k = 0, .vocab_size = 0 };
+                spec_state_valid = false;
+            };
         } else |_| {
             spec_state_storage = spec_decode.SpecState{ .k = 0, .vocab_size = 0 };
         }
@@ -4753,6 +5010,7 @@ fn generateNPre(formatted: []const u8, reset: bool, max_tokens: usize, sampling:
 
         while (token_count < effective_max and !hit_eog) {
             const pre_draft_pos = model.kvSeqLen();
+            spec_state.beginRound(model);
             const is_self = (model.ptr == draft_model.ptr);
             const spec_pen: spec_decode.Penalties = .{
                 .history = gen_tokens[0..token_count],
@@ -4774,7 +5032,7 @@ fn generateNPre(formatted: []const u8, reset: bool, max_tokens: usize, sampling:
                     break :blk model.forward(ld) catch ld;
                 } }
             else if (use_sampling)
-                spec_decode.verifySampling(spec_state, model, draft_model, last, pre_draft_pos, sampling.temperature, spec_pen, prng.random())
+                spec_decode.verifySampling(spec_state, model, draft_model, last, pre_draft_pos, specSampling(sampling), spec_pen, prng.random())
             else
                 spec_decode.verifySequential(spec_state, model, draft_model, last, pre_draft_pos, spec_pen);
 
@@ -5639,7 +5897,7 @@ fn startAnthropicStreamWithTools(stream: http.TcpStream, formatted: []const u8, 
     }
 
     var call_idx: usize = 0;
-    if (hasToolCalls(gen.raw)) {
+    if (hasToolCalls(gen.raw, serverToolTags())) {
         var search_pos: usize = 0;
 
         while (nextAllowedToolCall(gen.raw, &search_pos, ctx)) |tc_json| {
@@ -6058,6 +6316,11 @@ fn generateAnthropicStream(stream: http.TcpStream, formatted: []const u8, max_to
         if (spec_decode.SpecState.init(g_server.allocator, g_server.spec_tokens, model.vocabSize())) |ok| {
             a_spec_storage = ok;
             a_spec_valid = true;
+            a_spec_storage.reserveSsmRewind(g_server.allocator, model) catch {
+                a_spec_storage.deinit(g_server.allocator);
+                a_spec_storage = spec_decode.SpecState{ .k = 0, .vocab_size = 0 };
+                a_spec_valid = false;
+            };
         } else |_| {
             a_spec_storage = spec_decode.SpecState{ .k = 0, .vocab_size = 0 };
         }
@@ -6083,6 +6346,7 @@ fn generateAnthropicStream(stream: http.TcpStream, formatted: []const u8, max_to
         while (token_count < max_tokens and !anth_disconnected) {
             if (token_ids.len == 0 or (token_count == 0 and g_server.isEog(first_gen_token))) break;
             const pre = model.kvSeqLen();
+            a_spec.beginRound(model);
             const is_self = (model.ptr == a_draft.ptr);
             const pen_a: spec_decode.Penalties = .{
                 .history = a_spec_tokens[0..a_spec_count],
@@ -6102,7 +6366,7 @@ fn generateAnthropicStream(stream: http.TcpStream, formatted: []const u8, max_to
                     break :blk model.forward(ld) catch ld;
                 } }
             else if (use_sampling_a)
-                spec_decode.verifySampling(a_spec, model, a_draft, last, pre, sampling_a.temperature, pen_a, prng_a.random())
+                spec_decode.verifySampling(a_spec, model, a_draft, last, pre, specSampling(sampling_a), pen_a, prng_a.random())
             else
                 spec_decode.verifySequential(a_spec, model, a_draft, last, pre, pen_a);
 
@@ -6581,6 +6845,11 @@ fn generateResponsesStream(stream: http.TcpStream, prompt: []const u8, max_token
         if (spec_decode.SpecState.init(g_server.allocator, g_server.spec_tokens, model.vocabSize())) |ok| {
             r_spec_storage = ok;
             r_spec_valid = true;
+            r_spec_storage.reserveSsmRewind(g_server.allocator, model) catch {
+                r_spec_storage.deinit(g_server.allocator);
+                r_spec_storage = spec_decode.SpecState{ .k = 0, .vocab_size = 0 };
+                r_spec_valid = false;
+            };
         } else |_| {
             r_spec_storage = spec_decode.SpecState{ .k = 0, .vocab_size = 0 };
         }
@@ -6598,6 +6867,7 @@ fn generateResponsesStream(stream: http.TcpStream, prompt: []const u8, max_token
         while (token_count < max_tokens and !resp_disconnected) {
             if (token_ids.len == 0 or (token_count == 0 and g_server.isEog(first_gen_token))) break;
             const pre = model.kvSeqLen();
+            r_spec.beginRound(model);
             const is_self = (model.ptr == r_draft.ptr);
             const pen_r: spec_decode.Penalties = .{
                 .history = gen_tokens[0..token_count],
@@ -6617,7 +6887,7 @@ fn generateResponsesStream(stream: http.TcpStream, prompt: []const u8, max_token
                     break :blk model.forward(ld) catch ld;
                 } }
             else if (use_sampling_r)
-                spec_decode.verifySampling(r_spec, model, r_draft, last, pre, sampling_r.temperature, pen_r, prng_r.random())
+                spec_decode.verifySampling(r_spec, model, r_draft, last, pre, specSampling(sampling_r), pen_r, prng_r.random())
             else
                 spec_decode.verifySequential(r_spec, model, r_draft, last, pre, pen_r);
 
@@ -6830,7 +7100,7 @@ fn startStreamWithTools(stream: http.TcpStream, prompt: []const u8, max_tokens: 
     var chunk_buf: [response_buf_size]u8 = undefined;
 
     var call_idx: usize = 0;
-    if (hasToolCalls(gen.raw)) {
+    if (hasToolCalls(gen.raw, serverToolTags())) {
         // Emit tool calls as delta chunks
         var search_pos: usize = 0;
 
@@ -6869,7 +7139,7 @@ fn startStreamWithTools(stream: http.TcpStream, prompt: []const u8, max_tokens: 
         // empty assistant turn that claims finish_reason "tool_calls". The tag
         // markup itself is dropped, so a client scanning for tags cannot read
         // the payload the server just refused.
-        const plain = plainContent(ctx.allocator, gen.raw, gen.escaped);
+        const plain = plainContent(ctx.allocator, gen.raw, gen.escaped, ctx.tags);
         defer plain.deinit(ctx.allocator);
         writeStreamedContent(stream, &chunk_buf, g_server.model_name, req_id, created, plain.text, gen.finish_reason);
     }
@@ -7380,6 +7650,11 @@ fn generateStream(stream: http.TcpStream, prompt: []const u8, req_id: u64, creat
         if (spec_decode.SpecState.init(g_server.allocator, g_server.spec_tokens, model.vocabSize())) |ok| {
             s_spec_storage = ok;
             s_spec_valid = true;
+            s_spec_storage.reserveSsmRewind(g_server.allocator, model) catch {
+                s_spec_storage.deinit(g_server.allocator);
+                s_spec_storage = spec_decode.SpecState{ .k = 0, .vocab_size = 0 };
+                s_spec_valid = false;
+            };
         } else |_| {
             s_spec_storage = spec_decode.SpecState{ .k = 0, .vocab_size = 0 };
         }
@@ -7406,6 +7681,7 @@ fn generateStream(stream: http.TcpStream, prompt: []const u8, req_id: u64, creat
         while (token_count < max_tokens and !stream_disconnected) {
             if (token_ids.len == 0 or (token_count == 0 and g_server.isEog(first_gen_token))) break;
             const pre = model.kvSeqLen();
+            s_spec.beginRound(model);
             const is_self = (model.ptr == s_draft.ptr);
             const pen_s: spec_decode.Penalties = .{
                 .history = s_spec_tokens[0..s_spec_count],
@@ -7425,7 +7701,7 @@ fn generateStream(stream: http.TcpStream, prompt: []const u8, req_id: u64, creat
                     break :blk model.forward(ld) catch ld;
                 } }
             else if (use_sampling_s)
-                spec_decode.verifySampling(s_spec, model, s_draft, last, pre, sampling.temperature, pen_s, prng_s.random())
+                spec_decode.verifySampling(s_spec, model, s_draft, last, pre, specSampling(sampling), pen_s, prng_s.random())
             else
                 spec_decode.verifySequential(s_spec, model, s_draft, last, pre, pen_s);
 
@@ -7911,11 +8187,12 @@ pub fn run(config: ServerConfig) !void {
     // The scheduler owns the model forward loop; HTTP handlers enqueue
     // requests and poll for results instead of calling model.forward() directly.
     const effective_batch_size: usize = if (config.max_batch_size > 0) config.max_batch_size else scheduler_max_batch_size;
-    // Admission runs one request at a time while the model layer exposes a
-    // single shared KV sequence (see scheduler.max_running_requests_single_sequence);
-    // `--max-batch-size` becomes effective concurrent decoding once per-request
-    // paged KV is wired end to end.
-    const admission_limit = @min(effective_batch_size, scheduler.max_running_requests_single_sequence);
+    // One running request per KV sequence the model can hold. A model with
+    // several lets `--max-batch-size` take effect, with each request
+    // keeping its own cache; one with a single sequence still runs them
+    // one at a time, because two interleaved requests on one cache corrupt
+    // each other silently.
+    const admission_limit = scheduler.admissionLimit(server.model, effective_batch_size);
     var request_manager = try scheduler.RequestManager.init(allocator, &server.metrics, effective_batch_size, scheduler_timeout_sec, tiered_cache, io);
     defer request_manager.deinit();
     server.request_manager = &request_manager;
@@ -8653,15 +8930,15 @@ test "stripToolCallTags removes tag markup and keeps surrounding text" {
     const text =
         \\before<tool_call>{"name": "rm"}</tool_call>after
     ;
-    const out = try stripToolCallTags(alloc, text);
+    const out = try stripToolCallTags(alloc, text, .{});
     defer if (out.ptr != text.ptr) alloc.free(@constCast(out));
     try std.testing.expectEqualStrings("beforeafter", out);
     // No tags: the input is borrowed, not copied.
     const plain = "plain";
-    try std.testing.expectEqual(@intFromPtr(plain.ptr), @intFromPtr((try stripToolCallTags(alloc, plain)).ptr));
+    try std.testing.expectEqual(@intFromPtr(plain.ptr), @intFromPtr((try stripToolCallTags(alloc, plain, .{})).ptr));
     // An unterminated tag drops the rest rather than looping.
     const unterminated = "keep<tool_call>{\"name\"";
-    const open = try stripToolCallTags(alloc, unterminated);
+    const open = try stripToolCallTags(alloc, unterminated, .{});
     defer if (open.ptr != unterminated.ptr) alloc.free(@constCast(open));
     try std.testing.expectEqualStrings("keep", open);
 }
@@ -8669,14 +8946,14 @@ test "stripToolCallTags removes tag markup and keeps surrounding text" {
 test "plainContent drops tags, escapes, and falls back to the pre-escaped text" {
     const alloc = std.testing.allocator;
     // Text with no tag is borrowed from the caller's already-escaped copy.
-    const no_tags = plainContent(alloc, "plain", "already");
+    const no_tags = plainContent(alloc, "plain", "already", .{});
     try std.testing.expect(!no_tags.owned);
     try std.testing.expectEqualStrings("already", no_tags.text);
     no_tags.deinit(alloc);
 
     // Tag markup is dropped and the remainder is escaped into one owned buffer.
     const tagged = "a\"b<tool_call>x</tool_call>c";
-    const stripped = plainContent(alloc, tagged, "fallback");
+    const stripped = plainContent(alloc, tagged, "fallback", .{});
     defer stripped.deinit(alloc);
     try std.testing.expect(stripped.owned);
     try std.testing.expectEqualStrings("a\\\"bc", stripped.text);
@@ -9481,14 +9758,14 @@ test "fuzz: all server functions" {
 
             // hasToolCalls
             {
-                std.debug.assert(hasToolCalls("<tool_call>{\"name\":\"foo\"}</tool_call>"));
-                std.debug.assert(!hasToolCalls("No tools here"));
+                std.debug.assert(hasToolCalls("<tool_call>{\"name\":\"foo\"}</tool_call>", .{}));
+                std.debug.assert(!hasToolCalls("No tools here", .{}));
                 // Random input
                 var tc_buf: [16]u8 = undefined;
                 for (0..16) |i| {
                     tc_buf[i] = smith.valueWithHash(u8, @truncate(0x30 +% i));
                 }
-                _ = hasToolCalls(&tc_buf);
+                _ = hasToolCalls(&tc_buf, .{});
             }
 
             // elapsedBetween
@@ -9886,10 +10163,10 @@ test "fuzz: model output tool-call, thinking, and tool-input parsers" {
                 try std.testing.expect(isCompleteJsonObject(resolved.obj));
             }
 
-            const split = splitThinkingContent(text);
+            const split = splitThinkingWith(text, "<think>", "</think>");
             try std.testing.expect(sliceWithin(text, split.reasoning));
             try std.testing.expect(sliceWithin(text, split.content));
-            try std.testing.expect(hasToolCalls(text));
+            try std.testing.expect(hasToolCalls(text, .{}));
         }
     }.f, .{});
 }
@@ -10040,4 +10317,132 @@ test "a recorded generation failure replays as a failure, not a success" {
     defer retry.replay.deinit(std.testing.allocator);
     try std.testing.expectEqualStrings("500 Internal Server Error", retry.replay.status_line);
     try std.testing.expectEqual(@as(u16, 500), statusCodeOf(retry.replay.status_line));
+}
+
+test "writeDecisionAnswer emits the System One shape per question type" {
+    var buf: [1024]u8 = undefined;
+
+    {
+        var w = std.Io.Writer.fixed(&buf);
+        const q = systemone.Question{ .name = "urgent", .kind = .noul };
+        // Index 0 is "yes", so the answer is its mass, not the argmax label.
+        try writeDecisionAnswer(&w, q, &[_]f32{ 0.99, 0.01 });
+        try std.testing.expectEqualStrings(
+            "\"urgent\":{\"type\":\"noul\",\"noul\":0.990000}",
+            w.buffered(),
+        );
+    }
+
+    {
+        var w = std.Io.Writer.fixed(&buf);
+        var options = [_]systemone.Option{ .{ .value = "low" }, .{ .value = "high" } };
+        const q = systemone.Question{ .name = "tier", .kind = .choice, .options = &options };
+        try writeDecisionAnswer(&w, q, &[_]f32{ 0.25, 0.75 });
+        const out = w.buffered();
+        try std.testing.expect(std.mem.indexOf(u8, out, "\"choice\":\"high\"") != null);
+        try std.testing.expect(std.mem.indexOf(u8, out, "\"confidence\":0.750000") != null);
+        try std.testing.expect(std.mem.indexOf(u8, out, "\"low\":0.250000") != null);
+        try std.testing.expect(std.mem.indexOf(u8, out, "\"high\":0.750000") != null);
+    }
+
+    {
+        var w = std.Io.Writer.fixed(&buf);
+        var levels = [_]systemone.Option{
+            .{ .value = "calm" },
+            .{ .value = "mildly annoyed" },
+            .{ .value = "angry" },
+        };
+        const q = systemone.Question{ .name = "mood", .kind = .score, .options = &levels };
+        try writeDecisionAnswer(&w, q, &[_]f32{ 0.07, 0.91, 0.02 });
+        const out = w.buffered();
+        // Probability-weighted mean of the indices, so it lands off a level.
+        try std.testing.expect(std.mem.indexOf(u8, out, "\"score\":0.950000") != null);
+        try std.testing.expect(std.mem.indexOf(u8, out, "\"legend\":{\"0\":\"calm\",\"1\":\"mildly annoyed\",\"2\":\"angry\"}") != null);
+        try std.testing.expect(std.mem.indexOf(u8, out, "\"2\":0.020000") != null);
+    }
+}
+
+test "writeDecisionAnswer escapes names and option values" {
+    // Question names and choice values are caller supplied, so a quote in
+    // either would otherwise break out of the JSON string it sits in.
+    var buf: [1024]u8 = undefined;
+    var w = std.Io.Writer.fixed(&buf);
+    var options = [_]systemone.Option{ .{ .value = "a\"b" }, .{ .value = "c" } };
+    const q = systemone.Question{ .name = "say \"hi\"", .kind = .choice, .options = &options };
+    try writeDecisionAnswer(&w, q, &[_]f32{ 0.9, 0.1 });
+    const out = w.buffered();
+    try std.testing.expect(std.mem.startsWith(u8, out, "\"say \\\"hi\\\"\":"));
+    try std.testing.expect(std.mem.indexOf(u8, out, "\"choice\":\"a\\\"b\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "\"a\\\"b\":0.900000") != null);
+}
+
+test "known_endpoints route /v1/systemone as POST only" {
+    var found = false;
+    for (known_endpoints) |ep| {
+        if (std.mem.eql(u8, ep.path, "/v1/systemone")) {
+            found = true;
+            try std.testing.expectEqualStrings("POST, OPTIONS", ep.allow);
+            // Decisions read the model, so the route is never public.
+            try std.testing.expectEqual(AuthPolicy.required, ep.auth);
+        }
+    }
+    try std.testing.expect(found);
+}
+
+test "tool-call parsing follows the template's delimiters" {
+    // A model that wraps calls in something other than ChatML's pair used to
+    // be unparseable: the delimiters were literals in the server, so the only
+    // way to support one was another branch here.
+    const alloc = std.testing.allocator;
+    const tags = ToolTags{ .open = "[TOOL_CALLS]", .close = "[/TOOL_CALLS]" };
+    const text = "before[TOOL_CALLS]{\"name\": \"rm\"}[/TOOL_CALLS]after";
+
+    try std.testing.expect(hasToolCalls(text, tags));
+    // The ChatML pair must not match the same text.
+    try std.testing.expect(!hasToolCalls(text, .{}));
+
+    const out = try stripToolCallTags(alloc, text, tags);
+    defer if (out.ptr != text.ptr) alloc.free(@constCast(out));
+    try std.testing.expectEqualStrings("beforeafter", out);
+
+    // With the wrong delimiters the markup survives into the content a client
+    // sees, which is the failure the template field removes.
+    const untouched = try stripToolCallTags(alloc, text, .{});
+    defer if (untouched.ptr != text.ptr) alloc.free(@constCast(untouched));
+    try std.testing.expectEqualStrings(text, untouched);
+}
+
+test "reasoning split follows the template's markers" {
+    const custom = splitThinkingWith("<reasoning>why</reasoning>answer", "<reasoning>", "</reasoning>");
+    try std.testing.expectEqualStrings("why", custom.reasoning);
+    try std.testing.expectEqualStrings("answer", custom.content);
+
+    // ChatML markers against the same text find nothing, so the tags would
+    // have reached the client inside `content`.
+    const missed = splitThinkingWith("<reasoning>why</reasoning>answer", "<think>", "</think>");
+    try std.testing.expectEqualStrings("", missed.reasoning);
+    try std.testing.expectEqualStrings("<reasoning>why</reasoning>answer", missed.content);
+
+    // A template that declares no markers leaves the text whole rather than
+    // matching an empty needle at position zero.
+    const none = splitThinkingWith("plain", "", "");
+    try std.testing.expectEqualStrings("", none.reasoning);
+    try std.testing.expectEqualStrings("plain", none.content);
+}
+
+test "every chat template declares usable tool and reasoning delimiters" {
+    // An empty open or close tag would make hasToolCalls match everything.
+    const templates = [_]chat_tmpl_mod.ChatTemplate{
+        chat_tmpl_mod.ChatTemplate.chatml,
+        chat_tmpl_mod.ChatTemplate.qwen35,
+        chat_tmpl_mod.ChatTemplate.gemma4,
+        chat_tmpl_mod.ChatTemplate.gemma4_unified,
+        chat_tmpl_mod.ChatTemplate.deepseek4,
+        chat_tmpl_mod.ChatTemplate.llama4,
+    };
+    for (templates) |t| {
+        try std.testing.expect(t.tool_call_open.len > 0);
+        try std.testing.expect(t.tool_call_close.len > 0);
+        try std.testing.expect(!std.mem.eql(u8, t.tool_call_open, t.tool_call_close));
+    }
 }

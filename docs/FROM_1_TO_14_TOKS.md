@@ -1,6 +1,6 @@
 # From 1 to 14 tok/s: Optimizing DeepSeek V4 Flash on a MacBook
 
-*How we made a 290B-parameter MoE model run faster than the reference engine on a 48GB laptop — through pure software optimization, arxiv papers, and an unhealthy amount of profiling.*
+*How we made a 290B-parameter MoE model run faster than the reference engine on a 48GB laptop: through pure software optimization, arxiv papers, and an unhealthy amount of profiling.*
 
 ---
 
@@ -8,11 +8,11 @@
 
 DeepSeek V4 Flash is a 290B-parameter Mixture-of-Experts model (20B active per token) that represents the frontier of efficient large language models. With 256 experts per layer, 43 transformer layers, 4-stream hyper connections, and MLA attention, it's one of the most architecturally complex models to run on consumer hardware.
 
-Our challenge: run it on an Apple M4 Pro MacBook with 48GB of unified memory. The model weights (MXFP4 quantization) are 155GB — over 3× the available RAM. This means SSD streaming: expert weights are read from NVMe on demand, cached in the page cache, and evicted as memory pressure mounts.
+Our challenge: run it on an Apple M4 Pro MacBook with 48GB of unified memory. The model weights (MXFP4 quantization) are 155GB: over 3× the available RAM. This means SSD streaming: expert weights are read from NVMe on demand, cached in the page cache, and evicted as memory pressure mounts.
 
 **Starting performance: 1.0 tok/s.** The reference engine (ds4/DwarfStar by antirez) achieves 5.9 tok/s on the same hardware using Metal GPU acceleration and an 81GB Q2 quantization.
 
-**Final performance: 1.8 tok/s coherent prose, 3.6 tok/s factual, up to 14 tok/s on code** — achieved entirely through software optimization on CPU, without changing the model or hardware.
+**Final performance: 1.8 tok/s coherent prose, 3.6 tok/s factual, up to 14 tok/s on code**: achieved entirely through software optimization on CPU, without changing the model or hardware.
 
 Here's every optimization that got us there, what worked, what didn't, and what we learned from 30+ arxiv papers along the way.
 
@@ -22,7 +22,7 @@ Here's every optimization that got us there, what worked, what didn't, and what 
 
 ### The SSD Streaming Architecture
 
-When your model is 3× larger than RAM, every token generation triggers a cascade of SSD reads. DeepSeek V4 Flash activates 6 experts per layer × 43 layers = 258 expert evaluations per token. Each expert weight is ~13MB (MXFP4). With a 73% cache hit rate, about 70 expert weights need to be read from SSD per token — roughly 900MB at 3.5 GB/s = 260ms of SSD latency per token.
+When your model is 3× larger than RAM, every token generation triggers a cascade of SSD reads. DeepSeek V4 Flash activates 6 experts per layer × 43 layers = 258 expert evaluations per token. Each expert weight is ~13MB (MXFP4). With a 73% cache hit rate, about 70 expert weights need to be read from SSD per token: roughly 900MB at 3.5 GB/s = 260ms of SSD latency per token.
 
 Add the CPU compute for attention (Q/K/V projections, SDPA, output projection) and FFN (gate/up/silu/down per expert), and each token takes about 1 second.
 
@@ -92,7 +92,7 @@ The original code only prefetched the **gate** projection weights for the next l
 
 ---
 
-## Phase 3: MTP — Multi-Token Prediction (Iterations 10-15)
+## Phase 3: MTP: Multi-Token Prediction (Iterations 10-15)
 
 ### Discovery: Hidden Weight Tensors
 
@@ -102,7 +102,7 @@ We extracted 97 non-expert tensors (595MB) and built a complete MTP inference pi
 
 ```
 mtpForward(token_id, depth):
-  1. main_proj: MXFP8 GEMV [4096, 12288] — concat(target_hidden, prev_hidden, embed)
+  1. main_proj: MXFP8 GEMV [4096, 12288]: concat(target_hidden, prev_hidden, embed)
   2. main_norm: RMS norm
   3. For layer 0, 1, 2:
      HC pre → attention (full MLA Q projection) → HC post →
@@ -127,7 +127,7 @@ Suffix decoding proposes draft tokens by finding matching n-gram patterns in the
 + const default_max_k: usize = 48;
 ```
 
-For code generation (which has highly repetitive patterns — function signatures, variable names, structural keywords), this was transformative:
+For code generation (which has highly repetitive patterns: function signatures, variable names, structural keywords), this was transformative:
 
 **Code: 1.2 → 9.9 tok/s** (8× improvement, 1.7× faster than ds4's 5.9)
 
@@ -259,19 +259,19 @@ Beyond performance numbers, the autoresearch produced significant infrastructure
 [Colibri](https://github.com/JustVugg/colibri) is a C inference engine that runs 744B-2.8T parameter MoE models on consumer hardware using AI memory multitiering (VRAM → RAM → SSD as a single hierarchy). Their 11.7K-line DeepSeek V4 implementation revealed four techniques worth studying:
 
 ### CFSE Nibble Entropy Compression
-Colibri measured that INT4 weights have entropy H=2.924 bits/weight — 27% below the 4-bit storage format. Their rANS order-0 nibble codec achieves 1.37× lossless compression (155GB → 113GB). "No context model can do better — it's a theorem" (nibble statistics are white/uncorrelated). However, with our workload being 85% compute-bound (not SSD-bound), the 27% SSD reduction only improves performance from 1.7 to 1.77 tok/s — marginal given the implementation effort.
+Colibri measured that INT4 weights have entropy H=2.924 bits/weight: 27% below the 4-bit storage format. Their rANS order-0 nibble codec achieves 1.37× lossless compression (155GB → 113GB). "No context model can do better: it's a theorem" (nibble statistics are white/uncorrelated). However, with our workload being 85% compute-bound (not SSD-bound), the 27% SSD reduction only improves performance from 1.7 to 1.77 tok/s: marginal given the implementation effort.
 
 ### pread + O_DIRECT
-Colibri uses `pread()` with `O_DIRECT` instead of mmap, bypassing the OS page cache entirely. Their measured improvement: 6.2 → 4.9 s/token (21%). This would completely fix our Metal GPU page fault issue (the #1 Metal bug), since the weight data would be in heap-allocated buffers that Metal can safely wrap. On macOS, `O_DIRECT` doesn't exist (`fcntl(F_NOCACHE)` is the closest), and for CPU backend, pread goes through the page cache anyway — so the benefit is primarily for Metal correctness, not CPU speed.
+Colibri uses `pread()` with `O_DIRECT` instead of mmap, bypassing the OS page cache entirely. Their measured improvement: 6.2 → 4.9 s/token (21%). This would completely fix our Metal GPU page fault issue (the #1 Metal bug), since the weight data would be in heap-allocated buffers that Metal can safely wrap. On macOS, `O_DIRECT` doesn't exist (`fcntl(F_NOCACHE)` is the closest), and for CPU backend, pread goes through the page cache anyway: so the benefit is primarily for Metal correctness, not CPU speed.
 
 ### Batch Expert Union
-Their `v4_moe_batch_union()` routes all tokens in a batch, computes the union of needed experts, loads each expert once, and processes all tokens through it. This is the execution-level counterpart to our MoE-Spec selection-level budgeting. We attempted this with `forwardTree` but found that for quantized weights on CPU, GEMM = N×GEMV — no compute advantage from batching.
+Their `v4_moe_batch_union()` routes all tokens in a batch, computes the union of needed experts, loads each expert once, and processes all tokens through it. This is the execution-level counterpart to our MoE-Spec selection-level budgeting. We attempted this with `forwardTree` but found that for quantized weights on CPU, GEMM = N×GEMV: no compute advantage from batching.
 
 ### Expert Cache Freeze
-We implemented cache freezing (prevent eviction during verification) but found it actually *hurts* hit rate (53% vs 65%) because new experts can't be tracked. The mmap page cache handles this naturally — recently-loaded pages stay resident across sequential verification forwards.
+We implemented cache freezing (prevent eviction during verification) but found it actually *hurts* hit rate (53% vs 65%) because new experts can't be tracked. The mmap page cache handles this naturally: recently-loaded pages stay resident across sequential verification forwards.
 
 ### The 85% Compute Bottleneck
-The most important finding from the Colibri analysis: **at 73% cache hit rate, our workload is 85% compute-bound, not SSD-bound.** All SSD optimizations (CFSE compression, pread, prefetch, cache freeze) have diminishing returns. The remaining speedup for prose must come from compute acceleration — Metal graph capture, Apple AMX/SME kernels, or batched GEMM with pre-packed F32 weights.
+The most important finding from the Colibri analysis: **at 73% cache hit rate, our workload is 85% compute-bound, not SSD-bound.** All SSD optimizations (CFSE compression, pread, prefetch, cache freeze) have diminishing returns. The remaining speedup for prose must come from compute acceleration: Metal graph capture, Apple AMX/SME kernels, or batched GEMM with pre-packed F32 weights.
 
 ---
 
@@ -281,13 +281,13 @@ The most important finding from the Colibri analysis: **at 73% cache hit rate, o
 
 2. **MXFP4 GEMV is bandwidth-bound, not compute-bound.** Every attempt to speed up the GEMV through compute optimization (AMX, dequant+SGEMM, SIMD) failed because the bottleneck is reading 4.4MB of weight data per expert, not multiplying it. In-kernel dequant will always beat dequant-to-F32+BLAS for SSD-streamed weights.
 
-3. **Metal per-dispatch overhead kills SSD streaming.** Without graph capture, each Metal GEMV dispatch (command buffer creation + encoding + sync) costs ~5ms. With 129 syncs per token, that's 645ms of pure overhead — more than the entire forward pass on CPU.
+3. **Metal per-dispatch overhead kills SSD streaming.** Without graph capture, each Metal GEMV dispatch (command buffer creation + encoding + sync) costs ~5ms. With 129 syncs per token, that's 645ms of pure overhead: more than the entire forward pass on CPU.
 
 4. **Suffix speculation is powerful but has a repetition trap.** Greedy decoding + suffix matching creates a feedback loop: repetitive output → long suffix matches → more repetitive output. The high tok/s numbers are real (tokens are generated) but the text quality degrades. Temperature > 0 or repetition penalty breaks the loop but reduces suffix effectiveness.
 
 5. **Expert routing is heavy-tailed.** Top-4 of 6 experts captures 80%+ of routing weight. Dropping 2 experts during verification saves 33% SSD bandwidth with <7% impact on routing accuracy. This principle (from MoE-Spec) applies to any MoE model with SSD streaming.
 
-6. **GGUF quantizers strip MTP.** All tested GGUF converters (ggml-org, ds4/antirez) drop MTP weight tensors. The 4,705 MTP tensors in DS V4 Flash's HF safetensors include full decoder layers with MoE, attention, and HC — a complete speculative drafting system that no local inference engine currently uses.
+6. **GGUF quantizers strip MTP.** All tested GGUF converters (ggml-org, ds4/antirez) drop MTP weight tensors. The 4,705 MTP tensors in DS V4 Flash's HF safetensors include full decoder layers with MoE, attention, and HC: a complete speculative drafting system that no local inference engine currently uses.
 
 7. **At 73% cache hit, you're compute-bound.** SSD optimizations (compression, pread, prefetch, cache strategies) have diminishing returns when 85% of per-token time is CPU compute. Measure before optimizing the wrong bottleneck.
 

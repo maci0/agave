@@ -2246,3 +2246,42 @@ test "softmax autotune, compare SIMD widths" {
         }
     }
 }
+
+test "CpuBackend, gemvMulti over three ops matches three separate gemv calls" {
+    // Q/K/V projections are dispatched as one multi-output GEMV so the shared
+    // activation is read once. That is only a win if the result is identical
+    // to running them separately, which is what this pins.
+    var be = CpuBackend{};
+    const k: usize = 6;
+    var x: [k]f32 = undefined;
+    for (&x, 0..) |*v, i| v.* = @as(f32, @floatFromInt(i)) * 0.5 - 1.0;
+
+    // Three different output widths, the way Q (gated, 2x) and K/V differ.
+    var w0: [4 * k]f32 = undefined;
+    var w1: [2 * k]f32 = undefined;
+    var w2: [2 * k]f32 = undefined;
+    for (&w0, 0..) |*v, i| v.* = @as(f32, @floatFromInt(i % 7)) - 3.0;
+    for (&w1, 0..) |*v, i| v.* = @as(f32, @floatFromInt(i % 5)) - 2.0;
+    for (&w2, 0..) |*v, i| v.* = @as(f32, @floatFromInt(i % 3)) - 1.0;
+
+    var batched0: [4]f32 = @splat(0);
+    var batched1: [2]f32 = @splat(0);
+    var batched2: [2]f32 = @splat(0);
+    const ops = [_]backend_mod.GemvOp{
+        .{ .w = .{ .data = @ptrCast(&w0), .dtype = .f32 }, .y = &batched0, .n = 4 },
+        .{ .w = .{ .data = @ptrCast(&w1), .dtype = .f32 }, .y = &batched1, .n = 2 },
+        .{ .w = .{ .data = @ptrCast(&w2), .dtype = .f32 }, .y = &batched2, .n = 2 },
+    };
+    be.gemvMulti(&x, &ops, k);
+
+    var single0: [4]f32 = @splat(0);
+    var single1: [2]f32 = @splat(0);
+    var single2: [2]f32 = @splat(0);
+    be.gemv(&x, .{ .data = @ptrCast(&w0), .dtype = .f32 }, &single0, 4, k);
+    be.gemv(&x, .{ .data = @ptrCast(&w1), .dtype = .f32 }, &single1, 2, k);
+    be.gemv(&x, .{ .data = @ptrCast(&w2), .dtype = .f32 }, &single2, 2, k);
+
+    try std.testing.expectEqualSlices(f32, &single0, &batched0);
+    try std.testing.expectEqualSlices(f32, &single1, &batched1);
+    try std.testing.expectEqualSlices(f32, &single2, &batched2);
+}

@@ -39,8 +39,8 @@ Fuses gate GEMV + up GEMV + activation into a single dispatch per FFN layer. Sav
 | `fused_ffn_gate_up_gelu_q5_k` | GELU | Q5_K | Gemma 4 |
 | `fused_ffn_gate_up_gelu_q6_k` | GELU | Q6_K | Gemma 4 |
 | `fused_ffn_gate_up_gelu_q4_0` | GELU | Q4_0 | Gemma 4 |
-| `fused_ffn_gate_up_clamped_silu_q2_k` | clamped SiLU | Q2_K | DeepSeek V4 (compiled, not dispatched — see below) |
-| `fused_ffn_gate_up_clamped_silu_mxfp4` | clamped SiLU | MXFP4 | DeepSeek V4 (compiled, not dispatched — see below) |
+| `fused_ffn_gate_up_clamped_silu_q2_k` | clamped SiLU | Q2_K | DeepSeek V4 (compiled, not dispatched, see below) |
+| `fused_ffn_gate_up_clamped_silu_mxfp4` | clamped SiLU | MXFP4 | DeepSeek V4 (compiled, not dispatched, see below) |
 
 Both clamped-SiLU kernels compile into pipelines, but no forward path reaches them:
 `Ds4Model.ffnLayer` sets `const use_fused = false` (`src/models/deepseek4.zig`), so DS4

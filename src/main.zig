@@ -541,7 +541,7 @@ const cli_specs = [_]cli_mod.ArgSpec{
     .{ .long = "host", .kind = .option, .help = "Server bind address: IPv4, localhost, 0.0.0.0, or 0 [default: 127.0.0.1]. Falls back to AGAVE_HOST." },
     .{ .long = "api-key", .kind = .option, .help = "API key for server auth. Prefer AGAVE_API_KEY (avoids process-list exposure; env wins if both set)." },
     .{ .long = "sleep-after", .kind = .option, .help = "Enter sleep mode after N seconds of server inactivity (0 = disabled). Signals /health sleeping:true; wakes on next request." },
-    .{ .long = "max-batch-size", .kind = .option, .help = "Max concurrent requests to batch per scheduler cycle [default: 8]. Admission currently runs one request at a time (single shared KV sequence), so values above 1 change nothing until per-request paged KV lands." },
+    .{ .long = "max-batch-size", .kind = .option, .help = "Max concurrent requests per scheduler cycle [default: 8]. Capped by how many KV sequences the model holds: Gemma 4 gives each request its own, architectures with a single cache still run one at a time." },
     .{ .long = "rate-limit-rpm", .kind = .option, .help = "Server max requests per minute (0 = unlimited). Enables token-bucket rate limiting when set with or without --rate-limit-tpm." },
     .{ .long = "rate-limit-tpm", .kind = .option, .help = "Server max prompt tokens per minute (0 = unlimited). Enables token-bucket rate limiting when set with or without --rate-limit-rpm." },
     .{ .long = "conv-store", .kind = .option, .help = "Path to persist web-UI conversations as JSON [default: $XDG_CACHE_HOME/agave/conversations.json, else ~/.cache/agave/conversations.json]." },
@@ -4770,6 +4770,10 @@ fn generateSpeculative(
     };
     spec_state.adaptive_k_enabled = true;
     defer spec_state.deinit(allocator);
+    spec_state.reserveSsmRewind(allocator, target) catch {
+        eprint("Error: failed to allocate speculative SSM rewind buffer\n", .{});
+        return;
+    };
 
     // FR-Spec: load token frequency map if provided
     var fr_spec_mask: ?[]bool = null;
@@ -4872,11 +4876,21 @@ fn generateSpeculative(
             }
         }
         const pre_draft_pos = target.kvSeqLen();
+        // Before drafting: self, ddtree and MTP modes draft through the target.
+        spec_state.beginRound(target);
         const spec_pen: spec_decode.Penalties = .{
             .history = gen_ids_buf[0..token_count],
             .repeat_penalty = cli.repeat_penalty,
             .dry_multiplier = cli.dry_multiplier,
             .dry_length = cli.dry_length,
+        };
+        const spec_samp: spec_decode.Sampling = .{
+            .temperature = cli.temperature,
+            .top_k = cli.top_k,
+            .top_p = cli.top_p,
+            .min_p = cli.min_p,
+            .xtc_probability = cli.xtc_probability,
+            .xtc_threshold = cli.xtc_threshold,
         };
         // Set when the cooldown branch produced pure n-gram drafts; skips the
         // drafter so verification consumes those drafts directly.
@@ -5077,7 +5091,7 @@ fn generateSpeculative(
         } else if (use_ddtree or self_spec)
             spec_decode.verifyDDTree(&spec_state, target, draft_model, last, cli.tree_budget, pre_draft_pos)
         else if (use_sampling)
-            spec_decode.verifySampling(&spec_state, target, draft_model, last, pre_draft_pos, cli.temperature, spec_pen, prng.random())
+            spec_decode.verifySampling(&spec_state, target, draft_model, last, pre_draft_pos, spec_samp, spec_pen, prng.random())
         else
             spec_decode.verifySequential(&spec_state, target, draft_model, last, pre_draft_pos, spec_pen);
 
@@ -5731,11 +5745,14 @@ test {
     _ = @import("tokenizer/tokenizer.zig");
     _ = @import("server/server.zig");
     _ = @import("server/json.zig");
+    _ = @import("server/systemone.zig");
     _ = @import("server/tools.zig");
     _ = @import("server/rate_limiter.zig");
     _ = @import("server/metrics.zig");
     _ = @import("server/scheduler.zig");
     _ = @import("sim_clock.zig");
+    _ = @import("kvcache/prefix_header.zig");
+    _ = @import("kvcache/window.zig");
     _ = @import("kvcache/block_allocator.zig");
     _ = @import("kvcache/view.zig");
     _ = @import("kvcache/manager.zig");

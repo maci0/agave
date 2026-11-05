@@ -11,6 +11,28 @@ must still appear under **Changed** or **Breaking** below. See
 
 ## [Unreleased]
 
+### Fixed
+- Speculative decoding corrupted recurrent state on hybrid models. Verification rewinds the target with `setKvSeqLen` and replays the accepted prefix, which is exact for attention and a no-op for the DeltaNet conv and recurrence states, so the replay double-consumed the prefix and drifted further every round. Affected Qwen 3.5 and Qwen4-Exp on `--spec-mode self`, `ddtree` and `mtp`, and on the tree-verify replay path.
+- `--max-batch-size` takes effect on Gemma 4. Each running request now owns a KV sequence of its own, so requests interleave at token granularity instead of queueing until the one ahead finishes. Switching sequences is a pointer swap and the extra caches are allocated on first use, so a server that never runs two at once pays nothing. Architectures with a single cache still admit one at a time.
+- Gemma 4 sliding-window layers no longer hold the whole context. A layer that can only attend to the last `sliding_window` positions now stores that window plus one prefill batch and compacts, which at a 32k context with a 1024-token window is 16x less per sliding layer, and most of Gemma 4's layers are sliding.
+- `--kv-type f16` works on Metal and WebGPU. It is the documented default, and Metal reached its unsupported-type panic with it because the type test covered turbo and Q8_0 only; the FA2 kernels dequant f16 in-kernel now, halving the cache against f32. WebGPU routes it to the CPU, which reads f16 natively, rather than refusing.
+- Attention over mixed KV tiers is now a real split. Every backend's `sdpaWithStats` reported identity softmax stats (max=0, sum=1) rather than the head's actual values, and since the online merge weights each partial by them, merging would have silently reweighted both sides; the tiered path avoided the merge by running a full-sequence CPU pass instead. The Metal kernels report real stats, backends without a stats-reporting kernel delegate to the CPU, and a demoted-prefix partition runs one partial per tier and merges them exactly.
+- Gemma 4 sliding-window layers attended to the entire sequence on the GPU path. The window was only applied when the head dim exceeded 256, which routed to a CPU loop; at the default 256 it fell through to an unwindowed backend SDPA, so past 1024 tokens the GPU diverged from the CPU result and from the architecture. A window that ends at the current position is now served by the backend's own fused kernel on a shifted cache base, which is both correct and reads only the window.
+- WebGPU RoPE rotated the wrong element pairs. It paired adjacent elements where the CPU and Metal kernels and the GGUF weight layout pair `i` with `i + rope_dim/2`, so every model decoded wrong output on WebGPU. Also fixed there: `gemv_q4_1` on an input width off a 32-element multiple, and an embedding lookup that read up to 1.05 GB past the table and crashed. `zig build validate -Dvalidate-backend=webgpu` now passes; it reported seven failures before.
+- Three Metal kernels produced wrong results. `gemm_q8_0` and `gemm_q4_0` truncated the quantization block count that is also their row stride, so any input width off a 32-element multiple read every row after the first from the wrong offset; their tail block also ran past the token's row into the next token's activations. `gemv_t` was dispatched as `out_dim` threads instead of the `out_dim` threadgroups it is written for, leaving most outputs unwritten. `zig build validate -Dvalidate-backend=metal` now passes; it reported three failures before.
+- `--spec-mode` silently disabled `--top-k`, `--top-p`, `--min-p` and `--xtc-*`: verification compared draft tokens against an untruncated softmax and drew its bonus token with truncation off, so speculative and non-speculative decoding sampled from different distributions.
+
+### Added
+- `zig build gate` checks decode throughput against `benchmarks/baselines.json` at a 5% tolerance and requires two greedy runs at one seed to match byte for byte. Baselines ship empty and are recorded per machine with `python3 scripts/perf-gate.py --update-baselines`.
+- Qwen4-Exp hints the PLE table rows a token hashes to before reading them, instead of taking one blocking page fault per row.
+- `POST /v1/systemone` answers typed decision questions (`noul`, `choice`, `score`) about a state. Each question is one prefill and the answer is the softmax over its label tokens, so nothing is generated and `usage.output_tokens` is always `0`. Matches the shapes llama.cpp, vLLM, SGLang, Ollama and LM Studio converged on this quarter. See [docs/API.md](docs/API.md#post-v1systemone).
+
+### Changed
+- Tool-call and reasoning delimiters come from the loaded chat template instead of being `<tool_call>` and `<think>` literals in the server. An architecture that wraps calls or reasoning in a different pair declares it on its `ChatTemplate` and both the tool-use system prompt and the response parser follow; there is no per-model parser to add.
+
+### Breaking
+- `GET`/`POST /v1/kv_cache` blobs now carry a 40-byte header naming the format version, cache geometry and RoPE bases. Import refuses anything that disagrees with the loaded model, where before a same-sized blob from another model restored and then decoded nonsense. Blobs exported by 0.13.0 or earlier are rejected; re-export them. See [docs/API.md](docs/API.md#cross-instance-kv-cache-sharing).
+
 ## [0.14.0] - 2026-11-05
 
 ### Breaking
@@ -208,7 +230,7 @@ must still appear under **Changed** or **Breaking** below. See
 - A `--pp` rank whose peers are unreachable, or one started with no `--peers`
   where UDP discovery found none, now exits non-zero with the reason. Before:
   the rank kept `pp_degree=1` and ran every layer itself, so each rank
-  duplicated the whole model and the pipeline never formed — a multi-node run
+  duplicated the whole model and the pipeline never formed, so a multi-node run
   answered from N copies of the model with no error anywhere. After: the rank
   logs the port, the errno or the missing peer, and exits. The same was already
   true for `--tp`; this closes the `--pp` side. `docs/PARALLELISM.md` records
@@ -294,7 +316,7 @@ must still appear under **Changed** or **Breaking** below. See
   `Sec-Fetch-Site: cross-site` with 403, checked before the `Host` and
   `Origin` checks. Before: a hostile page could drive the mutating routes with
   the victim's ambient access, because a cross-site HTML form POST omits
-  `Origin` in some browsers and a cross-site form GET never sends one — the
+  `Origin` in some browsers and a cross-site form GET never sends one, so the
   two headers the check compared could not see those requests. After: they are
   rejected and logged as `cross-origin/cross-site request rejected (no API
   key)`. Clients that send neither header (curl, SDKs, health probes) are
