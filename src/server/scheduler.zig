@@ -1713,9 +1713,12 @@ test "fuzz: all scheduler functions" {
             const step_eog = [_]u32{smith.valueWithHash(u32, 30)};
             manager.step(&model, &step_eog) catch return;
 
-            // After step: request should have moved from waiting to running
+            // After step: the admitted request must be running, none waiting.
+            // (Serialized admission: step admits at most one while KV is
+            // single-sequence — see the deterministic step tests.)
             const after_step = manager.getStats();
-            try std.testing.expect(after_step.waiting_count + after_step.running_count >= 0);
+            try std.testing.expectEqual(@as(u32, 0), after_step.waiting_count);
+            try std.testing.expectEqual(@as(u32, 1), after_step.running_count);
 
             // --- runSchedulerLoop (comptime reference check) ---
             // Cannot run the loop (it blocks until shutdown), so verify linkage

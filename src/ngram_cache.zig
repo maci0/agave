@@ -164,3 +164,33 @@ test "NgramCache init frees slots when lookup allocation fails" {
     }.f;
     try std.testing.checkAllAllocationFailures(std.testing.allocator, initAndDeinit, .{});
 }
+
+test "NgramCache rejects zero slots and out-of-range shards" {
+    const a = std.testing.allocator;
+    // Zero slots must fail closed, not build a cache that can hold nothing.
+    try std.testing.expectError(error.ZeroCacheSlots, NgramCache.init(a, 8, 0));
+
+    var c = try NgramCache.init(a, 8, 2);
+    defer c.deinit(a);
+    // Out-of-range shards are rejected by both entry points, and neither
+    // may perturb hit/miss accounting or occupy a slot.
+    try std.testing.expect(!c.touch(8));
+    try std.testing.expectEqual(std.math.maxInt(u32), c.admit(8));
+    try std.testing.expectEqual(@as(u64, 0), c.hits);
+    try std.testing.expectEqual(@as(u64, 0), c.misses);
+    try std.testing.expect(c.slots[0].occupied == false);
+}
+
+test "NgramCache re-admit refreshes LRU position" {
+    const a = std.testing.allocator;
+    var c = try NgramCache.init(a, 8, 2);
+    defer c.deinit(a);
+    _ = c.admit(0);
+    _ = c.admit(1);
+    // Re-admitting 0 refreshes it; the next admit must evict 1, not 0.
+    _ = c.admit(0);
+    _ = c.admit(2);
+    try std.testing.expect(c.touch(0));
+    try std.testing.expect(!c.touch(1));
+    try std.testing.expect(c.touch(2));
+}

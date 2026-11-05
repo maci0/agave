@@ -1115,9 +1115,12 @@ test "Display.init" {
 }
 
 test "OutputMode enum variants" {
-    try std.testing.expect(OutputMode.tty != OutputMode.plain);
-    try std.testing.expect(OutputMode.plain != OutputMode.json);
-    try std.testing.expect(OutputMode.tty != OutputMode.json);
+    // Distinct tags (a collapsed alias would silently merge modes), and the
+    // wire labels stay distinct: a renamed tag would change CLI output.
+    try std.testing.expectEqual(@as(usize, 3), @typeInfo(OutputMode).@"enum".field_names.len);
+    try std.testing.expectEqualStrings("tty", @tagName(OutputMode.tty));
+    try std.testing.expectEqualStrings("plain", @tagName(OutputMode.plain));
+    try std.testing.expectEqualStrings("json", @tagName(OutputMode.json));
 }
 
 test "formatSize zero" {
